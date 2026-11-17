@@ -114,7 +114,7 @@ $ sed 's/a/b/' README.md/x
 $ sed 's/a/b/' 'with space.txt'
 $ sed -E 's/a/b/' notes.txt
 $ sed 's/a/b/' -E notes.txt
-$ sed notes.txt
+! sed notes.txt ## `n` command
 $ sed -- 's/a/b/' notes.txt
 $~ sed
 $~ sed -E
@@ -201,7 +201,7 @@ $ sed -i -E 's/(add|sub)\(/my_\1(/g' src/util.c src/util.h src/main.c
 + grep -rn my_ src
 $ sed -E -i 's/[0-9]+/N/' data/numbers.txt
 + head -n 3 data/numbers.txt
-$ sed -iE 's/1/x/' data/numbers.txt
+! sed -iE 's/1/x/' data/numbers.txt ## backup suffix
 $ sed -Ei 's/[0-9]+/N/' data/numbers.txt
 + head -n 3 data/numbers.txt
 $ sed 's/1/one/' -i data/numbers.txt

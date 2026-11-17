@@ -32,7 +32,13 @@ pub struct Io<'a> {
     pub out_file: Option<NodeId>,
 }
 
-impl Io<'_> {
+impl<'a> Io<'a> {
+    /// Read standard input. It is a stream: the first reader gets all of
+    /// it and later readers get nothing, as `cat - -` shows.
+    pub fn take_stdin(&mut self) -> &'a [u8] {
+        std::mem::take(&mut self.stdin)
+    }
+
     pub fn err_line(&mut self, msg: impl AsRef<[u8]>) {
         self.err.extend_from_slice(msg.as_ref());
         self.err.push(b'\n');

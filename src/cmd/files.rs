@@ -127,7 +127,7 @@ pub fn rm(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         let mut status = 0;
         for path in &p.operands {
             let q = quote(path);
-            if ends_in_dot(path) {
+            if ends_in_dot(path) && recursive {
                 io.err_line(format!("rm: refusing to remove '.' or '..' directory: skipping {}", q));
                 status = 1;
                 continue;
@@ -372,6 +372,9 @@ fn move_one(db: &mut Db, src: &[u8], dst: &[u8]) -> Result<(), String> {
     let into_itself = || format!("cannot move {} to a subdirectory of itself, {}", qs, qd);
     let id = db.resolve(src).map_err(|e| format!("cannot stat {}: {}", qs, e.msg()))?;
     let src_is_dir = db.is_dir(id);
+    if dst.is_empty() && !src_is_dir {
+        return Err("cannot overwrite directory '' with non-directory".into());
+    }
     match db.resolve(dst) {
         Ok(d) if d == id => Err(format!("{} and {} are the same file", qs, qd)),
         _ if ends_in_dot(src) || id == db.root() => Err(cannot("Device or resource busy")),
@@ -403,6 +406,6 @@ fn move_one(db: &mut Db, src: &[u8], dst: &[u8]) -> Result<(), String> {
             }
             db.rename(id, parent, &name).map_err(|e| cannot(e.msg()))
         }
-        Err(e) => Err(cannot(e.msg())),
+        Err(e) => Err(format!("cannot stat {}: {}", qd, e.msg())),
     }
 }

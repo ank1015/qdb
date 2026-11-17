@@ -3,7 +3,7 @@
 use super::{msg, options};
 use crate::engine::{Io, Runner};
 use crate::tree::{Db, Errno};
-use crate::util::quote;
+use crate::util::{quote, quote_if_needed};
 
 pub fn echo(args: Vec<Vec<u8>>) -> Result<Runner, String> {
     // bash's echo: only leading words made of option letters are options.
@@ -35,9 +35,9 @@ enum Input<'a> {
     Directory,
 }
 
-fn open<'a>(db: &'a Db, io_stdin: &'a [u8], name: &[u8]) -> Input<'a> {
+fn open<'a>(db: &'a Db, stdin: &'a [u8], name: &[u8]) -> Input<'a> {
     if name == b"-" {
-        return Input::Data(io_stdin);
+        return Input::Data(stdin);
     }
     match db.resolve(name) {
         Err(e) => Input::Missing(e),
@@ -71,21 +71,21 @@ pub fn cat(args: Vec<Vec<u8>>) -> Result<Runner, String> {
                 // GNU cat refuses to copy a non-empty file onto itself.
                 if let (Ok(id), Some(o)) = (db.resolve(f), io.out_file) {
                     if id == o && !db.is_dir(id) && !db.content(id).is_empty() {
-                        io.err.extend(msg(&[b"cat: ", f, b": input file is output file\n"]));
+                        io.err_line(format!("cat: {}: input file is output file", quote_if_needed(f)));
                         status = 1;
                         continue;
                     }
                 }
             }
-            let data = match open(db, io.stdin, f) {
+            let data = match open(db, if f == b"-" { io.take_stdin() } else { b"" }, f) {
                 Input::Data(d) => d,
                 Input::Missing(e) => {
-                    io.err.extend(msg(&[b"cat: ", f, b": ", e.msg().as_bytes(), b"\n"]));
+                    io.err_line(format!("cat: {}: {}", quote_if_needed(f), e.msg()));
                     status = 1;
                     continue;
                 }
                 Input::Directory => {
-                    io.err.extend(msg(&[b"cat: ", f, b": Is a directory\n"]));
+                    io.err_line(format!("cat: {}: Is a directory", quote_if_needed(f)));
                     status = 1;
                     continue;
                 }
@@ -123,19 +123,26 @@ fn parse_count(cmd: &'static str, arg: Option<&[u8]>) -> Result<Result<Count, Ru
         Some(c @ (b'+' | b'-')) => (Some(*c), &arg[1..]),
         _ => (None, &arg[..]),
     };
+    let shown: Vec<u8> = if sign == Some(b'-') { digits.to_vec() } else { arg.clone() };
     if !digits.is_empty() && digits.iter().all(|c| c.is_ascii_digit()) {
-        let n = digits.iter().fold(0usize, |n, c| n.saturating_mul(10).saturating_add((c - b'0') as usize));
-        return Ok(Ok(Count { sign, n }));
+        let n = digits.iter().try_fold(0u64, |n, c| n.checked_mul(10)?.checked_add((c - b'0') as u64));
+        return Ok(match n {
+            Some(n) => Ok(Count { sign, n: usize::try_from(n).unwrap_or(usize::MAX) }),
+            None => Err(Box::new(move |_, io: &mut Io| {
+                io.err_line(format!("{}: invalid number of lines: {}: Value too large for defined data type", cmd, quote(&shown)));
+                1
+            })),
+        });
     }
     // GNU accepts size suffixes such as 1k; this version does not.
-    let suffix_start = digits.iter().position(|c| !c.is_ascii_digit()).unwrap_or(0);
-    if suffix_start > 0 && digits[suffix_start..].iter().all(|c| c.is_ascii_alphabetic()) {
+    let split = digits.iter().position(|c| !c.is_ascii_digit()).unwrap_or(0);
+    let suffix = &digits[split..];
+    let is_size_suffix = suffix == b"b" || (!suffix.is_empty() && b"kKMGTPEZYRQ".contains(&suffix[0]) && matches!(&suffix[1..], b"" | b"B" | b"iB"));
+    if split > 0 && is_size_suffix {
         return Err(format!("flag: {} -n with a size suffix ({})", cmd, String::from_utf8_lossy(&arg)));
     }
     Ok(Err(Box::new(move |_, io: &mut Io| {
-        // head strips the sign it understood; tail reports the whole word.
-        let shown: &[u8] = if cmd == "head" && sign == Some(b'-') { &arg[1..] } else { &arg };
-        io.err_line(format!("{}: invalid number of lines: {}", cmd, quote(shown)));
+        io.err_line(format!("{}: invalid number of lines: {}", cmd, quote(&shown)));
         1
     })))
 }
@@ -181,7 +188,7 @@ fn head_or_tail(cmd: &'static str, args: Vec<Vec<u8>>) -> Result<Runner, String>
         let mut out = Vec::new();
         let mut first_header = true;
         for f in &files {
-            let input = open(db, io.stdin, f);
+            let input = open(db, if f == b"-" { io.take_stdin() } else { b"" }, f);
             if let Input::Missing(e) = input {
                 io.err_line(format!("{}: cannot open {} for reading: {}", cmd, quote(f), e.msg()));
                 status = 1;
@@ -243,19 +250,17 @@ pub fn wc(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         // regular file. One file and one count needs no padding.
         let mut width = 1;
         if !(files.len() == 1 && fields == 1) {
-            let first_ok = files[0] == b"-" || db.resolve(&files[0]).is_ok();
-            if first_ok {
-                let mut regular_total = 0usize;
-                let mut minimum = 1;
-                for f in &files {
-                    match open(db, io.stdin, f) {
-                        Input::Data(d) if f != b"-" => regular_total += d.len(),
-                        Input::Missing(_) => {}
-                        _ => minimum = 7,
-                    }
+            let mut regular_total = 0usize;
+            let mut minimum = 1;
+            for f in &files {
+                match db.resolve(f) {
+                    _ if f == b"-" => minimum = 7,
+                    Ok(id) if db.is_dir(id) => minimum = 7,
+                    Ok(id) => regular_total += db.content(id).len(),
+                    Err(_) => {}
                 }
-                width = regular_total.to_string().len().max(minimum);
             }
+            width = regular_total.to_string().len().max(minimum);
         }
         let mut status = 0;
         let mut out = Vec::new();
@@ -270,15 +275,15 @@ pub fn wc(args: Vec<Vec<u8>>) -> Result<Runner, String> {
             out.push(b'\n');
         };
         for f in &files {
-            let data: &[u8] = match open(db, io.stdin, f) {
+            let data: &[u8] = match open(db, if f == b"-" { io.take_stdin() } else { b"" }, f) {
                 Input::Data(d) => d,
                 Input::Missing(e) => {
-                    io.err.extend(msg(&[b"wc: ", f, b": ", e.msg().as_bytes(), b"\n"]));
+                    io.err_line(format!("wc: {}: {}", quote_if_needed(f), e.msg()));
                     status = 1;
                     continue;
                 }
                 Input::Directory => {
-                    io.err.extend(msg(&[b"wc: ", f, b": Is a directory\n"]));
+                    io.err_line(format!("wc: {}: Is a directory", quote_if_needed(f)));
                     status = 1;
                     b""
                 }

@@ -125,6 +125,21 @@ pub fn quote(name: &[u8]) -> String {
     String::from_utf8(out).unwrap()
 }
 
+/// Quote a name only if it needs it, as GNU cat and wc do in their error
+/// messages: `nope` stays bare, `a b` becomes `'a b'`.
+pub fn quote_if_needed(name: &[u8]) -> String {
+    let needs = name.is_empty()
+        || name.iter().any(|&c| !(0x21..0x7f).contains(&c) || b"!\"$&'()*;<=>?[\\^`|:".contains(&c))
+        || matches!(name[0], b'#' | b'~')
+        || name == b"{"
+        || name == b"}";
+    if needs {
+        quote(name)
+    } else {
+        String::from_utf8_lossy(name).into_owned()
+    }
+}
+
 /// The last component of a path, ignoring trailing slashes.
 pub fn basename(path: &[u8]) -> &[u8] {
     let mut end = path.len();

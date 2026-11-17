@@ -307,6 +307,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch) -> Result<(), Stri
     let mut db = fixture.clone();
     let needs_real = case.steps.iter().any(|s| matches!(s.kind, Kind::Compare { .. }));
     let root = if needs_real { Some(scratch.materialise(fixture)) } else { None };
+    let mut unordered_seen = false;
     let result = (|| {
         for step in &case.steps {
             let fail = |what: String| Err(format!("{}:{}: {}\n{}", case.file, step.line, step.command, what));
@@ -353,7 +354,10 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch) -> Result<(), Stri
                     check_safe(&real_command, root)?;
                     let real = run_real(root, &real_command);
                     let got = execute(&mut db, engine_command.as_bytes());
-                    let unordered = order_is_unspecified(&engine_command);
+                    // Once a case has stored unordered output, later steps
+                    // that read it back are unordered too.
+                    unordered_seen |= order_is_unspecified(&engine_command);
+                    let unordered = unordered_seen;
                     let same = |a: &[u8], b: &[u8]| if unordered { sorted_lines(a) == sorted_lines(b) } else { a == b };
                     let mut what = String::new();
                     if real.code != got.code {
@@ -365,8 +369,16 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch) -> Result<(), Stri
                     if *check_stderr && !same(&real.stderr, &got.stderr) {
                         what.push_str(&format!("    stderr, real:\n{}    stderr, engine:\n{}", show(&real.stderr), show(&got.stderr)));
                     }
-                    let real_tree = store::snapshot_dir(root).map_err(|e| e.to_string())?;
-                    if let Some(d) = tree_diff(&real_tree, &db.snapshot()) {
+                    // A redirected find or grep -r stores its lines in
+                    // whatever order it found them.
+                    let normalise = |tree: Vec<(Vec<u8>, Option<Vec<u8>>)>| -> Vec<(Vec<u8>, Option<Vec<u8>>)> {
+                        if !unordered {
+                            return tree;
+                        }
+                        tree.into_iter().map(|(p, c)| (p, c.map(|c| sorted_lines(&c).concat()))).collect()
+                    };
+                    let real_tree = normalise(store::snapshot_dir(root).map_err(|e| e.to_string())?);
+                    if let Some(d) = tree_diff(&real_tree, &normalise(db.snapshot())) {
                         what.push_str(&format!("    tree after the command:\n{}", d));
                     }
                     if !what.is_empty() {

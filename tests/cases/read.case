@@ -73,6 +73,12 @@ $ head -n 2 {ROOT}/README.md
 ! head -c 10 README.md ## head -c
 ! head -q README.md ## head -q
 ! head -n 1k README.md ## size suffix
+! head -n 2MB README.md ## size suffix
+$ head -n 1x README.md
+$ cat 'no such file'
+$ cat 'a:b' '~x' 'x~' "it's" 'a?b' 'a,b'
+$ wc 'no such file' README.md
+$ wc 'no such file'
 ! head --lines=2 README.md ## long options
 
 $ tail data/numbers.txt

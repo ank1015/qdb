@@ -337,6 +337,9 @@ impl<'a> Parser<'a> {
         }
         self.i = j + op.len();
         self.skip_blanks();
+        if self.starts_with(b">(") || self.starts_with(b"<(") {
+            return unsupported("process substitution");
+        }
         match self.peek() {
             None => return Err(self.unexpected()),
             Some(c) if is_meta(c) => return Err(self.unexpected()),

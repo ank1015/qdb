@@ -510,6 +510,9 @@ impl<'a> Parser<'a> {
             negate = true;
             self.i += 1;
         }
+        if self.peek().is_none() {
+            return Err("Invalid regular expression".into());
+        }
         let content_start = self.i;
         let mut first = true;
         loop {
@@ -960,9 +963,11 @@ impl<'a> Backtracker<'a> {
     fn rep(&mut self, sub: &Node, min: u32, max: Option<u32>, count: u32, pos: usize, k: Cont<'_, 'a>) -> bool {
         if max.map_or(true, |m| count < m) {
             let more = self.run(sub, pos, &mut |b, p| {
-                // An iteration that consumes nothing cannot help once the
-                // minimum is met, and would loop forever.
-                if p == pos && count >= min {
+                // In an unbounded repetition, an iteration that consumes
+                // nothing cannot help once the minimum is met, and would
+                // loop forever. A bounded one may match empty, as in glibc,
+                // which changes what a group inside it captures.
+                if p == pos && count >= min && max.is_none() {
                     return false;
                 }
                 b.rep(sub, min, max, count + 1, p, k)

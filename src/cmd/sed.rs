@@ -354,9 +354,9 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Runner, String> {
                         continue;
                     }
                     Ok(id) if db.is_dir(id) => {
+                        // Fatal in GNU sed: later files are not touched.
                         io.err_line(format!("sed: couldn't edit {}: not a regular file", lossy(f)));
-                        status = status.max(4);
-                        continue;
+                        return 4;
                     }
                     Ok(id) => id,
                 };
@@ -377,7 +377,7 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         let inputs = if files.is_empty() { vec![b"-".to_vec()] } else { files };
         for f in &inputs {
             let data: &[u8] = if f == b"-" {
-                io.stdin
+                io.take_stdin()
             } else {
                 match db.resolve(f) {
                     Err(e) => {
@@ -386,9 +386,10 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Runner, String> {
                         continue;
                     }
                     Ok(id) if db.is_dir(id) => {
+                        // Fatal in GNU sed: later files are not read.
                         io.err_line(format!("sed: read error on {}: Is a directory", lossy(f)));
-                        status = status.max(4);
-                        continue;
+                        io.out = out;
+                        return 4;
                     }
                     Ok(id) => db.content(id),
                 }

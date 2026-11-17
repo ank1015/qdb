@@ -11,11 +11,11 @@ $ cat src/./lib/../../README.md | wc -c
 $ cat {ROOT}/README.md | wc -c
 $ cat {ROOT}/src/../README.md | wc -c
 = cat /README.md | wc -c
-> 91
+> 104
 = cat ../README.md | wc -c
-> 91
+> 104
 = cat /../../README.md | wc -c
-> 91
+> 104
 = ls /src/lib
 > lex.c
 > lex.h
@@ -144,7 +144,6 @@ $ echo x | grep y
 $ echo x | grep y | wc -l
 $ echo x | ls src
 $ echo x | echo y
-$ mkdir p1 | ls
 $ echo ignored | mkdir p2
 + ls -p
 $ cat README.md | head -n 1

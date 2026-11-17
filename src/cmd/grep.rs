@@ -78,8 +78,8 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         count: p.has(b'c'),
     };
     let icase = p.has(b'i');
-    // The later of -E and -F wins.
-    let mode = p.flags.iter().rev().map(|f| f.0).find(|c| *c == b'E' || *c == b'F');
+    let conflicting = p.has(b'E') && p.has(b'F');
+    let mode = p.flags.iter().map(|f| f.0).find(|c| *c == b'E' || *c == b'F');
     let mut operands = p.operands.into_iter();
     let pattern = operands.next();
     let files: Vec<Vec<u8>> = operands.collect();
@@ -93,6 +93,10 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Runner, String> {
                 return 2;
             }
         };
+        if conflicting {
+            io.err_line("grep: conflicting matchers specified");
+            return 2;
+        }
         // A newline in the pattern separates alternative patterns.
         let parts: Vec<&[u8]> = pattern.split(|c| *c == b'\n').collect();
         let matcher = if mode == Some(b'F') {
@@ -129,11 +133,13 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         if implicit_dot {
             run.walk(db, io, db.root(), b"");
         } else if files.is_empty() {
-            run.search(io, b"(standard input)", io.stdin, None);
+            let data = io.take_stdin();
+            run.search(io, b"(standard input)", data, None);
         }
         for f in &files {
             if f == b"-" {
-                run.search(io, b"(standard input)", io.stdin, None);
+                let data = io.take_stdin();
+                run.search(io, b"(standard input)", data, None);
                 continue;
             }
             match db.resolve(f) {
@@ -145,6 +151,10 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Runner, String> {
                     if !opts.recursive {
                         io.err_line(format!("grep: {}: Is a directory", lossy(f)));
                         run.error = true;
+                        // GNU grep still reports a count for it.
+                        if opts.count && !opts.list {
+                            run.search(io, f, b"", None);
+                        }
                         continue;
                     }
                     // Trailing slashes are dropped before names are joined.
