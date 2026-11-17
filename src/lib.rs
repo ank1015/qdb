@@ -17,6 +17,7 @@ pub mod glob;
 pub mod regex;
 pub mod shell;
 pub mod store;
+pub mod testing;
 pub mod tree;
 pub mod util;
 

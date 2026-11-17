@@ -1,0 +1,70 @@
+dataset,command,kind,real_ms,engine_ms,ratio,output_bytes,agree
+small,"ls",read,2.2016,0.0145,0.007,44,true
+small,"ls -a",read,2.4381,0.0131,0.005,60,true
+small,"ls -R",read,2.7389,0.0665,0.024,7132,true
+small,"ls -aR src",read,2.2448,0.0340,0.015,2363,true
+small,"ls -p src",read,2.1100,0.0122,0.006,228,true
+small,"find .",read,2.8702,0.0424,0.015,9916,true
+small,"find . -name '*.c'",read,2.8532,0.0481,0.017,2989,true
+small,"find . -name '*.md'",read,2.9359,0.0602,0.021,551,true
+small,"find . -type d",read,2.7947,0.0517,0.018,3477,true
+small,"find . -type f",read,2.8990,0.0498,0.017,6439,true
+small,"find . -maxdepth 2 -type f",read,2.2537,0.0207,0.009,913,true
+small,"find src -name 'mod_*' -type d",read,2.3778,0.0306,0.013,875,true
+small,"find . -name 'README.md'",read,2.9493,0.0471,0.016,12,true
+small,"cat README.md",read,1.9652,0.0068,0.003,2898,true
+small,"cat src/main.c",read,2.1448,0.0096,0.004,11666,true
+small,"cat -n src/main.c",read,2.1006,0.0391,0.019,13409,true
+small,"head -n 20 src/main.c",read,1.9292,0.0155,0.008,956,true
+small,"head -n 1 README.md",read,1.9797,0.0126,0.006,11,true
+small,"tail -n 20 src/main.c",read,2.0085,0.0224,0.011,940,true
+small,"tail -n +100 src/main.c",read,1.9625,0.0191,0.010,6930,true
+small,"wc src/main.c",read,2.1668,0.0445,0.021,29,true
+small,"wc -l src/main.c",read,2.0736,0.0423,0.020,15,true
+small,"wc -l src/*.c",read,2.2110,0.2517,0.114,383,true
+small,"cat src/*.c | wc -l",read,2.8223,0.3037,0.108,5,true
+small,"cat src/main.c | head -n 50 | tail -n 10",read,2.7795,0.0329,0.012,483,true
+small,"grep -c the src/main.c",read,2.2255,0.1817,0.082,3,true
+small,"grep -n TODO src/main.c",read,2.1530,0.1716,0.080,49,true
+small,"grep -rn TODO .",read,3.9296,14.5950,3.714,8770,true
+small,"grep -rl TODO .",read,3.5004,10.7517,3.072,3135,true
+small,"grep -rc TODO .",read,3.2465,14.5060,4.468,6849,true
+small,"grep -r error .",read,5.8760,16.7344,2.848,233507,true
+small,"grep -ri fixme .",read,4.5101,16.0382,3.556,864,true
+small,"grep -rn handle_request src",read,2.8722,6.6751,2.324,10334,true
+small,"grep -rn zzz_not_present .",read,3.9692,15.8090,3.983,0,true
+small,"grep -rl zzz_not_present .",read,3.9718,15.0255,3.783,0,true
+small,"grep -rF 'error:' .",read,3.5824,2.8095,0.784,16200,true
+small,"grep -rE 'TODO|FIXME' .",read,4.4730,21.5260,4.812,9181,true
+small,"grep -rE '[0-9]{4,}' .",read,6.9183,13.8360,2.000,494798,true
+small,"grep -rn '^#include' src",read,2.9943,5.7163,1.909,10704,true
+small,"grep -rE '^(import|from) ' .",read,4.6107,14.5531,3.156,3097,true
+small,"grep -rv e docs",read,2.9091,0.7996,0.275,18945,true
+small,"grep -rin 'return [a-z_]*;$' src",read,3.8052,7.8884,2.073,15090,true
+small,"grep -rE '(alpha|beta)_[a-z]+\(' .",read,5.9521,24.8754,4.179,41428,true
+small,"grep -r '\(TODO\).*\1' .",read,3.7012,31.6363,8.548,0,true
+small,"grep -rl error . | wc -l",read,3.8793,1.5143,0.390,4,true
+small,"grep -rc the . | grep -v ':0$' | wc -l",read,5.7559,16.5144,2.869,4,true
+small,"find . -name '*.md' | wc -l",read,3.9501,0.0701,0.018,3,true
+small,"find . -type f | grep -c mod_",read,4.0356,0.1272,0.032,4,true
+small,"sed 's/the/THE/g' src/main.c",read,2.5437,0.2124,0.084,11666,true
+small,"sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' src/main.c",read,3.2531,0.4323,0.133,11666,true
+small,"cat src/main.c | sed 's/^/> /' | wc -c",read,2.9271,0.1314,0.045,6,true
+small,"mkdir -p bench_out/a/b",write,2.7894,0.0155,0.006,0,true
+small,"touch bench_out/empty.txt",write,2.2174,0.0102,0.005,0,true
+small,"echo 'hello world' > bench_out/hello.txt",write,1.3229,0.0125,0.009,0,true
+small,"echo 'another line' >> bench_out/hello.txt",write,1.2827,0.0112,0.009,0,true
+small,"cp src/main.c bench_out/main_copy.c",write,2.1355,0.0291,0.014,0,true
+small,"cp -r src bench_out/src_copy",write,6.5505,0.4091,0.062,0,true
+small,"cp -r docs bench_out/docs_copy",write,4.0281,0.1808,0.045,0,true
+small,"sed -i 's/TODO/DONE/g' bench_out/main_copy.c",write,2.3331,0.2195,0.094,0,true
+small,"sed -i -E 's/[0-9]+/N/g' bench_out/src_copy/main.c",write,2.2297,0.2270,0.102,0,true
+small,"sed -i 's/the/THE/g' bench_out/docs_copy/guide.md",write,2.2641,0.1999,0.088,0,true
+small,"grep -rc DONE bench_out",write,2.7731,8.2171,2.963,5176,true
+small,"mv bench_out/src_copy bench_out/src_moved",write,2.1055,0.0183,0.009,0,true
+small,"mv bench_out/hello.txt bench_out/a/b",write,2.1861,0.0184,0.008,0,true
+small,"ls -R bench_out/a",write,2.0492,0.0127,0.006,41,true
+small,"rm bench_out/a/b/hello.txt",write,1.9544,0.0139,0.007,0,true
+small,"rmdir bench_out/a/b",write,2.1396,0.0119,0.006,0,true
+small,"rm -r bench_out/src_moved",write,4.7292,0.1215,0.026,0,true
+small,"rm -rf bench_out",write,3.4128,0.0718,0.021,0,true

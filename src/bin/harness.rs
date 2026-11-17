@@ -4,11 +4,10 @@
 //!
 //! See tests/README.md for the case file format.
 
-use qdb::shell::{self, Pipeline};
 use qdb::store;
-use qdb::{execute, Db, Outcome};
+use qdb::testing::{check_safe, order_is_unspecified, run_real, same_output, sorted_lines};
+use qdb::{execute, Db};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 const USAGE: &str = "\
 Usage: qdb-harness [OPTIONS] [CASE_FILE]...
@@ -122,107 +121,6 @@ fn parse_cases(file: &str, text: &str) -> Result<Vec<Case>, String> {
         }
     }
     Ok(cases)
-}
-
-/// Real find and grep -r list a folder in whatever order the filesystem
-/// returns, so their output is compared as a sorted set of lines.
-fn order_is_unspecified(command: &str) -> bool {
-    let pipeline: Pipeline = match shell::parse(command.as_bytes()) {
-        Ok(Some(p)) => p,
-        _ => return false,
-    };
-    pipeline.commands.iter().any(|c| {
-        let words: Vec<Vec<u8>> = c.words.iter().map(|w| w.text()).collect();
-        match words.first().map(|w| w.as_slice()) {
-            Some(b"find") => true,
-            Some(b"grep") => words[1..]
-                .iter()
-                .take_while(|w| w.as_slice() != b"--")
-                .any(|w| w.starts_with(b"-") && !w.starts_with(b"--") && w.contains(&b'r')),
-            _ => false,
-        }
-    })
-}
-
-fn sorted_lines(bytes: &[u8]) -> Vec<&[u8]> {
-    let mut lines: Vec<&[u8]> = bytes.split_inclusive(|c| *c == b'\n').collect();
-    lines.sort();
-    lines
-}
-
-fn replace(hay: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
-    if from.is_empty() {
-        return hay.to_vec();
-    }
-    let mut out = Vec::with_capacity(hay.len());
-    let mut i = 0;
-    while i < hay.len() {
-        if hay[i..].starts_with(from) {
-            out.extend_from_slice(to);
-            i += from.len();
-        } else {
-            out.push(hay[i]);
-            i += 1;
-        }
-    }
-    out
-}
-
-/// Refuse to hand the real tools a command that could touch anything
-/// outside the scratch directory.
-fn check_safe(command: &str, root: &Path) -> Result<(), String> {
-    let pipeline = match shell::parse(command.as_bytes()) {
-        Ok(Some(p)) => p,
-        _ => return Ok(()),
-    };
-    let root = root.to_string_lossy().into_owned().into_bytes();
-    for c in &pipeline.commands {
-        let words = c.words.iter().map(|w| w.text());
-        let targets = c.redirects.iter().map(|r| r.target.text());
-        for w in words.chain(targets) {
-            // Follow the path: it must never climb above where it starts,
-            // and an absolute path must start inside the scratch directory.
-            let rel: &[u8] = if w.starts_with(b"/") {
-                match w.strip_prefix(&root[..]) {
-                    Some(rest) => rest,
-                    None => return Err(format!("refusing to run on the real tools (absolute path): {}", command)),
-                }
-            } else {
-                &w
-            };
-            let mut depth = 0i64;
-            for comp in rel.split(|c| *c == b'/') {
-                match comp {
-                    b"" | b"." => {}
-                    b".." => depth -= 1,
-                    _ => depth += 1,
-                }
-                if depth < 0 {
-                    return Err(format!("refusing to run on the real tools (path leaves the scratch directory): {}", command));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn run_real(root: &Path, command: &str) -> Outcome {
-    let out = Command::new("bash")
-        .args(["--noprofile", "--norc", "-c", command])
-        .current_dir(root)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .output()
-        .expect("cannot run bash");
-    let root_bytes = root.to_string_lossy().into_owned().into_bytes();
-    let stdout = replace(&out.stdout, &root_bytes, b"");
-    let stderr = replace(&out.stderr, &root_bytes, b"");
-    // bash reports its own errors (a failed redirection) with a prefix the
-    // engine replaces with its own name.
-    let stderr = replace(&stderr, b"bash: line 1: ", b"qdb: ");
-    Outcome { stdout, stderr, code: out.status.code().unwrap_or(-1) }
 }
 
 struct Scratch {
@@ -358,7 +256,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch) -> Result<(), Stri
                     // that read it back are unordered too.
                     unordered_seen |= order_is_unspecified(&engine_command);
                     let unordered = unordered_seen;
-                    let same = |a: &[u8], b: &[u8]| if unordered { sorted_lines(a) == sorted_lines(b) } else { a == b };
+                    let same = |a: &[u8], b: &[u8]| same_output(a, b, unordered);
                     let mut what = String::new();
                     if real.code != got.code {
                         what.push_str(&format!("    exit status: real {}, engine {}\n", real.code, got.code));

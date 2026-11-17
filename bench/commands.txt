@@ -1,0 +1,87 @@
+# The benchmark command list.
+#
+# One command per line. Every command runs on the real GNU tools and on the
+# engine, against the same dataset, and the outputs are compared.
+#
+# Lines starting with "mut: " change the data. They run once, in order,
+# and the list ends by removing everything it created.
+# All other lines only read, and are timed over several runs.
+#
+# The paths below exist in every generated dataset (see bench/README.md).
+
+# List
+ls
+ls -a
+ls -R
+ls -aR src
+ls -p src
+find .
+find . -name '*.c'
+find . -name '*.md'
+find . -type d
+find . -type f
+find . -maxdepth 2 -type f
+find src -name 'mod_*' -type d
+find . -name 'README.md'
+
+# Read
+cat README.md
+cat src/main.c
+cat -n src/main.c
+head -n 20 src/main.c
+head -n 1 README.md
+tail -n 20 src/main.c
+tail -n +100 src/main.c
+wc src/main.c
+wc -l src/main.c
+wc -l src/*.c
+cat src/*.c | wc -l
+cat src/main.c | head -n 50 | tail -n 10
+
+# Find: a common word, a rare word, a word that is not there
+grep -c the src/main.c
+grep -n TODO src/main.c
+grep -rn TODO .
+grep -rl TODO .
+grep -rc TODO .
+grep -r error .
+grep -ri fixme .
+grep -rn handle_request src
+grep -rn zzz_not_present .
+grep -rl zzz_not_present .
+grep -rF 'error:' .
+grep -rE 'TODO|FIXME' .
+grep -rE '[0-9]{4,}' .
+grep -rn '^#include' src
+grep -rE '^(import|from) ' .
+grep -rv e docs
+grep -rin 'return [a-z_]*;$' src
+grep -rE '(alpha|beta)_[a-z]+\(' .
+grep -r '\(TODO\).*\1' .
+grep -rl error . | wc -l
+grep -rc the . | grep -v ':0$' | wc -l
+find . -name '*.md' | wc -l
+find . -type f | grep -c mod_
+sed 's/the/THE/g' src/main.c
+sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' src/main.c
+cat src/main.c | sed 's/^/> /' | wc -c
+
+# Add, edit, delete
+mut: mkdir -p bench_out/a/b
+mut: touch bench_out/empty.txt
+mut: echo 'hello world' > bench_out/hello.txt
+mut: echo 'another line' >> bench_out/hello.txt
+mut: cp src/main.c bench_out/main_copy.c
+mut: cp -r src bench_out/src_copy
+mut: cp -r docs bench_out/docs_copy
+mut: sed -i 's/TODO/DONE/g' bench_out/main_copy.c
+mut: sed -i -E 's/[0-9]+/N/g' bench_out/src_copy/main.c
+mut: sed -i 's/the/THE/g' bench_out/docs_copy/guide.md
+mut: grep -rc DONE bench_out
+mut: mv bench_out/src_copy bench_out/src_moved
+mut: mv bench_out/hello.txt bench_out/a/b
+mut: ls -R bench_out/a
+mut: rm bench_out/a/b/hello.txt
+mut: rmdir bench_out/a/b
+mut: rm -r bench_out/src_moved
+mut: rm -rf bench_out
