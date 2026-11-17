@@ -1,0 +1,975 @@
+//! POSIX regular expressions (basic and extended, with the GNU extensions),
+//! matched on bytes as in the C locale.
+//!
+//! Matching is leftmost-longest, as POSIX requires: among the matches that
+//! start earliest, the longest one wins, whatever order the alternatives were
+//! written in. `echo ab | sed -E 's/a|ab/X/'` prints `X`, not `Xb`.
+//!
+//! Two matchers share one syntax tree:
+//!
+//! * a Thompson NFA simulation that finds the leftmost-longest span in time
+//!   proportional to pattern size times input size, used whenever the
+//!   pattern has no back-references;
+//! * a backtracking matcher that explores every path, used for
+//!   back-references and to recover the text of `\(...\)` groups.
+
+use crate::glob::class_by_name;
+
+pub const DUP_MAX: u32 = 32767;
+const MAX_PROGRAM: usize = 2_000_000;
+const STEP_LIMIT: usize = 20_000_000;
+
+/// GNU grep and GNU sed read a few corner cases differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavor {
+    Grep,
+    Sed,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Syntax {
+    pub extended: bool,
+    pub icase: bool,
+    pub flavor: Flavor,
+}
+
+type Set = Box<[bool; 256]>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Assert {
+    LineStart,
+    LineEnd,
+    WordBoundary,
+    NotWordBoundary,
+    WordStart,
+    WordEnd,
+}
+
+#[derive(Debug, Clone)]
+enum Node {
+    Empty,
+    Set(Set),
+    Cat(Vec<Node>),
+    Alt(Vec<Node>),
+    Repeat { sub: Box<Node>, min: u32, max: Option<u32> },
+    Group(Box<Node>, usize),
+    Backref(usize),
+    Assert(Assert),
+}
+
+#[derive(Debug, Clone)]
+enum Inst {
+    Set(usize),
+    Split(usize, usize),
+    Jmp(usize),
+    Assert(Assert),
+    Match,
+}
+
+#[derive(Debug, Clone)]
+pub struct Regex {
+    ast: Node,
+    ngroups: usize,
+    has_backref: bool,
+    icase: bool,
+    prog: Vec<Inst>,
+    sets: Vec<Set>,
+    /// Warnings GNU grep prints for this pattern, without the program name.
+    pub warnings: Vec<String>,
+}
+
+/// Group spans: index 0 is the whole match.
+pub type Caps = Vec<Option<(usize, usize)>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MatchError {
+    /// The backtracking matcher gave up. Only patterns with back-references
+    /// or groups used in a replacement can hit this.
+    TooComplex,
+}
+
+fn is_word(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+fn check_assert(a: Assert, hay: &[u8], pos: usize) -> bool {
+    let prev = pos > 0 && is_word(hay[pos - 1]);
+    let next = pos < hay.len() && is_word(hay[pos]);
+    match a {
+        Assert::LineStart => pos == 0,
+        Assert::LineEnd => pos == hay.len(),
+        Assert::WordBoundary => prev != next,
+        Assert::NotWordBoundary => prev == next,
+        Assert::WordStart => !prev && next,
+        Assert::WordEnd => prev && !next,
+    }
+}
+
+// ---------------------------------------------------------------- parsing
+
+struct Parser<'a> {
+    p: &'a [u8],
+    i: usize,
+    syn: Syntax,
+    ngroups: usize,
+    closed: Vec<bool>,
+    has_backref: bool,
+    warnings: Vec<String>,
+}
+
+type PResult<T> = Result<T, String>;
+
+fn set_of(f: impl Fn(u8) -> bool) -> Set {
+    let mut s = Box::new([false; 256]);
+    for b in 0..=255u8 {
+        s[b as usize] = f(b);
+    }
+    s
+}
+
+impl<'a> Parser<'a> {
+    fn peek(&self) -> Option<u8> {
+        self.p.get(self.i).copied()
+    }
+
+    fn looking_at(&self, t: &[u8]) -> bool {
+        self.p[self.i..].starts_with(t)
+    }
+
+    fn ere(&self) -> bool {
+        self.syn.extended
+    }
+
+    fn at_alt(&self) -> bool {
+        if self.ere() {
+            self.looking_at(b"|")
+        } else {
+            self.looking_at(b"\\|")
+        }
+    }
+
+    fn at_close(&self) -> bool {
+        if self.ere() {
+            self.looking_at(b")")
+        } else {
+            self.looking_at(b"\\)")
+        }
+    }
+
+    fn lit(&self, c: u8) -> Node {
+        if self.syn.icase && c.is_ascii_alphabetic() {
+            Node::Set(set_of(|b| b.eq_ignore_ascii_case(&c)))
+        } else {
+            Node::Set(set_of(|b| b == c))
+        }
+    }
+
+    fn parse_alt(&mut self, depth: usize) -> PResult<Node> {
+        let mut branches = vec![self.parse_branch(depth)?];
+        while self.at_alt() {
+            self.i += if self.ere() { 1 } else { 2 };
+            branches.push(self.parse_branch(depth)?);
+        }
+        Ok(if branches.len() == 1 { branches.pop().unwrap() } else { Node::Alt(branches) })
+    }
+
+    fn parse_branch(&mut self, depth: usize) -> PResult<Node> {
+        let mut items: Vec<Node> = Vec::new();
+        // True at the start of the branch and after an anchor: a repetition
+        // operator here has nothing to repeat.
+        let mut at_start = true;
+        loop {
+            if self.peek().is_none() || self.at_alt() {
+                break;
+            }
+            if self.at_close() {
+                if depth > 0 {
+                    break;
+                }
+                if self.ere() && self.syn.flavor == Flavor::Grep {
+                    // GNU grep -E treats an unmatched ) as a literal.
+                    self.i += 1;
+                    items.push(self.lit(b')'));
+                    at_start = false;
+                    continue;
+                }
+                return Err("Unmatched ) or \\)".into());
+            }
+            let (mut atom, is_anchor) = self.parse_atom(at_start, depth)?;
+            if is_anchor {
+                items.push(atom);
+                at_start = true;
+                continue;
+            }
+            while let Some((min, max)) = self.parse_dup()? {
+                atom = Node::Repeat { sub: Box::new(atom), min, max };
+            }
+            items.push(atom);
+            at_start = false;
+        }
+        Ok(match items.len() {
+            0 => Node::Empty,
+            1 => items.pop().unwrap(),
+            _ => Node::Cat(items),
+        })
+    }
+
+    /// A repetition operator at the cursor, if there is one.
+    fn parse_dup(&mut self) -> PResult<Option<(u32, Option<u32>)>> {
+        let ere = self.ere();
+        let c = match self.peek() {
+            None => return Ok(None),
+            Some(c) => c,
+        };
+        if c == b'*' {
+            self.i += 1;
+            return Ok(Some((0, None)));
+        }
+        if ere && c == b'+' || !ere && self.looking_at(b"\\+") {
+            self.i += if ere { 1 } else { 2 };
+            return Ok(Some((1, None)));
+        }
+        if ere && c == b'?' || !ere && self.looking_at(b"\\?") {
+            self.i += if ere { 1 } else { 2 };
+            return Ok(Some((0, Some(1))));
+        }
+        if ere && c == b'{' || !ere && self.looking_at(b"\\{") {
+            let save = self.i;
+            self.i += if ere { 1 } else { 2 };
+            match self.parse_interval() {
+                Ok(r) => return Ok(Some(r)),
+                Err(e) => {
+                    // GNU grep -E takes a `{` that does not start a valid
+                    // interval as a literal character.
+                    if ere && self.syn.flavor == Flavor::Grep && e == "Unmatched \\{" {
+                        self.i = save;
+                        return Ok(None);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn number(&mut self) -> PResult<Option<u32>> {
+        let start = self.i;
+        let mut n: u32 = 0;
+        while let Some(c) = self.peek() {
+            if !c.is_ascii_digit() {
+                break;
+            }
+            n = n.saturating_mul(10).saturating_add((c - b'0') as u32);
+            self.i += 1;
+        }
+        Ok(if self.i == start { None } else { Some(n) })
+    }
+
+    /// Parse the inside of an interval, after the opening brace.
+    fn parse_interval(&mut self) -> PResult<(u32, Option<u32>)> {
+        let unmatched = || "Unmatched \\{".to_string();
+        let lo = self.number()?;
+        let (min, max) = if self.peek() == Some(b',') {
+            self.i += 1;
+            let hi = self.number()?;
+            (lo.unwrap_or(0), hi)
+        } else {
+            match lo {
+                Some(n) => (n, Some(n)),
+                None => {
+                    return Err(if self.peek().is_none() { unmatched() } else { "Invalid preceding regular expression".into() })
+                }
+            }
+        };
+        let close: &[u8] = if self.ere() { b"}" } else { b"\\}" };
+        if !self.looking_at(close) {
+            return Err(if self.peek().is_none() || self.ere() {
+                unmatched()
+            } else {
+                "Invalid content of \\{\\}".to_string()
+            });
+        }
+        self.i += close.len();
+        if let Some(mx) = max {
+            if min > mx {
+                return Err("Invalid content of \\{\\}".into());
+            }
+        }
+        if min > DUP_MAX || max.is_some_and(|m| m > DUP_MAX) {
+            return Err("Regular expression too big".into());
+        }
+        Ok((min, max))
+    }
+
+    /// Parse one atom. The flag in the result says the atom was an anchor.
+    fn parse_atom(&mut self, at_start: bool, depth: usize) -> PResult<(Node, bool)> {
+        let ere = self.ere();
+        let grep = self.syn.flavor == Flavor::Grep;
+        let c = self.peek().unwrap();
+        // Groups.
+        if ere && c == b'(' || !ere && self.looking_at(b"\\(") {
+            self.i += if ere { 1 } else { 2 };
+            self.ngroups += 1;
+            let idx = self.ngroups;
+            self.closed.push(false);
+            let inner = self.parse_alt(depth + 1)?;
+            if !self.at_close() {
+                return Err("Unmatched ( or \\(".into());
+            }
+            self.i += if ere { 1 } else { 2 };
+            self.closed[idx - 1] = true;
+            return Ok((Node::Group(Box::new(inner), idx), false));
+        }
+        // A repetition operator with nothing before it.
+        if at_start {
+            let op: Option<&str> = if c == b'*' {
+                Some("*")
+            } else if ere && c == b'+' {
+                Some("+")
+            } else if ere && c == b'?' {
+                Some("?")
+            } else if ere && c == b'{' {
+                Some("{")
+            } else {
+                None
+            };
+            if let Some(op) = op {
+                if !ere {
+                    // BRE: a leading * is an ordinary character.
+                    self.i += 1;
+                    return Ok((self.lit(b'*'), false));
+                }
+                if !grep {
+                    if op == "{" {
+                        // sed -E: decide between a bad interval and a
+                        // missing operand the way glibc does.
+                        let save = self.i;
+                        self.i += 1;
+                        let r = self.parse_interval();
+                        self.i = save;
+                        return Err(match r {
+                            Err(e) if e == "Unmatched \\{" => e,
+                            _ => "Invalid preceding regular expression".into(),
+                        });
+                    }
+                    return Err("Invalid preceding regular expression".into());
+                }
+                // grep -E: the operator applies to the empty expression.
+                if op == "{" {
+                    let save = self.i;
+                    self.i += 1;
+                    let valid = self.parse_interval().is_ok();
+                    self.i = save;
+                    if !valid {
+                        self.i += 1;
+                        return Ok((self.lit(b'{'), false));
+                    }
+                    self.warnings.push("warning: {...} at start of expression".into());
+                } else {
+                    self.warnings.push(format!("warning: {} at start of expression", op));
+                }
+                return Ok((Node::Empty, false));
+            }
+        }
+        match c {
+            b'^' => {
+                self.i += 1;
+                if ere || at_start && self.caret_is_anchor() {
+                    return Ok((Node::Assert(Assert::LineStart), true));
+                }
+                Ok((self.lit(b'^'), false))
+            }
+            b'$' => {
+                self.i += 1;
+                let anchor = ere || self.peek().is_none() || self.looking_at(b"\\)") || self.looking_at(b"\\|");
+                if anchor {
+                    return Ok((Node::Assert(Assert::LineEnd), true));
+                }
+                Ok((self.lit(b'$'), false))
+            }
+            b'.' => {
+                self.i += 1;
+                Ok((Node::Set(set_of(|b| b != b'\n')), false))
+            }
+            b'[' => {
+                self.i += 1;
+                Ok((Node::Set(self.parse_bracket()?), false))
+            }
+            b'\\' => {
+                self.i += 1;
+                let e = match self.peek() {
+                    None => return Err("Trailing backslash".into()),
+                    Some(e) => e,
+                };
+                self.i += 1;
+                let assert = |a| Ok((Node::Assert(a), true));
+                match e {
+                    b'1'..=b'9' => {
+                        let n = (e - b'0') as usize;
+                        if n > self.ngroups || !self.closed[n - 1] {
+                            return Err("Invalid back reference".into());
+                        }
+                        self.has_backref = true;
+                        Ok((Node::Backref(n), false))
+                    }
+                    b'w' => Ok((Node::Set(set_of(is_word)), false)),
+                    b'W' => Ok((Node::Set(set_of(|b| !is_word(b) && b != b'\n')), false)),
+                    b's' => Ok((Node::Set(set_of(|b| class_by_name(b"space").unwrap()(b))), false)),
+                    b'S' => Ok((Node::Set(set_of(|b| !class_by_name(b"space").unwrap()(b))), false)),
+                    b'b' => assert(Assert::WordBoundary),
+                    b'B' => assert(Assert::NotWordBoundary),
+                    b'<' => assert(Assert::WordStart),
+                    b'>' => assert(Assert::WordEnd),
+                    b'`' => assert(Assert::LineStart),
+                    b'\'' => assert(Assert::LineEnd),
+                    // A private escape used by sed for "this byte, literally".
+                    0 => {
+                        let l = self.peek().ok_or("Trailing backslash")?;
+                        self.i += 1;
+                        Ok((self.lit(l), false))
+                    }
+                    _ => Ok((self.lit(e), false)),
+                }
+            }
+            _ => {
+                self.i += 1;
+                Ok((self.lit(c), false))
+            }
+        }
+    }
+
+    /// In a basic regex `^` is an anchor only at the start of the pattern or
+    /// of a group or alternative. The cursor is just past the `^`.
+    fn caret_is_anchor(&self) -> bool {
+        let before = &self.p[..self.i - 1];
+        before.is_empty() || before.ends_with(b"\\(") || before.ends_with(b"\\|")
+    }
+
+    /// Parse a bracket expression; the cursor is just past the `[`.
+    fn parse_bracket(&mut self) -> PResult<Set> {
+        let unmatched = || "Unmatched [, [^, [:, [., or [=".to_string();
+        let mut set = Box::new([false; 256]);
+        let mut negate = false;
+        if self.peek() == Some(b'^') {
+            negate = true;
+            self.i += 1;
+        }
+        let content_start = self.i;
+        let mut first = true;
+        loop {
+            let c = self.peek().ok_or_else(unmatched)?;
+            if c == b']' && !first {
+                break;
+            }
+            first = false;
+            // One element: a class, or a single character that may start a range.
+            let lo: u8;
+            if c == b'[' && matches!(self.p.get(self.i + 1), Some(b':') | Some(b'.') | Some(b'=')) {
+                let kind = self.p[self.i + 1];
+                let body_start = self.i + 2;
+                let close = (body_start..self.p.len().saturating_sub(1))
+                    .find(|&j| self.p[j] == kind && self.p[j + 1] == b']')
+                    .ok_or_else(unmatched)?;
+                let body = &self.p[body_start..close];
+                self.i = close + 2;
+                if kind == b':' {
+                    let f = class_by_name(body).ok_or("Invalid character class name")?;
+                    for b in 0..=255u8 {
+                        if f(b) {
+                            set[b as usize] = true;
+                        }
+                    }
+                    continue;
+                }
+                if body.len() != 1 {
+                    return Err("Invalid collation character".into());
+                }
+                lo = body[0];
+            } else {
+                lo = c;
+                self.i += 1;
+            }
+            if self.peek() == Some(b'-') && self.p.get(self.i + 1).is_some_and(|n| *n != b']') {
+                self.i += 1;
+                let mut hi = self.peek().unwrap();
+                if hi == b'[' && matches!(self.p.get(self.i + 1), Some(b'.') | Some(b'=')) {
+                    let kind = self.p[self.i + 1];
+                    let close = (self.i + 2..self.p.len().saturating_sub(1))
+                        .find(|&j| self.p[j] == kind && self.p[j + 1] == b']')
+                        .ok_or_else(unmatched)?;
+                    if close != self.i + 3 {
+                        return Err("Invalid collation character".into());
+                    }
+                    hi = self.p[self.i + 2];
+                    self.i = close + 2;
+                } else {
+                    self.i += 1;
+                }
+                if hi < lo {
+                    return Err("Invalid range end".into());
+                }
+                for b in lo..=hi {
+                    set[b as usize] = true;
+                }
+            } else {
+                set[lo as usize] = true;
+            }
+        }
+        let content = &self.p[content_start..self.i];
+        self.i += 1;
+        if self.syn.flavor == Flavor::Grep && !negate && content.len() >= 3 && content[0] == b':' && content[content.len() - 1] == b':' {
+            return Err("character class syntax is [[:space:]], not [:space:]".into());
+        }
+        if self.syn.icase {
+            for b in b'a'..=b'z' {
+                let u = b.to_ascii_uppercase();
+                let either = set[b as usize] || set[u as usize];
+                set[b as usize] = either;
+                set[u as usize] = either;
+            }
+        }
+        if negate {
+            for b in set.iter_mut() {
+                *b = !*b;
+            }
+            set[b'\n' as usize] = false;
+        }
+        Ok(set)
+    }
+}
+
+// -------------------------------------------------------------- compiling
+
+struct Compiler {
+    prog: Vec<Inst>,
+    sets: Vec<Set>,
+}
+
+impl Compiler {
+    fn emit(&mut self, i: Inst) -> PResult<usize> {
+        if self.prog.len() >= MAX_PROGRAM {
+            return Err("Regular expression too big".into());
+        }
+        self.prog.push(i);
+        Ok(self.prog.len() - 1)
+    }
+
+    fn compile(&mut self, n: &Node) -> PResult<()> {
+        match n {
+            Node::Empty => {}
+            Node::Set(s) => {
+                self.sets.push(s.clone());
+                let idx = self.sets.len() - 1;
+                self.emit(Inst::Set(idx))?;
+            }
+            Node::Cat(v) => {
+                for x in v {
+                    self.compile(x)?;
+                }
+            }
+            Node::Alt(v) => {
+                let mut jumps = Vec::new();
+                for (k, x) in v.iter().enumerate() {
+                    if k + 1 < v.len() {
+                        let split = self.emit(Inst::Split(0, 0))?;
+                        self.compile(x)?;
+                        jumps.push(self.emit(Inst::Jmp(0))?);
+                        let next = self.prog.len();
+                        self.prog[split] = Inst::Split(split + 1, next);
+                    } else {
+                        self.compile(x)?;
+                    }
+                }
+                let end = self.prog.len();
+                for j in jumps {
+                    self.prog[j] = Inst::Jmp(end);
+                }
+            }
+            Node::Group(sub, _) => self.compile(sub)?,
+            Node::Backref(_) => unreachable!("back-references use the backtracking matcher"),
+            Node::Assert(a) => {
+                self.emit(Inst::Assert(*a))?;
+            }
+            Node::Repeat { sub, min, max } => {
+                for _ in 0..*min {
+                    self.compile(sub)?;
+                }
+                match max {
+                    None => {
+                        // L: split(body, end); body; jmp L
+                        let split = self.emit(Inst::Split(0, 0))?;
+                        self.compile(sub)?;
+                        self.emit(Inst::Jmp(split))?;
+                        let end = self.prog.len();
+                        self.prog[split] = Inst::Split(split + 1, end);
+                    }
+                    Some(mx) => {
+                        let mut splits = Vec::new();
+                        for _ in *min..*mx {
+                            splits.push(self.emit(Inst::Split(0, 0))?);
+                            self.compile(sub)?;
+                        }
+                        let end = self.prog.len();
+                        for s in splits {
+                            self.prog[s] = Inst::Split(s + 1, end);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Regex {
+    /// Compile a pattern. The error is GNU's message for it.
+    pub fn new(pattern: &[u8], syn: Syntax) -> Result<Regex, String> {
+        let mut p = Parser { p: pattern, i: 0, syn, ngroups: 0, closed: Vec::new(), has_backref: false, warnings: Vec::new() };
+        let ast = p.parse_alt(0)?;
+        debug_assert!(p.i == pattern.len());
+        let mut c = Compiler { prog: Vec::new(), sets: Vec::new() };
+        if !p.has_backref {
+            c.compile(&ast)?;
+            c.emit(Inst::Match)?;
+        }
+        Ok(Regex {
+            ast,
+            ngroups: p.ngroups,
+            has_backref: p.has_backref,
+            icase: syn.icase,
+            prog: c.prog,
+            sets: c.sets,
+            warnings: p.warnings,
+        })
+    }
+
+    pub fn group_count(&self) -> usize {
+        self.ngroups
+    }
+
+    pub fn is_match(&self, hay: &[u8]) -> Result<bool, MatchError> {
+        if self.has_backref {
+            Ok(self.backtrack_search(hay, 0)?.is_some())
+        } else {
+            Ok(self.pike(hay, 0, true).is_some())
+        }
+    }
+
+    /// The leftmost-longest match starting at or after `start`. Group spans
+    /// are filled in only when `want_groups` is set.
+    pub fn find_at(&self, hay: &[u8], start: usize, want_groups: bool) -> Result<Option<Caps>, MatchError> {
+        if self.has_backref {
+            return self.backtrack_search(hay, start);
+        }
+        let (s, e) = match self.pike(hay, start, false) {
+            None => return Ok(None),
+            Some(span) => span,
+        };
+        if !want_groups || self.ngroups == 0 {
+            let mut caps = vec![None; self.ngroups + 1];
+            caps[0] = Some((s, e));
+            return Ok(Some(caps));
+        }
+        // Recover the groups by backtracking over the known span.
+        let mut bt = Backtracker::new(hay, self);
+        let mut found: Option<Caps> = None;
+        bt.run(&self.ast, s, &mut |b, p| {
+            if p == e {
+                found = Some(b.caps.clone());
+                true
+            } else {
+                false
+            }
+        });
+        if bt.overflow {
+            return Err(MatchError::TooComplex);
+        }
+        let mut caps = found.expect("the two matchers disagree");
+        caps[0] = Some((s, e));
+        Ok(Some(caps))
+    }
+
+    /// Thompson NFA simulation. Threads carry the position they started at;
+    /// an earlier start always wins, and for one start the last match seen
+    /// is the longest.
+    fn pike(&self, hay: &[u8], start: usize, earliest: bool) -> Option<(usize, usize)> {
+        let n = self.prog.len();
+        let mut clist: Vec<(usize, usize)> = Vec::with_capacity(n);
+        let mut nlist: Vec<(usize, usize)> = Vec::with_capacity(n);
+        let mut mark = vec![usize::MAX; n];
+        let mut stack: Vec<usize> = Vec::new();
+        let mut best: Option<(usize, usize)> = None;
+        let mut pos = start;
+        loop {
+            // The marks for position `pos` were set while building clist.
+            if best.is_none() {
+                self.add_thread(&mut clist, &mut mark, &mut stack, 0, pos, hay, pos);
+            }
+            if clist.is_empty() {
+                // Only reachable once a match is known: before that, a new
+                // thread is added at every position.
+                break;
+            }
+            nlist.clear();
+            for &(pc, st) in clist.iter() {
+                if let Some((bs, _)) = best {
+                    if st > bs {
+                        continue;
+                    }
+                }
+                match &self.prog[pc] {
+                    Inst::Match => {
+                        let better = match best {
+                            None => true,
+                            Some((bs, be)) => st < bs || (st == bs && pos > be),
+                        };
+                        if better {
+                            best = Some((st, pos));
+                            if earliest {
+                                return best;
+                            }
+                        }
+                    }
+                    Inst::Set(s) => {
+                        if pos < hay.len() && self.sets[*s][hay[pos] as usize] {
+                            self.add_thread(&mut nlist, &mut mark, &mut stack, pc + 1, st, hay, pos + 1);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if pos >= hay.len() {
+                break;
+            }
+            pos += 1;
+            std::mem::swap(&mut clist, &mut nlist);
+        }
+        best
+    }
+
+    /// Add a thread and everything reachable from it without consuming
+    /// input. `mark[pc]` holds the last position at which pc was added.
+    #[allow(clippy::too_many_arguments)]
+    fn add_thread(
+        &self,
+        list: &mut Vec<(usize, usize)>,
+        mark: &mut [usize],
+        stack: &mut Vec<usize>,
+        pc: usize,
+        st: usize,
+        hay: &[u8],
+        pos: usize,
+    ) {
+        stack.push(pc);
+        while let Some(pc) = stack.pop() {
+            if mark[pc] == pos {
+                continue;
+            }
+            mark[pc] = pos;
+            match &self.prog[pc] {
+                Inst::Jmp(t) => stack.push(*t),
+                Inst::Split(a, b) => {
+                    stack.push(*b);
+                    stack.push(*a);
+                }
+                Inst::Assert(a) => {
+                    if check_assert(*a, hay, pos) {
+                        stack.push(pc + 1);
+                    }
+                }
+                Inst::Set(_) | Inst::Match => list.push((pc, st)),
+            }
+        }
+    }
+
+    fn backtrack_search(&self, hay: &[u8], start: usize) -> Result<Option<Caps>, MatchError> {
+        for s in start..=hay.len() {
+            let mut bt = Backtracker::new(hay, self);
+            let mut best: Option<(usize, Caps)> = None;
+            bt.run(&self.ast, s, &mut |b, p| {
+                if best.as_ref().map_or(true, |(e, _)| p > *e) {
+                    best = Some((p, b.caps.clone()));
+                }
+                // Stop early only when nothing longer is possible.
+                p == b.hay.len()
+            });
+            if bt.overflow {
+                return Err(MatchError::TooComplex);
+            }
+            if let Some((e, mut caps)) = best {
+                caps[0] = Some((s, e));
+                return Ok(Some(caps));
+            }
+        }
+        Ok(None)
+    }
+}
+
+// ------------------------------------------------------------ backtracking
+
+struct Backtracker<'a> {
+    hay: &'a [u8],
+    icase: bool,
+    caps: Caps,
+    steps: usize,
+    overflow: bool,
+}
+
+type Cont<'k, 'a> = &'k mut dyn FnMut(&mut Backtracker<'a>, usize) -> bool;
+
+impl<'a> Backtracker<'a> {
+    fn new(hay: &'a [u8], re: &Regex) -> Backtracker<'a> {
+        Backtracker { hay, icase: re.icase, caps: vec![None; re.ngroups + 1], steps: 0, overflow: false }
+    }
+
+    /// Match `n` at `pos`, calling `k` with the end of every way it can
+    /// match, most-preferred first. Returns true once `k` accepts.
+    fn run(&mut self, n: &Node, pos: usize, k: Cont<'_, 'a>) -> bool {
+        self.steps += 1;
+        if self.steps > STEP_LIMIT {
+            self.overflow = true;
+            return true;
+        }
+        match n {
+            Node::Empty => k(self, pos),
+            Node::Set(s) => pos < self.hay.len() && s[self.hay[pos] as usize] && k(self, pos + 1),
+            Node::Assert(a) => check_assert(*a, self.hay, pos) && k(self, pos),
+            Node::Cat(v) => self.cat(v, 0, pos, k),
+            Node::Alt(v) => {
+                for b in v {
+                    if self.run(b, pos, k) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Node::Group(sub, i) => {
+                let i = *i;
+                let old = self.caps[i];
+                let r = self.run(sub, pos, &mut |b, p| {
+                    let prev = b.caps[i];
+                    b.caps[i] = Some((pos, p));
+                    if k(b, p) {
+                        return true;
+                    }
+                    b.caps[i] = prev;
+                    false
+                });
+                if !r {
+                    self.caps[i] = old;
+                }
+                r
+            }
+            Node::Backref(i) => match self.caps[*i] {
+                None => false,
+                Some((a, b)) => {
+                    let len = b - a;
+                    if pos + len > self.hay.len() {
+                        return false;
+                    }
+                    let (x, y) = (&self.hay[a..b], &self.hay[pos..pos + len]);
+                    let same = if self.icase { x.eq_ignore_ascii_case(y) } else { x == y };
+                    same && k(self, pos + len)
+                }
+            },
+            Node::Repeat { sub, min, max } => {
+                if let Node::Set(s) = &**sub {
+                    // A repeated single character needs no recursion.
+                    let limit = max.map_or(usize::MAX, |m| m as usize);
+                    let mut run = 0;
+                    while run < limit && pos + run < self.hay.len() && s[self.hay[pos + run] as usize] {
+                        run += 1;
+                    }
+                    let min = *min as usize;
+                    if run < min {
+                        return false;
+                    }
+                    for c in (min..=run).rev() {
+                        if k(self, pos + c) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                self.rep(sub, *min, *max, 0, pos, k)
+            }
+        }
+    }
+
+    fn cat(&mut self, v: &[Node], i: usize, pos: usize, k: Cont<'_, 'a>) -> bool {
+        if i == v.len() {
+            return k(self, pos);
+        }
+        self.run(&v[i], pos, &mut |b, p| b.cat(v, i + 1, p, k))
+    }
+
+    fn rep(&mut self, sub: &Node, min: u32, max: Option<u32>, count: u32, pos: usize, k: Cont<'_, 'a>) -> bool {
+        if max.map_or(true, |m| count < m) {
+            let more = self.run(sub, pos, &mut |b, p| {
+                // An iteration that consumes nothing cannot help once the
+                // minimum is met, and would loop forever.
+                if p == pos && count >= min {
+                    return false;
+                }
+                b.rep(sub, min, max, count + 1, p, k)
+            });
+            if more {
+                return true;
+            }
+        }
+        count >= min && k(self, pos)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn re(p: &str, extended: bool) -> Regex {
+        Regex::new(p.as_bytes(), Syntax { extended, icase: false, flavor: Flavor::Sed }).unwrap()
+    }
+
+    fn span(p: &str, extended: bool, hay: &str) -> Option<(usize, usize)> {
+        re(p, extended).find_at(hay.as_bytes(), 0, false).unwrap().map(|c| c[0].unwrap())
+    }
+
+    #[test]
+    fn leftmost_longest() {
+        assert_eq!(span("a|ab", true, "ab"), Some((0, 2)));
+        assert_eq!(span("a\\|ab", false, "ab"), Some((0, 2)));
+        assert_eq!(span("(a|ab)(c|bcd)?", true, "abcd"), Some((0, 4)));
+        assert_eq!(span("b*", true, "abc"), Some((0, 0)));
+        assert_eq!(span("x*$", true, "abc"), Some((3, 3)));
+    }
+
+    #[test]
+    fn bre_rules() {
+        assert_eq!(span("*a", false, "x*a"), Some((1, 3)));
+        assert_eq!(span("a^b", false, "a^b"), Some((0, 3)));
+        assert_eq!(span("a$b", false, "a$b"), Some((0, 3)));
+        assert_eq!(span("a\\{2,3\\}", false, "aaaa"), Some((0, 3)));
+        assert_eq!(span("\\(ab\\)\\1", false, "xababx"), Some((1, 5)));
+        assert_eq!(span("a+", false, "aa+"), Some((1, 3)));
+    }
+
+    #[test]
+    fn groups() {
+        let r = re("(a|ab)(c|bcd)(d*)", true);
+        let c = r.find_at(b"abcd", 0, true).unwrap().unwrap();
+        assert_eq!(c[1], Some((0, 1)));
+        assert_eq!(c[2], Some((1, 4)));
+        assert_eq!(c[3], Some((4, 4)));
+    }
+
+    #[test]
+    fn errors() {
+        let e = |p: &str, x: bool| Regex::new(p.as_bytes(), Syntax { extended: x, icase: false, flavor: Flavor::Grep }).unwrap_err();
+        assert_eq!(e("[a", false), "Unmatched [, [^, [:, [., or [=");
+        assert_eq!(e("\\(", false), "Unmatched ( or \\(");
+        assert_eq!(e("a\\{1", false), "Unmatched \\{");
+        assert_eq!(e("a{2,1}", true), "Invalid content of \\{\\}");
+        assert_eq!(e("a\\", false), "Trailing backslash");
+        assert_eq!(e("[[:foo:]]", false), "Invalid character class name");
+        assert_eq!(e("[b-a]", false), "Invalid range end");
+    }
+}

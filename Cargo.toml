@@ -1,0 +1,26 @@
+[package]
+name = "qdb"
+version = "0.1.0"
+edition = "2021"
+description = "A from-scratch database engine for text files in folders, queried with bash commands"
+license = "MIT"
+
+[lib]
+name = "qdb"
+path = "src/lib.rs"
+
+[[bin]]
+name = "qdb"
+path = "src/main.rs"
+
+[[bin]]
+name = "qdb-harness"
+path = "src/bin/harness.rs"
+
+[[bin]]
+name = "qdb-bench"
+path = "src/bin/bench.rs"
+
+[profile.release]
+opt-level = 3
+debug = false
