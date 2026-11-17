@@ -1,0 +1,269 @@
+# grep with -r -i -n -l -v -c -E -F
+@fixture basic
+$ grep TODO README.md
+$ grep todo README.md
+$ grep -i todo README.md
+$ grep -n TODO README.md
+$ grep -c TODO README.md
+$ grep -l TODO README.md
+$ grep -v TODO README.md
+$ grep -vn TODO README.md
+$ grep -vc TODO README.md
+$ grep -c nomatch README.md
+$ grep nomatch README.md
+$ grep -l nomatch README.md
+$ grep TODO README.md src/main.c
+$ grep -n TODO README.md src/main.c src/util.c
+$ grep -c TODO README.md src/main.c src/util.c
+$ grep -l TODO README.md src/main.c src/util.c
+$ grep -il todo README.md src/main.c src/util.c
+$ grep -ic todo README.md src/main.c src/util.c
+$ grep -lv TODO README.md data/blank.txt
+$ grep -lc TODO README.md src/util.c
+$ grep -nc TODO README.md
+$ grep -r TODO .
+$ grep -r TODO
+$ grep -rn TODO
+$ grep -rn TODO .
+$ grep -rin todo .
+$ grep -rl TODO .
+$ grep -rc TODO src
+$ grep -rc TODO .
+$ grep -ril todo
+$ grep -rlv include src
+$ grep -r include src
+$ grep -r include src/
+$ grep -r include src//
+$ grep -r include ./src
+$ grep -r include src/lib/..
+$ grep -r include src docs
+$ grep -r add src/util.c
+$ grep -rn add src/util.c
+$ grep -r add src/util.c src/util.h
+$ grep -r add src/util.c docs
+$ grep -r TODO README.md src
+$ grep -r leaf deep
+$ grep -r x empty
+$ grep -rc x empty
+$ grep -r debug src
+$ grep -r hidden .
+$ grep TODO src
+$ grep TODO src README.md
+$ grep TODO nope
+$ grep TODO nope README.md
+$ grep -r TODO nope
+$ grep -r TODO nope src
+$ grep nomatch nope README.md
+$ grep TODO README.md/x
+$ grep
+$ grep -r
+$ grep -n
+$ grep '' data/one.txt
+$ grep -c '' README.md
+$ grep -c '' notes.txt
+$ grep -c '' data/blank.txt
+$ grep -v '' README.md
+$ grep -vc '' README.md
+$ grep -n '' notes.txt
+$ grep note notes.txt
+$ grep newline notes.txt
+$ grep -c newline notes.txt
+$ grep -v first notes.txt
+$ grep 'last line' notes.txt
+$ grep "second note" notes.txt
+$ grep '^$' README.md
+$ grep -n '^$' README.md
+$ grep -c '^' README.md
+$ grep -c '$' README.md
+$ grep -v '^$' README.md
+$ grep '^#' README.md docs/guide.md
+$ grep 'e$' data/words.txt
+$ grep '^a' data/words.txt
+$ grep -i '^a' data/words.txt
+$ grep 'a.p' data/words.txt
+$ grep 'foo.bar' data/words.txt
+$ grep 'foo\.bar' data/words.txt
+$ grep -F 'foo.bar' data/words.txt
+$ grep -F 'foo*bar' data/words.txt
+$ grep 'foo*bar' data/words.txt
+$ grep 'foo\*bar' data/words.txt
+$ grep -F 'a+b' data/words.txt
+$ grep 'a+b' data/words.txt
+$ grep -E 'a+b' data/words.txt
+$ grep -E 'a\+b' data/words.txt
+$ grep 'a\+b' data/words.txt
+$ grep -F '(parens)' data/words.txt
+$ grep '(parens)' data/words.txt
+$ grep -E '\(parens\)' data/words.txt
+$ grep -E '(parens)' data/words.txt
+$ grep '\(ab\)\1' data/words.txt
+$ grep -E '(ab)\1' data/words.txt
+$ grep -E '(abc)\1' data/words.txt
+$ grep -E '^(.)(.)\2\1' data/words.txt
+$ grep -E 'ap+le' data/words.txt
+$ grep -E 'apple|grape' data/words.txt
+$ grep 'apple\|grape' data/words.txt
+$ grep 'apple|grape' data/words.txt
+$ grep -E '^(apple|banana)$' data/words.txt
+$ grep -E 'an{2}' data/words.txt
+$ grep -E '(an){2}' data/words.txt
+$ grep 'a\{2\}' data/words.txt
+$ grep '\(an\)\{2\}' data/words.txt
+$ grep -E 'p{2,}' data/words.txt
+$ grep -E 'x?y?' data/one.txt
+$ grep -E 'colou?r|gr[ae]y' data/words.txt
+$ grep '[[:upper:]]' data/words.txt
+$ grep '[[:upper:]]\{3,\}' data/words.txt
+$ grep '^[[:space:]]' data/words.txt
+$ grep '[[:space:]]$' data/words.txt
+$ grep '[[:digit:]]' README.md
+$ grep -c '[[:digit:]]' data/numbers.txt
+$ grep '^[0-9]$' data/numbers.txt
+$ grep '^1' data/numbers.txt
+$ grep -c '^1' data/numbers.txt
+$ grep -E '^(1|2)0?$' data/numbers.txt
+$ grep '[^a-z]' data/words.txt
+$ grep '^[^a-z]*$' data/words.txt
+$ grep '[]]' data/words.txt
+$ grep '[[]' data/words.txt
+$ grep '[{}]' data/words.txt
+$ grep '\\' data/words.txt
+$ grep -F '\' data/words.txt
+$ grep '	' data/words.txt
+$ grep '\bfoo\b' data/words.txt
+$ grep '\<bar' data/words.txt
+$ grep 'bar\>' data/words.txt
+$ grep '\w\+' data/one.txt
+$ grep -c '\W' data/words.txt
+$ grep '\s' data/one.txt
+$ grep '\S' data/blank.txt
+$ grep -E '\bpie\b' data/words.txt
+$ grep '*' data/words.txt
+$ grep '^*' data/words.txt
+$ grep 'a*' data/one.txt
+$ grep -i apple data/words.txt
+$ grep -i PINEAPPLE data/words.txt
+$ grep -i 'a.PLE' data/words.txt
+$ grep -iF APPLE data/words.txt
+$ grep -iE 'APPLE|GRAPE' data/words.txt
+$ grep -i '[A-C]pple' data/words.txt
+$ grep -F apple data/words.txt
+$ grep -F '' data/one.txt
+$ grep -Fc '' README.md
+$ grep -Fv apple data/words.txt
+$ grep -F 'foo bar' data/words.txt
+$ grep -EF 'a+b' data/words.txt
+$ grep -FE 'a+b' data/words.txt
+$ grep 'apple⏎grape' data/words.txt
+$ grep -F 'apple⏎grape' data/words.txt
+$ grep -E 'apple⏎gr(a|e)pe' data/words.txt
+$ grep -c 'apple⏎' data/words.txt
+$ grep é data/unicode.txt
+$ grep -c 'caf.' data/unicode.txt
+$ grep 'caf..' data/unicode.txt
+$ grep -i 'CAFÉ' data/unicode.txt
+$ grep 日本 data/unicode.txt
+$ grep -v '[a-z]' data/unicode.txt
+$ grep '^.$' data/unicode.txt
+$ grep '^..$' data/unicode.txt
+$ grep -n fox data/long.txt | head -n 3
+$ grep -c fox data/long.txt
+$ grep 'line 1[0-9]:' data/long.txt
+$ grep -E 'line (7|[0-9]7):' data/long.txt
+$ grep -n 'line 60' data/long.txt
+$ grep 'a b' 'with space.txt'
+$ grep space with\ space.txt README.md
+$ grep -- -o Makefile
+$ grep -n -- '-f' Makefile
+$ grep TODO -n README.md
+$ grep TODO README.md -c
+$ grep TODO *.md
+$ grep -l int src/*.c src/lib/*.c
+$ grep -c int src/*
+$ cat README.md | grep TODO
+$ cat README.md | grep -n TODO
+$ cat README.md | grep -c TODO
+$ cat README.md | grep -l TODO
+$ cat README.md | grep TODO -
+$ cat README.md | grep TODO - notes.txt
+$ cat README.md | grep -c TODO - notes.txt
+$ cat README.md | grep -v TODO | grep -c ''
+$ grep -r int src | grep -c lib
+$ grep -rl int . | wc -l
+$ echo hello | grep hello
+$ echo hello | grep -c bye
+$ grep TODO
+$ grep '[' README.md
+$ grep 'a\{1' README.md
+$ grep '\(' README.md
+$ grep '\)' README.md
+$ grep -E '(' README.md
+$ grep -E ')' data/words.txt
+$ grep -E 'a{1' README.md
+$ grep -E 'a{2,1}' README.md
+$ grep 'a\' README.md
+$ grep '[[:foo:]]' README.md
+$ grep '[z-a]' README.md
+$ grep '[:alpha:]' README.md
+$ grep '\1' README.md
+$ grep -E 'a{99999}' README.md
+$ grep -E '*a' data/one.txt
+$ grep -E '+' data/one.txt
+$ grep -E '?' data/one.txt
+$ grep -E '{1}' data/one.txt
+$ grep '\{1\}' data/words.txt
+$ grep 'x\{0\}' data/one.txt
+$ grep -E 'a**' data/one.txt
+$ grep -E 'a|' data/one.txt
+$ grep -E '|' data/one.txt
+$ grep -E '()' data/one.txt
+$ grep '\(\)' data/one.txt
+$ grep '\.' data/words.txt
+$ grep '\-' Makefile
+$ grep '[a\]' data/words.txt
+$ grep '[a-]' data/words.txt
+$ grep '[.]' data/words.txt
+$ grep '[*]' data/words.txt
+$ grep '[[.a.]]pple' data/words.txt
+$ grep '[[=a=]]pple' data/words.txt
+$ grep 'a$b' data/words.txt
+$ grep 'a^b' data/words.txt
+$ grep -E 'a$b' data/words.txt
+$ grep -E 'a^b' data/words.txt
+$ grep '\(^a\)' data/words.txt
+$ grep 'x\|^a' data/words.txt
+$ grep 'e$\|^g' data/words.txt
+$ grep '\(e$\)' data/words.txt
+$ grep -r TODO . > out.txt
++ cat out.txt
+$ grep -rc TODO . > out.txt
++ cat out.txt
+$ grep -rl TODO . > out.txt
++ cat out.txt
+$ grep note notes.txt > notes.txt
++ cat notes.txt
+$ grep note notes.txt >> notes.txt
++ cat notes.txt
+$ grep -c note notes.txt >> notes.txt
++ cat notes.txt
+$ grep -r TODO {ROOT}/src
+$ grep -n add {ROOT}/src/util.c
+! grep -w foo data/words.txt ## grep -w
+! grep -e TODO README.md ## grep -e
+! grep -f pats README.md ## grep -f
+! grep -o foo data/words.txt ## grep -o
+! grep -A 1 foo data/words.txt ## grep -A
+! grep -B1 foo data/words.txt ## grep -B
+! grep -C 1 foo data/words.txt ## grep -C
+! grep --include='*.c' -r foo . ## long options
+! grep -q foo data/words.txt ## grep -q
+! grep -x foo data/words.txt ## grep -x
+! grep -P 'fo+' data/words.txt ## grep -P
+! grep -h foo data/words.txt ## grep -h
+! grep -H foo data/words.txt ## grep -H
+! grep -s foo data/words.txt ## grep -s
+! grep -R foo . ## grep -R
+! grep -m 1 foo data/words.txt ## grep -m
+! grep -L foo data/words.txt ## grep -L
+! grep --recursive foo . ## long options
+! grep -rw foo . ## grep -w

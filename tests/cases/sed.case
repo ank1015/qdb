@@ -1,0 +1,283 @@
+# sed: s/old/new/ with g, -E and -i
+@fixture basic
+$ sed 's/note/NOTE/' notes.txt
+$ sed 's/note/NOTE/g' notes.txt
+$ sed s/note/NOTE/ notes.txt
+$ sed 's/o/0/' notes.txt
+$ sed 's/o/0/g' notes.txt
+$ sed 's/nomatch/x/' notes.txt
+$ sed 's/line/LINE/' notes.txt | cat -n
+$ sed 's/a/b/' data/blank.txt
+$ sed 's/$/!/' notes.txt
+$ sed 's/^/> /' notes.txt
+$ sed 's/^/> /' README.md
+$ sed 's/^$/(blank)/' README.md
+$ sed 's/.*/[&]/' notes.txt
+$ sed 's/[a-z]*/[&]/' notes.txt
+$ sed 's/[a-z]*/[&]/g' notes.txt
+$ sed 's/x*/-/g' data/one.txt
+$ sed 's/ *//g' notes.txt
+$ sed 's/  */ /g' data/words.txt
+$ sed 's/\(.*\) \(.*\)/\2 \1/' notes.txt
+$ sed 's/\([a-z]*\) \([a-z]*\)/\2 \1/' notes.txt
+$ sed -E 's/([a-z]+) ([a-z]+)/\2 \1/' notes.txt
+$ sed -E 's/([a-z]+) ([a-z]+)/\2 \1/g' notes.txt
+$ sed -E 's/(a|ab)(c|bcd)(d*)/[\1][\2][\3]/' data/words.txt
+$ sed -E 's/a|ab/X/' data/words.txt
+$ sed -E 's/ab|a/X/g' data/words.txt
+$ sed 's/a\|ab/X/' data/words.txt
+$ sed -E 's/(foo|foo bar)( baz)?/<&>/' data/words.txt
+$ sed -E 's/p+/P/g' data/words.txt
+$ sed 's/p\+/P/g' data/words.txt
+$ sed 's/p+/P/g' data/words.txt
+$ sed -E 's/an?/X/g' data/words.txt
+$ sed -E 's/(an){2}/X/' data/words.txt
+$ sed 's/\(an\)\{2\}/X/' data/words.txt
+$ sed -E 's/^(.)(.*)$/\2\1/' data/words.txt
+$ sed -E 's/(.)\1/<\1\1>/g' data/words.txt
+$ sed 's/\(ab\)\1/X/' data/words.txt
+$ sed 's/&/and/' data/words.txt
+$ sed 's/apple/[&][&]/' data/words.txt
+$ sed 's/apple/\&/' data/words.txt
+$ sed 's/apple/a\\b/' data/words.txt
+$ sed 's/apple/\0\0/' data/words.txt
+$ sed 's/ /\n/' notes.txt
+$ sed 's/ /\n/g' notes.txt
+$ sed 's/ /\t/g' notes.txt
+$ sed 's/ /\⏎/' notes.txt
+$ sed 's/\t/<TAB>/' data/words.txt
+$ sed 's/[\t ]/_/g' data/words.txt
+$ sed 's/\./DOT/' data/words.txt
+$ sed 's/./X/' data/words.txt
+$ sed 's/\*/STAR/' data/words.txt
+$ sed 's/*/STAR/' data/words.txt
+$ sed 's/[*+]/OP/g' data/words.txt
+$ sed 's/\\/BACKSLASH/' data/words.txt
+$ sed 's/[\\]/BACKSLASH/' data/words.txt
+$ sed 's/[()]/P/g' data/words.txt
+$ sed -E 's/\(|\)/P/g' data/words.txt
+$ sed -E 's/[][]/B/g' data/words.txt
+$ sed 's/[{}]/C/g' data/words.txt
+$ sed -E 's/\{|\}/C/g' data/words.txt
+$ sed 's/[[:upper:]]/U/g' data/words.txt
+$ sed 's/[[:space:]]*$//' data/words.txt
+$ sed 's/^[[:space:]]*//' data/words.txt
+$ sed 's/[^a-z]//g' data/words.txt
+$ sed 's/\bfoo\b/FOO/g' data/words.txt
+$ sed 's/\<b/B/g' data/words.txt
+$ sed 's/r\>/R/g' data/words.txt
+$ sed 's/\w\+/W/g' data/words.txt
+$ sed 's/\W/_/g' data/words.txt
+$ sed 's/\s/_/g' data/words.txt
+$ sed 's/\S\+/S/' data/words.txt
+$ sed 's|/|-|g' Makefile
+$ sed 's/\//-/g' Makefile
+$ sed 's,src/,SRC/,g' Makefile
+$ sed 's#src/main.c#x#' Makefile
+$ sed 's:main:MAIN:g' Makefile
+$ sed 's|a\|b|X|g' data/words.txt
+$ sed -E 's|a\|b|X|g' data/words.txt
+$ sed 's.a\.b.X.g' data/words.txt
+$ sed 's/a/\//' data/one.txt
+$ sed 's|a|\||' data/one.txt
+$ sed 's/[/]/-/g' Makefile
+$ sed 's/[^/]*$//' Makefile
+$ sed 's/a[^/]*b/X/' data/words.txt
+$ sed 's/é/e/g' data/unicode.txt
+$ sed 's/caf./X/' data/unicode.txt
+$ sed 's/caf../X/' data/unicode.txt
+$ sed 's/日本語/Japanese/' data/unicode.txt
+$ sed 's/a/日本/' data/unicode.txt
+$ sed 's/fox/cat/' data/long.txt | head -n 2
+$ sed 's/[0-9]*:/N:/' data/long.txt | tail -n 2
+$ sed 's/1/one/' data/numbers.txt
+$ sed 's/1/one/g' data/numbers.txt
+$ sed 's/^1$/one/' data/numbers.txt
+$ sed 's/^\(.\)$/0\1/' data/numbers.txt
+$ sed -E 's/^(.)$/0\1/' data/numbers.txt
+$ sed 's/a/b/ ' data/one.txt
+$ sed ' s/n/N/' data/one.txt
+$ sed 's/n/N/g;' data/one.txt
+$ sed 's/n/N/ g' data/one.txt
+$ sed 's/n/N/ # comment' data/one.txt
+$ sed 's/n/N/⏎' data/one.txt
+$ sed 'sxnxNx' data/one.txt
+$ sed 's/a/b/' README.md notes.txt
+$ sed 's/a/b/' notes.txt README.md
+$ sed 's/a/b/' notes.txt notes.txt
+$ sed 's/a/b/' nope
+$ sed 's/a/b/' nope notes.txt
+$ sed 's/a/b/' notes.txt nope
+$ sed 's/a/b/' src
+$ sed 's/a/b/' src notes.txt
+$ sed 's/a/b/' README.md/x
+$ sed 's/a/b/' 'with space.txt'
+$ sed -E 's/a/b/' notes.txt
+$ sed 's/a/b/' -E notes.txt
+$ sed notes.txt
+$ sed -- 's/a/b/' notes.txt
+$~ sed
+$~ sed -E
+$ cat notes.txt | sed 's/note/NOTE/'
+$ cat notes.txt | sed 's/note/NOTE/' -
+$ cat notes.txt | sed 's/note/NOTE/' - README.md
+$ cat notes.txt | sed -E 's/(first|second)/[\1]/' | grep -c '\['
+$ echo hello world | sed 's/world/there/'
+$ echo ab | sed -E 's/a|ab/X/'
+$ echo abc | sed 's/b*/X/g'
+$ echo baaac | sed 's/a*/x/g'
+$ echo abc | sed -E 's/b?/X/g'
+$ echo abab | sed -E 's/(ab)*/X/g'
+$ echo abc | sed -E 's/()/X/g'
+$ echo abc | sed 's/$/X/g'
+$ echo abc | sed 's/^/X/g'
+$ echo abc | sed -E 's/^|$/X/g'
+$ echo abc | sed -E 's/\b/X/g'
+$ echo 'a b' | sed -E 's/\B/X/g'
+$ echo aaa | sed 's/a/b/'
+$ echo aaa | sed 's/a/b/g'
+$ echo aaa | sed 's/aa/b/g'
+$ echo -n abc | sed 's/b/X/'
+$ echo -n abc | sed 's/b/X/' | wc -c
+$ echo -n | sed 's/^/X/'
+$ echo | sed 's/^/X/'
+$ echo 'a.b' | sed 's/a\.b/X/'
+$ echo 'aXb' | sed 's/a.b/[\0]/'
+$ echo hello | sed 's/l/L/' | sed 's/l/L/'
+$ echo 'path/to/file' | sed 's/\//\\/g'
+$ echo '1 2 3' | sed -E 's/([0-9]) ([0-9]) ([0-9])/\3 \2 \1/'
+$ echo 'abcdefghij' | sed -E 's/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)/\9\8\7\6\5\4\3\2\1/'
+$ echo 'a^b' | sed 's/a^b/X/'
+$ echo 'a$b' | sed 's/a$b/X/'
+$ echo 'a^b' | sed -E 's/a\^b/X/'
+$ echo '*a' | sed 's/*a/X/'
+$ echo 'x' | sed 's/x\{0\}/Y/'
+$ echo 'aaa' | sed 's/a\{2\}/X/'
+$ echo 'aaa' | sed -E 's/a{2,}/X/'
+$ echo 'aaa' | sed -E 's/a{,2}/X/'
+$ sed 's/a/b' notes.txt
+$ sed 's/a' notes.txt
+$ sed 's' notes.txt
+$ sed 's/a/b/gg' notes.txt
+$ sed 's/a/b/x' notes.txt
+$ sed 's/a/b/}' notes.txt
+$ sed 's/\(a\)/\2/' notes.txt
+$ sed 's/a/\1/' notes.txt
+$ sed -E 's/(a)(b)/\3/' notes.txt
+$ sed 's//x/' notes.txt
+$ sed 's/[a/x/' notes.txt
+$ sed 's/\(a/x/' notes.txt
+$ sed 's/a\)/x/' notes.txt
+$ sed -E 's/(a/x/' notes.txt
+$ sed -E 's/a)/x/' notes.txt
+$ sed 's/a\{1/x/' notes.txt
+$ sed -E 's/a{1/x/' notes.txt
+$ sed -E 's/a{2,1}/x/' notes.txt
+$ sed -E 's/*a/x/' notes.txt
+$ sed -E 's/+a/x/' notes.txt
+$ sed -E 's/a|*b/x/' notes.txt
+$ sed -E 's/{1}a/x/' notes.txt
+$ sed 's/\{1\}a/x/' notes.txt
+$ sed 's/a**/x/' notes.txt
+$ sed -E 's/a**/x/' notes.txt
+$ sed 's/[[:foo:]]/x/' notes.txt
+$ sed 's/[z-a]/x/' notes.txt
+$ sed 's/\1/x/' notes.txt
+$ sed -E 's/a{99999}/x/' notes.txt
+
+$ sed -i 's/note/NOTE/' notes.txt
++ cat notes.txt
+$ sed -i 's/note/NOTE/g' notes.txt
++ cat notes.txt
++ wc notes.txt
+$ sed -i 's/TODO/DONE/' README.md
++ grep -n DONE README.md
+$ sed -i 's/TODO/DONE/' README.md src/main.c src/lib/lex.c
++ grep -rn DONE .
+$ sed -i 's/int/long/g' src/*.c src/lib/*.c
++ grep -rc long src
+$ sed -i -E 's/(add|sub)\(/my_\1(/g' src/util.c src/util.h src/main.c
++ cat src/util.h
++ grep -rn my_ src
+$ sed -E -i 's/[0-9]+/N/' data/numbers.txt
++ head -n 3 data/numbers.txt
+$ sed -iE 's/1/x/' data/numbers.txt
+$ sed -Ei 's/[0-9]+/N/' data/numbers.txt
++ head -n 3 data/numbers.txt
+$ sed 's/1/one/' -i data/numbers.txt
++ head -n 2 data/numbers.txt
+$ sed -i 's/nomatch/x/' README.md
++ wc README.md
+$ sed -i 's/a/b/' data/blank.txt
++ wc -c data/blank.txt
+$ sed -i 's/$/!/' notes.txt
++ cat notes.txt
+$ sed -i 's/ /\n/g' notes.txt
++ cat -n notes.txt
+$ sed -i 's/é/e/g' data/unicode.txt
++ cat data/unicode.txt
+$ sed -i 's/a/b/' nope
+$ sed -i 's/a/b/' nope notes.txt
++ cat notes.txt
+$ sed -i 's/a/b/' notes.txt nope README.md
++ head -n 1 README.md notes.txt
+$ sed -i 's/a/b/' src
+$ sed -i 's/a/b/' src notes.txt
++ cat notes.txt
+$ sed -i 's/a/b/' nope src notes.txt
++ cat notes.txt
+$ sed -i 's/a/b/'
+$ sed -i 's/a/b/' -
+$ sed -i 's/a/b' notes.txt
++ cat notes.txt
+$ sed -i 's/a/b/' 'with space.txt'
++ cat 'with space.txt'
+$ sed -i s/hidden/shown/ .hidden
++ cat .hidden
+$ sed -i 's/leaf/LEAF/' deep/a/b/c/leaf.txt
++ cat deep/a/b/c/leaf.txt
+$ sed -i 's/a/b/' {ROOT}/notes.txt
++ cat notes.txt
+$ sed -i 's/first/1st/' notes.txt | wc -c
++ cat notes.txt
+$ sed -i 's/first/1st/' notes.txt > out.txt
++ wc -c out.txt
++ cat notes.txt
+! sed -n 's/a/b/p' notes.txt ## sed -n
+! sed -e 's/a/b/' notes.txt ## sed -e
+! sed -r 's/a/b/' notes.txt ## sed -r
+! sed -i.bak 's/a/b/' notes.txt ## backup suffix
+! sed -ibak 's/a/b/' notes.txt ## backup suffix
+! sed --in-place 's/a/b/' notes.txt ## long options
+! sed -s 's/a/b/' notes.txt ## sed -s
+! sed -z 's/a/b/' notes.txt ## sed -z
+! sed 's/a/b/p' notes.txt ## `p` flag
+! sed 's/a/b/2' notes.txt ## `2` flag
+! sed 's/a/b/I' notes.txt ## `I` flag
+! sed 's/a/b/i' notes.txt ## `i` flag
+! sed 's/a/b/w out.txt' notes.txt ## `w` flag
+! sed 's/a/b/e' notes.txt ## `e` flag
+! sed 's/a/b/gp' notes.txt ## `p` flag
+! sed '2s/a/b/' notes.txt ## addresses
+! sed '1,2s/a/b/' notes.txt ## addresses
+! sed '/note/s/a/b/' notes.txt ## addresses
+! sed '$s/a/b/' notes.txt ## addresses
+! sed 's/a/b/;s/c/d/' notes.txt ## more than one command
+! sed 's/a/b/⏎s/c/d/' notes.txt ## more than one command
+! sed d notes.txt ## `d` command
+! sed '2d' notes.txt ## addresses
+! sed p notes.txt ## `p` command
+! sed '5,10p' notes.txt ## addresses
+! sed 'y/abc/xyz/' notes.txt ## `y` command
+! sed q notes.txt ## `q` command
+! sed '{s/a/b/}' notes.txt ## blocks
+! sed '' notes.txt ## empty script
+! sed 's/a/\U&/' notes.txt ## case conversion
+! sed 's/a/\L&/' notes.txt ## case conversion
+! sed 's/a/\x41/' notes.txt ## escape
+! sed 's/\x61/A/' notes.txt ## escape
+! sed 's/a/\d65/' notes.txt ## escape
+! sed 's/a/\cA/' notes.txt ## escape
+! sed 's/a/\o101/' notes.txt ## escape
+! sed 's\a\b\' notes.txt ## delimiter
+! sed -i -n 's/a/b/' notes.txt ## sed -n

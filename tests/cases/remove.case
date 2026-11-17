@@ -1,0 +1,168 @@
+# rm (with -r, -f) and rmdir
+@fixture basic
+$ rm README.md
++ ls
+$ rm README.md notes.txt
++ ls
+$ rm src/*.c
++ ls -R src
+$ rm nope
+$ rm nope README.md
++ ls
+$ rm README.md nope notes.txt
++ ls
+$ rm src
++ ls -p
+$ rm empty
+$ rm src README.md
++ ls -p
+$ rm README.md/
+$ rm README.md/x
+$ rm 'with space.txt'
++ ls
+$ rm with\ space.txt
++ ls
+$ rm *.md
++ ls
+$ rm .hidden
++ ls -a
+$ rm
+$ rm ''
+$ rm -f
+$ rm -f nope
+$ rm -f nope README.md
++ ls
+$ rm -f README.md/x
+$ rm -f src
+$ rm -f ''
+$ rm -f README.md
++ ls
+$ rm -r src
++ ls -p
+$ rm -r src/
++ ls -p
+$ rm -r src docs
++ ls -p
+$ rm -r empty
++ ls -p
+$ rm -r README.md
++ ls
+$ rm -r nope
+$ rm -r nope src
++ ls -p
+$ rm -rf nope
+$ rm -rf nope src
++ ls -p
+$ rm -rf src
++ ls -p
+$ rm -fr src docs data deep empty
++ ls -ap
+$ rm -r -f src
++ ls -p
+$ rm -r src/lib
++ ls -R src
+$ rm -r deep/a/b
++ find deep
+$ rm -r deep/a/b/c/leaf.txt
++ find deep
+$ rm -r src/*
++ ls -a src
+$ rm -r *
++ ls -a
+$ rm -rf * .hidden
++ ls -a
+$ rm -r .
+$ rm -r ./
+$ rm -r src/.
+$ rm -r src/..
+$ rm .
+$ rm -rf .
+$ rm -rf src/.
+$ rm src -r
++ ls -p
+$ rm -- README.md
++ ls
+$ rm -r ''
+$ rm -rf ''
+$ rm README.md README.md
++ ls
+$ rm -r src src
++ ls -p
+$ rm -r src/lib src
++ ls -p
+$ rm -r src src/lib
++ ls -p
+$ rm -r {ROOT}/src
++ ls -p
+$ rm {ROOT}/README.md
++ ls
+= rm -r /
+2> rm: it is dangerous to operate recursively on '/'
+2> rm: use --no-preserve-root to override this failsafe
+? 1
+= rm -rf /
+2> rm: it is dangerous to operate recursively on '/'
+2> rm: use --no-preserve-root to override this failsafe
+? 1
+= rm /
+2> rm: cannot remove '/': Is a directory
+? 1
+= rm -r ..
+2> rm: refusing to remove '.' or '..' directory: skipping '..'
+? 1
+= rm -rf /src
++= ls /
+> Makefile
+> README.md
+> data
+> deep
+> docs
+> empty
+> notes.txt
+> with space.txt
+! rm -i README.md ## rm -i
+! rm -v README.md ## rm -v
+! rm -d empty ## rm -d
+! rm -R src ## rm -R
+! rm --recursive src ## long options
+! rm -rfv src ## rm -v
+
+$ rmdir empty
++ ls -p
+$ rmdir empty/
++ ls -p
+$ rmdir src
+$ rmdir README.md
+$ rmdir README.md/
+$ rmdir nope
+$ rmdir nope/x
+$ rmdir empty nope src
++ ls -p
+$ rmdir deep/a/b/hollow
++ find deep -type d
+$ rmdir deep/a/b/hollow deep/a/b/c
++ find deep -type d
+$ rmdir
+$ rmdir .
+$ rmdir ./
+$ rmdir empty/.
+$ rmdir src/..
+$ rmdir ''
+$ rmdir empty empty
++ ls -p
+$ mkdir -p x/y/z
++ rmdir x/y/z x/y x
++ ls -p
+$ mkdir -p x/y/z
++ rmdir x x/y x/y/z
++ find x
+$ rmdir -- empty
++ ls -p
+$ rmdir {ROOT}/empty
++ ls -p
+= rmdir /
+2> rmdir: failed to remove '/': Device or resource busy
+? 1
+! rmdir -p x/y ## rmdir -p
+! rmdir -v empty ## rmdir -v
+! rmdir --parents x ## long options

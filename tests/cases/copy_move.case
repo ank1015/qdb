@@ -1,0 +1,243 @@
+# cp (with -r) and mv
+@fixture basic
+$ cp README.md copy.md
++ cat copy.md
++ ls
+$ cp README.md notes.txt
++ cat notes.txt
+$ cp notes.txt README.md
++ cat README.md
+$ cp README.md src
++ ls src
+$ cp README.md src/
++ ls src
+$ cp README.md src/renamed.md
++ ls src
+$ cp README.md notes.txt src
++ ls src
+$ cp README.md notes.txt Makefile empty/
++ ls empty
+$ cp src/*.c empty
++ ls empty
+$ cp README.md README.md
+$ cp README.md ./README.md
+$ cp README.md .
+$ cp src/main.c src
+$ cp README.md nope/x
+$ cp README.md nope/
+$ cp README.md notes.txt nope
+$ cp README.md notes.txt Makefile
+$ cp nope x
++ ls
+$ cp nope README.md x
+$ cp nope README.md empty
++ ls empty
+$ cp README.md nope empty
++ ls empty
+$ cp src x
++ ls
+$ cp src README.md empty
++ ls empty
+$ cp
+$ cp README.md
+$ cp -r
+$ cp -r src
+$ cp README.md notes.txt/x
+$ cp README.md notes.txt/
+$ cp data/blank.txt b2
++ wc -c b2
+$ cp notes.txt n2
++ cat n2
+$ cp 'with space.txt' 'copy with space.txt'
++ ls
+$ cp README.md ''
+$ cp '' x
+$ cp -r src src2
++ ls -R src2
+$ cp -r src/ src2
++ ls -R src2
+$ cp -r src src2/
++ ls -R src2
+$ cp -r src empty
++ ls -R empty
+$ cp -r src empty/
++ ls -R empty
+$ cp -r src/lib empty/renamed
++ ls -R empty
+$ cp -r src docs empty
++ ls -R empty
+$ cp -r src README.md empty
++ ls -aR empty
+$ cp -r README.md copy.md
++ ls
+$ cp -r README.md empty
++ ls empty
+$ cp -r src README.md
+$ cp -r src docs README.md
+$ cp -r src nope/x
+$ cp -r nope x
+$ cp -r empty e2
++ ls -p
+$ cp -r deep deep2
++ find deep2
+$ cp -r src/. dest
++ ls -aR dest
+$ cp -r src/. empty
++ ls -aR empty
+$ cp -r docs src
++ ls -R src
+$ cp -r src/lib src/lib2
++ ls -R src
+$ mkdir -p t/src/lib
++ echo old > t/src/main.c
++ echo keep > t/src/keep.txt
++ cp -r src t
++ ls -R t
++ cat t/src/main.c t/src/keep.txt
+$ mkdir -p t/src
++ touch t/src/lib
++ cp -r src t
++ ls -R t
+$ mkdir -p t/src/main.c
++ cp -r src t
++ ls -R t
+$ mkdir -p t/README.md
++ cp README.md t
+$ cp -r src docs/../x
++ ls -p
+$ cp src/main.c src/util.c src/lib/
++ ls src/lib
+$ cp README.md src -r
++ ls src
+$ cp -r {ROOT}/src {ROOT}/src9
++ ls -R src9
+$ cp {ROOT}/README.md copy.md
++ ls
+! cp -n README.md x ## cp -n
+! cp -a src x ## cp -a
+! cp -R src x ## cp -R
+! cp -v README.md x ## cp -v
+! cp -f README.md x ## cp -f
+! cp -p README.md x ## cp -p
+! cp -t src README.md ## cp -t
+! cp --recursive src x ## long options
+
+$ mv README.md renamed.md
++ ls
++ cat renamed.md
+$ mv README.md notes.txt
++ ls
++ cat notes.txt
+$ mv README.md src
++ ls . src
+$ mv README.md src/
++ ls . src
+$ mv README.md src/renamed.md
++ ls . src
+$ mv README.md notes.txt src
++ ls . src
+$ mv README.md notes.txt Makefile empty/
++ ls . empty
+$ mv src/*.c empty
++ ls src empty
+$ mv README.md README.md
+$ mv README.md ./README.md
+$ mv README.md .
+$ mv src/main.c src
+$ mv README.md nope/x
+$ mv README.md nope/
+$ mv README.md notes.txt nope
+$ mv README.md notes.txt Makefile
+$ mv nope x
+$ mv nope README.md empty
++ ls . empty
+$ mv README.md nope empty
++ ls . empty
+$ mv
+$ mv README.md
+$ mv README.md notes.txt/x
+$ mv README.md notes.txt/
+$ mv src src2
++ ls -R src2
++ ls -p
+$ mv src/ src2
++ ls -p
+$ mv src src2/
++ ls -p
+$ mv src/ src2/
++ ls -p
+$ mv src empty
++ ls -R empty
+$ mv src empty/
++ ls -R empty
+$ mv src/lib .
++ ls -p . src
+$ mv src/lib empty/renamed
++ ls -R empty src
+$ mv src docs empty
++ ls -p . empty
+$ mv src README.md
+$ mv src README.md/
+$ mv src docs README.md
+$ mv src nope/x
+$ mv src src
+$ mv src src/
+$ mv src src/lib
+$ mv src src/lib/
+$ mv src src/new
+$ mv src src/lib/new
+$ mv src/lib src
+$ mv src/lib src/
+$ mv deep/a/b/c deep
++ find deep
+$ mv deep/a/b deep/a/b/c
+$ mv empty deep/a/b/hollow
++ find deep -type d
+$ mv empty deep/a/b
++ find deep -type d
+$ mkdir -p t/src
++ mv src t
++ ls -R t
++ ls -p
+$ mkdir -p t/src/x
++ mv src t
++ ls -p . t
+$ mkdir -p t
++ touch t/src
++ mv src t
++ ls -p . t
+$ mkdir -p t/README.md
++ mv README.md t
++ ls -p . t
+$ mv README.md empty/../moved.md
++ ls
+$ mv data/blank.txt data/one.txt
++ wc -c data/one.txt
++ ls data
+$ mv 'with space.txt' 'still spaced.txt'
++ ls
+$ mv with\ space.txt nospace.txt
++ ls
+$ mv .hidden visible
++ ls -a
+$ mv README.md .README
++ ls -a
+$ mv empty README.md
+$ mv README.md empty/README.md
++ ls . empty
+$ mv docs/guide.md docs/api.md src
++ ls docs src
+$ mv src/main.c src/util.c src/lib/
++ ls src src/lib
+$ mv . x
+$ mv src/. x
+$ mv README.md ''
+$ mv '' x
+$ mv {ROOT}/README.md {ROOT}/abs.md
++ ls
+! mv -n README.md x ## mv -n
+! mv -f README.md x ## mv -f
+! mv -v README.md x ## mv -v
+! mv -i README.md x ## mv -i
+! mv -t src README.md ## mv -t
+! mv --force README.md x ## long options

@@ -119,6 +119,15 @@ struct Parser<'a> {
 
 type PResult<T> = Result<T, String>;
 
+const BAD_REPEAT: &str = "Invalid preceding regular expression";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    Close,
+    Comma,
+    End,
+}
+
 fn set_of(f: impl Fn(u8) -> bool) -> Set {
     let mut s = Box::new([false; 256]);
     for b in 0..=255u8 {
@@ -174,10 +183,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_branch(&mut self, depth: usize) -> PResult<Node> {
+        let ere = self.ere();
+        let grep = self.syn.flavor == Flavor::Grep;
         let mut items: Vec<Node> = Vec::new();
-        // True at the start of the branch and after an anchor: a repetition
-        // operator here has nothing to repeat.
-        let mut at_start = true;
+        // `fresh`: nothing but anchors so far in this branch.
+        // `after_anchor`: the previous item was an anchor.
+        let mut fresh = true;
+        let mut after_anchor = false;
         loop {
             if self.peek().is_none() || self.at_alt() {
                 break;
@@ -186,26 +198,79 @@ impl<'a> Parser<'a> {
                 if depth > 0 {
                     break;
                 }
-                if self.ere() && self.syn.flavor == Flavor::Grep {
+                if ere && grep {
                     // GNU grep -E treats an unmatched ) as a literal.
                     self.i += 1;
-                    items.push(self.lit(b')'));
-                    at_start = false;
+                    let l = self.lit(b')');
+                    items.push(self.more_dups(l)?);
+                    fresh = false;
+                    after_anchor = false;
                     continue;
                 }
                 return Err("Unmatched ) or \\)".into());
             }
-            let (mut atom, is_anchor) = self.parse_atom(at_start, depth)?;
+            // A repetition operator with no ordinary expression before it.
+            // POSIX leaves most of this undefined; GNU grep and GNU sed
+            // each do something different.
+            if items.is_empty() || after_anchor {
+                if let Some(op) = self.dup_token() {
+                    let literal = if ere {
+                        if !grep {
+                            return Err(BAD_REPEAT.into());
+                        }
+                        false
+                    } else if grep {
+                        fresh
+                    } else if op == b'{' {
+                        return Err(BAD_REPEAT.into());
+                    } else {
+                        true
+                    };
+                    if literal {
+                        self.i += if ere || op == b'*' { 1 } else { 2 };
+                        let l = self.lit(op);
+                        items.push(self.more_dups(l)?);
+                        fresh = false;
+                        after_anchor = false;
+                        continue;
+                    }
+                    // grep: the operator applies to the anchor before it,
+                    // or to the empty expression. Here glibc has already
+                    // accepted the pattern, so a bad interval is either a
+                    // literal (-E) or an error in dfa.c's wording.
+                    let save = self.i;
+                    let parsed = match self.parse_dup() {
+                        Ok(p) => p,
+                        Err(_) if ere => None,
+                        Err(_) => return Err("invalid content of \\{\\}".into()),
+                    };
+                    if let Some((min, max)) = parsed {
+                        if fresh && ere {
+                            let shown = if op == b'{' { "{...}".to_string() } else { char::from(op).to_string() };
+                            self.warnings.push(format!("warning: {} at start of expression", shown));
+                        }
+                        let sub = items.pop().unwrap_or(Node::Empty);
+                        items.push(Node::Repeat { sub: Box::new(sub), min, max });
+                        if op == b'{' {
+                            fresh = false;
+                        }
+                        // A further operator applies to this item too.
+                        after_anchor = true;
+                        continue;
+                    }
+                    self.i = save;
+                }
+            }
+            let caret_anchor = ere || items.is_empty();
+            let (atom, is_anchor) = self.parse_atom(caret_anchor, depth)?;
             if is_anchor {
                 items.push(atom);
-                at_start = true;
+                after_anchor = true;
                 continue;
             }
-            while let Some((min, max)) = self.parse_dup()? {
-                atom = Node::Repeat { sub: Box::new(atom), min, max };
-            }
-            items.push(atom);
-            at_start = false;
+            items.push(self.more_dups(atom)?);
+            fresh = false;
+            after_anchor = false;
         }
         Ok(match items.len() {
             0 => Node::Empty,
@@ -214,97 +279,152 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// A repetition operator at the cursor, if there is one.
-    fn parse_dup(&mut self) -> PResult<Option<(u32, Option<u32>)>> {
-        let ere = self.ere();
-        let c = match self.peek() {
-            None => return Ok(None),
-            Some(c) => c,
-        };
+    /// Wrap a node in every repetition operator that follows it.
+    fn more_dups(&mut self, mut node: Node) -> PResult<Node> {
+        let mut repeated = matches!(node, Node::Repeat { .. });
+        loop {
+            // glibc's basic syntax (sed) does not allow * or \{ straight
+            // after another repetition.
+            if repeated && !self.ere() && self.syn.flavor == Flavor::Sed && matches!(self.dup_token(), Some(b'*') | Some(b'{')) {
+                return Err(BAD_REPEAT.into());
+            }
+            match self.parse_dup()? {
+                Some((min, max)) => node = Node::Repeat { sub: Box::new(node), min, max },
+                None => return Ok(node),
+            }
+            repeated = true;
+        }
+    }
+
+    /// The repetition operator at the cursor, as its character.
+    fn dup_token(&self) -> Option<u8> {
+        let c = self.peek()?;
         if c == b'*' {
-            self.i += 1;
-            return Ok(Some((0, None)));
+            return Some(b'*');
         }
-        if ere && c == b'+' || !ere && self.looking_at(b"\\+") {
-            self.i += if ere { 1 } else { 2 };
-            return Ok(Some((1, None)));
+        if self.ere() {
+            return if matches!(c, b'+' | b'?' | b'{') { Some(c) } else { None };
         }
-        if ere && c == b'?' || !ere && self.looking_at(b"\\?") {
-            self.i += if ere { 1 } else { 2 };
-            return Ok(Some((0, Some(1))));
+        if c == b'\\' {
+            return match self.p.get(self.i + 1) {
+                Some(n @ (b'+' | b'?' | b'{')) => Some(*n),
+                _ => None,
+            };
         }
-        if ere && c == b'{' || !ere && self.looking_at(b"\\{") {
-            let save = self.i;
-            self.i += if ere { 1 } else { 2 };
-            match self.parse_interval() {
-                Ok(r) => return Ok(Some(r)),
-                Err(e) => {
-                    // GNU grep -E takes a `{` that does not start a valid
-                    // interval as a literal character.
-                    if ere && self.syn.flavor == Flavor::Grep && e == "Unmatched \\{" {
+        None
+    }
+
+    /// Parse a repetition operator at the cursor, if there is one.
+    fn parse_dup(&mut self) -> PResult<Option<(u32, Option<u32>)>> {
+        let width = if self.ere() { 1 } else { 2 };
+        match self.dup_token() {
+            None => Ok(None),
+            Some(b'*') => {
+                self.i += 1;
+                Ok(Some((0, None)))
+            }
+            Some(b'+') => {
+                self.i += width;
+                Ok(Some((1, None)))
+            }
+            Some(b'?') => {
+                self.i += width;
+                Ok(Some((0, Some(1))))
+            }
+            Some(_) => {
+                let save = self.i;
+                self.i += width;
+                match self.parse_interval()? {
+                    Some(r) => Ok(Some(r)),
+                    None => {
                         self.i = save;
-                        return Ok(None);
+                        Ok(None)
                     }
-                    return Err(e);
                 }
             }
         }
-        Ok(None)
     }
 
-    fn number(&mut self) -> PResult<Option<u32>> {
-        let start = self.i;
-        let mut n: u32 = 0;
-        while let Some(c) = self.peek() {
-            if !c.is_ascii_digit() {
-                break;
-            }
-            n = n.saturating_mul(10).saturating_add((c - b'0') as u32);
-            self.i += 1;
-        }
-        Ok(if self.i == start { None } else { Some(n) })
-    }
-
-    /// Parse the inside of an interval, after the opening brace.
-    fn parse_interval(&mut self) -> PResult<(u32, Option<u32>)> {
-        let unmatched = || "Unmatched \\{".to_string();
-        let lo = self.number()?;
-        let (min, max) = if self.peek() == Some(b',') {
-            self.i += 1;
-            let hi = self.number()?;
-            (lo.unwrap_or(0), hi)
-        } else {
-            match lo {
-                Some(n) => (n, Some(n)),
-                None => {
-                    return Err(if self.peek().is_none() { unmatched() } else { "Invalid preceding regular expression".into() })
-                }
-            }
-        };
+    /// Read a number the way glibc does inside an interval: scan to the
+    /// closing brace, a comma or the end of the pattern. Returns -1 for no
+    /// characters and -2 for anything that is not a number, and says what
+    /// stopped the scan.
+    fn interval_number(&mut self) -> (i64, Stop) {
         let close: &[u8] = if self.ere() { b"}" } else { b"\\}" };
-        if !self.looking_at(close) {
-            return Err(if self.peek().is_none() || self.ere() {
-                unmatched()
-            } else {
-                "Invalid content of \\{\\}".to_string()
-            });
-        }
-        self.i += close.len();
-        if let Some(mx) = max {
-            if min > mx {
-                return Err("Invalid content of \\{\\}".into());
+        let mut num: i64 = -1;
+        loop {
+            if self.peek().is_none() {
+                return (-2, Stop::End);
             }
+            if self.looking_at(close) {
+                self.i += close.len();
+                return (num, Stop::Close);
+            }
+            let c = self.p[self.i];
+            if c == b',' {
+                self.i += 1;
+                return (num, Stop::Comma);
+            }
+            if c == b'\\' && self.i + 1 < self.p.len() {
+                self.i += 2;
+                num = -2;
+                continue;
+            }
+            self.i += 1;
+            num = if !c.is_ascii_digit() || num == -2 {
+                -2
+            } else if num == -1 {
+                (c - b'0') as i64
+            } else {
+                (num * 10 + (c - b'0') as i64).min(DUP_MAX as i64 + 1)
+            };
         }
-        if min > DUP_MAX || max.is_some_and(|m| m > DUP_MAX) {
+    }
+
+    /// Parse the inside of an interval, after the opening brace. Ok(None)
+    /// means the brace is not an interval and GNU grep -E takes it as a
+    /// literal character.
+    fn parse_interval(&mut self) -> PResult<Option<(u32, Option<u32>)>> {
+        let literal_ok = self.ere() && self.syn.flavor == Flavor::Grep;
+        let bad_content = || "Invalid content of \\{\\}".to_string();
+        let (mut start, mut stop) = self.interval_number();
+        if start == -1 {
+            if stop != Stop::Comma {
+                return Err(bad_content());
+            }
+            start = 0;
+        }
+        let mut end = -2;
+        if start != -2 {
+            end = match stop {
+                Stop::Close => start,
+                Stop::Comma => {
+                    let (n, s) = self.interval_number();
+                    stop = s;
+                    n
+                }
+                Stop::End => -2,
+            };
+        }
+        if start == -2 || end == -2 {
+            if literal_ok {
+                return Ok(None);
+            }
+            return Err(if stop == Stop::End { "Unmatched \\{".to_string() } else { bad_content() });
+        }
+        if (end != -1 && start > end) || stop != Stop::Close {
+            return Err(bad_content());
+        }
+        if (if end == -1 { start } else { end }) > DUP_MAX as i64 {
             return Err("Regular expression too big".into());
         }
-        Ok((min, max))
+        Ok(Some((start as u32, if end == -1 { None } else { Some(end as u32) })))
     }
 
     /// Parse one atom. The flag in the result says the atom was an anchor.
-    fn parse_atom(&mut self, at_start: bool, depth: usize) -> PResult<(Node, bool)> {
+    /// `caret_anchor` says whether a `^` here is an anchor.
+    fn parse_atom(&mut self, caret_anchor: bool, depth: usize) -> PResult<(Node, bool)> {
         let ere = self.ere();
-        let grep = self.syn.flavor == Flavor::Grep;
         let c = self.peek().unwrap();
         // Groups.
         if ere && c == b'(' || !ere && self.looking_at(b"\\(") {
@@ -320,61 +440,10 @@ impl<'a> Parser<'a> {
             self.closed[idx - 1] = true;
             return Ok((Node::Group(Box::new(inner), idx), false));
         }
-        // A repetition operator with nothing before it.
-        if at_start {
-            let op: Option<&str> = if c == b'*' {
-                Some("*")
-            } else if ere && c == b'+' {
-                Some("+")
-            } else if ere && c == b'?' {
-                Some("?")
-            } else if ere && c == b'{' {
-                Some("{")
-            } else {
-                None
-            };
-            if let Some(op) = op {
-                if !ere {
-                    // BRE: a leading * is an ordinary character.
-                    self.i += 1;
-                    return Ok((self.lit(b'*'), false));
-                }
-                if !grep {
-                    if op == "{" {
-                        // sed -E: decide between a bad interval and a
-                        // missing operand the way glibc does.
-                        let save = self.i;
-                        self.i += 1;
-                        let r = self.parse_interval();
-                        self.i = save;
-                        return Err(match r {
-                            Err(e) if e == "Unmatched \\{" => e,
-                            _ => "Invalid preceding regular expression".into(),
-                        });
-                    }
-                    return Err("Invalid preceding regular expression".into());
-                }
-                // grep -E: the operator applies to the empty expression.
-                if op == "{" {
-                    let save = self.i;
-                    self.i += 1;
-                    let valid = self.parse_interval().is_ok();
-                    self.i = save;
-                    if !valid {
-                        self.i += 1;
-                        return Ok((self.lit(b'{'), false));
-                    }
-                    self.warnings.push("warning: {...} at start of expression".into());
-                } else {
-                    self.warnings.push(format!("warning: {} at start of expression", op));
-                }
-                return Ok((Node::Empty, false));
-            }
-        }
         match c {
             b'^' => {
                 self.i += 1;
-                if ere || at_start && self.caret_is_anchor() {
+                if caret_anchor {
                     return Ok((Node::Assert(Assert::LineStart), true));
                 }
                 Ok((self.lit(b'^'), false))
@@ -422,12 +491,6 @@ impl<'a> Parser<'a> {
                     b'>' => assert(Assert::WordEnd),
                     b'`' => assert(Assert::LineStart),
                     b'\'' => assert(Assert::LineEnd),
-                    // A private escape used by sed for "this byte, literally".
-                    0 => {
-                        let l = self.peek().ok_or("Trailing backslash")?;
-                        self.i += 1;
-                        Ok((self.lit(l), false))
-                    }
                     _ => Ok((self.lit(e), false)),
                 }
             }
@@ -436,13 +499,6 @@ impl<'a> Parser<'a> {
                 Ok((self.lit(c), false))
             }
         }
-    }
-
-    /// In a basic regex `^` is an anchor only at the start of the pattern or
-    /// of a group or alternative. The cursor is just past the `^`.
-    fn caret_is_anchor(&self) -> bool {
-        let before = &self.p[..self.i - 1];
-        before.is_empty() || before.ends_with(b"\\(") || before.ends_with(b"\\|")
     }
 
     /// Parse a bracket expression; the cursor is just past the `[`.
@@ -705,9 +761,7 @@ impl Regex {
             if best.is_none() {
                 self.add_thread(&mut clist, &mut mark, &mut stack, 0, pos, hay, pos);
             }
-            if clist.is_empty() {
-                // Only reachable once a match is known: before that, a new
-                // thread is added at every position.
+            if clist.is_empty() && best.is_some() {
                 break;
             }
             nlist.clear();

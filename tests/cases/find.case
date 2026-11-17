@@ -1,0 +1,82 @@
+# find with -name, -type f/d, -maxdepth
+@fixture basic
+$ find
+$ find .
+$ find src
+$ find src/
+$ find ./src
+$ find src docs
+$ find . -name '*.c'
+$ find . -name "*.md"
+$ find . -name '*.txt' -type f
+$ find . -type f
+$ find . -type d
+$ find . -type d -name 'a'
+$ find . -maxdepth 0
+$ find . -maxdepth 1
+$ find . -maxdepth 2
+$ find . -maxdepth 2 -type d
+$ find . -maxdepth 1 -type f
+$ find . -maxdepth 1 -name '*.md'
+$ find . -name '*.c' -maxdepth 2
+$ find src -name 'util.*'
+$ find src -name '.config'
+$ find . -name '.*'
+$ find . -name '*'
+$ find . -name '?????.c'
+$ find . -name '[lp]*.c'
+$ find . -name '[!lp]*.c'
+$ find . -name '[^lp]*.c'
+$ find . -name 'with space.txt'
+$ find . -name with\ space.txt
+$ find . -name 'README*' -name '*.md'
+$ find . -name src
+$ find src -name src
+$ find src/ -name src
+$ find . -name .
+$ find README.md
+$ find README.md -type f
+$ find README.md -type d
+$ find README.md -name 'README.md'
+$ find README.md -maxdepth 0
+$ find empty
+$ find empty -type d
+$ find empty -type f
+$ find deep -type f
+$ find deep -name leaf.txt
+$ find deep -maxdepth 3
+$ find deep/a/b
+$ find nope
+$ find nope src -name '*.h'
+$ find src nope -name '*.h'
+$ find . -name
+$ find . -type
+$ find . -maxdepth
+$ find . -type x
+$ find . -maxdepth abc
+$ find . -maxdepth -1
+$ find . -maxdepth 1 -maxdepth 0
+$ find . -type f -type d
+$ find . -name '*.c' -name 'm*'
+$ find src//lib
+$ find . -name 'a/b'
+$ find . -name '\*'
+$ find data -name '*[[:digit:]]*'
+$ find . -name ''
+$ find ''
+$ find . -type f -name '*.md' | wc -l
+$ find . -name '*.c' | grep lib
+$ find {ROOT}/src -name '*.h'
+$ find {ROOT}/deep -maxdepth 1
+! find . -iname '*.C' ## find -iname
+! find . -path './src/*' ## find -path
+! find . -size +1k ## find -size
+! find . -name '*.c' -exec cat {} + ## find -exec
+! find . -print ## find -print
+! find . -type l ## find -type l
+! find . -newer README.md ## find -newer
+! find . -name a -o -name b ## find -o
+! find . ! -name a ## find !
+! find . -delete ## find -delete
+! find . -mindepth 1 ## find -mindepth
+! find . -type f,d ## list of types

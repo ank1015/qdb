@@ -1,0 +1,163 @@
+# cat, head, tail, wc
+@fixture basic
+$ cat README.md
+$ cat notes.txt
+$ cat notes.txt README.md
+$ cat notes.txt notes.txt
+$ cat data/blank.txt
+$ cat data/blank.txt README.md
+$ cat -n README.md
+$ cat -n notes.txt
+$ cat -n notes.txt README.md
+$ cat -n data/blank.txt data/one.txt
+$ cat -n data/long.txt
+$ cat nope
+$ cat src
+$ cat nope README.md src notes.txt
+$ cat README.md/x
+$ cat 'with space.txt'
+$ cat data/unicode.txt
+$ cat src/*.c
+$ cat -- README.md
+$ cat README.md -n
+$ cat ''
+$ cat {ROOT}/README.md
+$ cat
+$ cat -
+$ cat README.md | cat
+$ cat README.md | cat -n
+$ cat README.md | cat - notes.txt
+$ cat README.md | cat notes.txt -
+$ cat README.md | cat notes.txt
+$ echo hi | cat - -
+! cat -A README.md ## cat -A
+! cat -s README.md ## cat -s
+! cat -b README.md ## cat -b
+! cat --number README.md ## long options
+
+$ head data/numbers.txt
+$ head -n 3 data/numbers.txt
+$ head -n3 data/numbers.txt
+$ head -n 0 data/numbers.txt
+$ head -n 1 notes.txt
+$ head -n 3 notes.txt
+$ head -n 100 notes.txt
+$ head -n -3 data/numbers.txt
+$ head -n -1 notes.txt
+$ head -n -100 notes.txt
+$ head -n -0 notes.txt
+$ head -n +3 data/numbers.txt
+$ head -n 2 README.md notes.txt
+$ head -n 2 notes.txt README.md data/blank.txt data/one.txt
+$ head -n 1 nope README.md
+$ head -n 1 README.md nope notes.txt
+$ head -n 1 src
+$ head -n 1 README.md src notes.txt
+$ head nope
+$ head -n x README.md
+$ head -n '' README.md
+$ head -n -x README.md
+$ head -n 1.5 README.md
+$ head -n
+$ head data/blank.txt
+$ head -n 2 data/unicode.txt
+$ head -n 99999999999999999999999 notes.txt
+$ head README.md -n 2
+$ head -n 2 -n 4 data/numbers.txt
+$ head -n 2 -- README.md
+$ cat data/numbers.txt | head -n 4
+$ cat data/numbers.txt | head
+$ cat data/numbers.txt | head -n 2 - README.md
+$ head -n 2 {ROOT}/README.md
+! head -5 README.md ## head -5
+! head -c 10 README.md ## head -c
+! head -q README.md ## head -q
+! head -n 1k README.md ## size suffix
+! head --lines=2 README.md ## long options
+
+$ tail data/numbers.txt
+$ tail -n 3 data/numbers.txt
+$ tail -n3 data/numbers.txt
+$ tail -n 0 data/numbers.txt
+$ tail -n 1 notes.txt
+$ tail -n 2 notes.txt
+$ tail -n 100 notes.txt
+$ tail -n +1 data/numbers.txt
+$ tail -n +0 data/numbers.txt
+$ tail -n +18 data/numbers.txt
+$ tail -n +3 notes.txt
+$ tail -n +4 notes.txt
+$ tail -n +100 notes.txt
+$ tail -n -3 data/numbers.txt
+$ tail -n 2 README.md notes.txt
+$ tail -n 2 notes.txt README.md data/blank.txt data/one.txt
+$ tail -n 1 nope README.md
+$ tail -n 1 README.md nope notes.txt
+$ tail -n 1 src
+$ tail -n 1 README.md src notes.txt
+$ tail nope
+$ tail -n x README.md
+$ tail -n +x README.md
+$ tail -n -x README.md
+$ tail -n
+$ tail data/blank.txt
+$ tail -n 2 data/unicode.txt
+$ tail README.md -n 2
+$ cat data/numbers.txt | tail -n 4
+$ cat data/numbers.txt | tail -n +19
+$ cat data/numbers.txt | tail
+$ head -n 12 data/numbers.txt | tail -n 3
+$ tail -n 2 {ROOT}/notes.txt
+! tail -5 README.md ## tail -5
+! tail +5 README.md ## tail +N
+! tail -c 10 README.md ## tail -c
+! tail -f README.md ## tail -f
+! tail -n 1k README.md ## size suffix
+
+$ wc README.md
+$ wc -l README.md
+$ wc -w README.md
+$ wc -c README.md
+$ wc -lw README.md
+$ wc -cl README.md
+$ wc -wc README.md
+$ wc -l -w -c README.md
+$ wc notes.txt
+$ wc -l notes.txt
+$ wc data/blank.txt
+$ wc -l data/blank.txt
+$ wc README.md notes.txt
+$ wc -l README.md notes.txt data/long.txt
+$ wc -c data/*.txt
+$ wc data/unicode.txt
+$ wc -w data/unicode.txt
+$ wc -w data/words.txt
+$ wc nope
+$ wc -l nope
+$ wc nope README.md
+$ wc README.md nope
+$ wc src
+$ wc -l src
+$ wc README.md src
+$ wc src README.md
+$ wc -l src README.md nope
+$ wc 'with space.txt'
+$ wc README.md -l
+$ wc -- README.md
+$ cat README.md | wc
+$ cat README.md | wc -l
+$ cat README.md | wc -w
+$ cat README.md | wc -c
+$ cat README.md | wc -lc
+$ cat README.md | wc -
+$ cat README.md | wc -l -
+$ cat README.md | wc - notes.txt
+$ cat data/blank.txt | wc
+$ cat notes.txt | wc -l
+$ echo -n | wc
+$ wc
+$ wc -l
+$ wc {ROOT}/README.md
+! wc -m README.md ## wc -m
+! wc -L README.md ## wc -L
+! wc --lines README.md ## long options

@@ -1,0 +1,79 @@
+# ls with -a, -R, -1, -p
+@fixture basic
+$ ls
+$ ls -1
+$ ls -a
+$ ls -p
+$ ls -ap
+$ ls -R
+$ ls -aR
+$ ls -pR
+$ ls -a1pR
+$ ls -a -R -p -1
+$ ls src
+$ ls src/
+$ ls ./src
+$ ls -a src
+$ ls -R src
+$ ls -R src/
+$ ls -R deep
+$ ls -p deep/a
+$ ls src docs
+$ ls docs src
+$ ls README.md
+$ ls README.md notes.txt
+$ ls notes.txt README.md src
+$ ls -p README.md src empty
+$ ls empty
+$ ls -a empty
+$ ls -R empty
+$ ls empty src
+$ ls src empty
+$ ls nope
+$ ls nope src
+$ ls src nope README.md
+$ ls nope1 nope2
+$ ls 'with space.txt'
+$ ls with\ space.txt
+$ ls "with space.txt" README.md
+$ ls *.md
+$ ls *.txt
+$ ls src/*.c
+$ ls src/*
+$ ls */
+$ ls -p */
+$ ls .
+$ ls ./
+$ ls -R .
+$ ls -R ./src
+$ ls src/lib/..
+$ ls -R src/lib/..
+$ ls src//lib
+$ ls README.md/
+$ ls README.md/x
+$ ls src/nope
+$ ls ''
+$ ls -- src
+$ ls -- -a
+$ ls src -a
+$ ls .hidden
+$ ls .*
+$ ls data/[a-n]*.txt
+$ ls data/?????.txt
+$ ls data/*o*
+$ ls nomatch*
+$ ls 'README.md' "docs"
+$ ls -R deep/a/b
+$ ls -aR deep/a/b/hollow
+$ ls {ROOT}/src
+$ ls -R {ROOT}/deep
+$ ls {ROOT}/README.md
+$ ls {ROOT}/nope
+! ls -l ## ls -l
+! ls -la ## ls -l
+! ls -S ## ls -S
+! ls -d src ## ls -d
+! ls -t ## ls -t
+! ls -h ## ls -h
+! ls --all ## long options
+! ls -r ## ls -r

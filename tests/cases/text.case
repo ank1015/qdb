@@ -1,0 +1,45 @@
+# Text only: a write that would store invalid UTF-8 is rejected and
+# changes nothing. These cannot be compared with the real tools, which
+# would store the bytes.
+@fixture basic
+= sed 's/caf./X/' data/unicode.txt > out.txt
+2> qdb: out.txt: output is not valid UTF-8 text, nothing was written
+? 1
++= ls
+> Makefile
+> README.md
+> data
+> deep
+> docs
+> empty
+> notes.txt
+> src
+> with space.txt
+= sed 's/caf./X/' data/unicode.txt > notes.txt
+2> qdb: notes.txt: output is not valid UTF-8 text, nothing was written
+? 1
++= cat notes.txt
+> first note
+> second note
+>: last line has no newline
+= sed 's/caf./X/' data/unicode.txt >> notes.txt
+2> qdb: notes.txt: output is not valid UTF-8 text, nothing was written
+? 1
++= wc -c notes.txt
+> 47 notes.txt
+= sed -i 's/caf./X/' data/unicode.txt
+2> qdb: sed: data/unicode.txt: result is not valid UTF-8 text, file left unchanged
+? 1
++= head -n 1 data/unicode.txt
+> café au lait
+= sed -i 's/caf./X/' data/unicode.txt notes.txt
+2> qdb: sed: data/unicode.txt: result is not valid UTF-8 text, file left unchanged
+? 1
+= grep -c '^.$' data/unicode.txt
+> 0
+? 1
+= grep -c '^..$' data/unicode.txt
+> 1
+# A pipe can carry any bytes; only what is stored must be text.
+= sed 's/caf./X/' data/unicode.txt | head -n 1 | wc -c
+> 11

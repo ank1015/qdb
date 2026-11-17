@@ -163,6 +163,10 @@ fn line_count(data: &[u8]) -> usize {
 }
 
 fn head_or_tail(cmd: &'static str, args: Vec<Vec<u8>>) -> Result<Runner, String> {
+    // GNU tail still reads a leading +N as the obsolete form of -n +N.
+    if cmd == "tail" && args.first().is_some_and(|a| a.len() > 1 && a[0] == b'+' && a[1..].iter().all(|c| c.is_ascii_digit())) {
+        return Err("flag: tail +N (write tail -n +N)".into());
+    }
     let p = match options(cmd, &args, b"", b"n", 1)? {
         Ok(p) => p,
         Err(r) => return Ok(r),

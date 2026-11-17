@@ -1,0 +1,271 @@
+# echo, redirection, mkdir, touch
+@fixture basic
+$ echo
+$ echo hello
+$ echo hello world
+$ echo   hello    world
+$ echo "hello   world"
+$ echo 'single $quoted'
+$ echo -n hello
+$ echo -n
+$ echo -n -n hello
+$ echo -nn hello
+$ echo hello -n
+$ echo - hello
+$ echo -- hello
+$ echo -x hello
+$ echo -n -x hello
+$ echo -n hello | wc -c
+$ echo "a⏎b"
+$ echo 'a⏎b' | wc -l
+$ echo a\ b
+$ echo "tab	here"
+$ echo \\
+$ echo '\n'
+$ echo "\n"
+$ echo \n
+$ echo "a\\b"
+$ echo "quote\"inside"
+$ echo 'it'\''s'
+$ echo "it's"
+$ echo ''
+$ echo "" a
+$ echo a "" b
+$ echo a '' '' b
+$ echo "a"'b'c
+$ echo a$
+$ echo "a$"
+$ echo "$ 5"
+$ echo '$HOME'
+$ echo \$HOME
+$ echo "\$HOME"
+$ echo a#b
+$ echo a #b
+$ echo '#' not a comment
+$ echo héllo 日本語
+$ echo {}
+$ echo a{b}c
+$ echo {a
+$ echo a,b
+$ echo '{a,b}'
+$ echo "~"
+$ echo a~b
+$ echo \~
+$ echo !
+$ echo a=b
+$ echo [
+$ echo ]
+! echo -e 'a\nb' ## echo -e
+! echo -E hello ## echo -E
+! echo -ne hello ## echo -e
+
+$ echo hello > new.txt
++ cat new.txt
++ ls
+$ echo hello > notes.txt
++ cat notes.txt
+$ echo more >> notes.txt
++ cat notes.txt
+$ echo more >> new.txt
++ cat new.txt
+$ echo -n partial > p.txt
++ echo -n ' and more' >> p.txt
++ cat p.txt
++ wc p.txt
+$ echo "line one⏎line two" > two.txt
++ cat -n two.txt
++ wc -l two.txt
+$ echo hi >new.txt
++ cat new.txt
+$ echo hi>new.txt
++ cat new.txt
+$ echo hi 1> new.txt
++ cat new.txt
+$ echo hi 1>> new.txt
++ echo ho 1>>new.txt
++ cat new.txt
+$ > created.txt
++ ls
++ wc -c created.txt
+$ > notes.txt
++ wc -c notes.txt
+$ >> notes.txt
++ wc -c notes.txt
+$ > a.txt > b.txt
++ ls
+$ echo x > a.txt > b.txt
++ wc -c a.txt b.txt
+$ echo x > notes.txt > b.txt
++ wc -c notes.txt b.txt
+$ echo x >> notes.txt > b.txt
++ wc -c notes.txt b.txt
+$ > out.txt echo first
++ cat out.txt
+$ echo a > out.txt b
++ cat out.txt
+$ echo hi > 'with space.txt'
++ cat with\ space.txt
+$ echo hi > "new file.txt"
++ ls
+$ echo hi > src
+$ echo hi >> src
+$ echo hi > nodir/x.txt
+$ echo hi > README.md/x
+$ echo hi > newdir/
+$ echo hi > empty/
+$ echo hi > *.md
+$ echo hi > data/one*
++ cat data/one.txt
+$ echo hi > data/zzz*
++ ls data
+$ echo hi > src/new.txt
++ ls src
+$ echo hi > ./src/./new.txt
++ cat src/new.txt
+$ echo hi > src/lib/../moved.txt
++ ls src
+$ echo hi > {ROOT}/abs.txt
++ cat abs.txt
+$ cat README.md > copy.md
++ wc README.md copy.md
+$ cat README.md notes.txt > both.txt
++ wc -l both.txt
+$ cat notes.txt > notes.txt
++ wc -c notes.txt
+$ cat notes.txt >> notes.txt
++ wc -c notes.txt
+$ cat README.md notes.txt >> notes.txt
++ cat notes.txt
+$ cat nope > out.txt
++ wc -c out.txt
+$ cat nope >> notes.txt
++ wc -c notes.txt
+$ head -n 2 data/numbers.txt > data/numbers.txt
++ wc -c data/numbers.txt
+$ head -n 2 data/numbers.txt >> data/numbers.txt
++ tail -n 3 data/numbers.txt
+$ tail -n 2 data/numbers.txt >> data/numbers.txt
++ tail -n 4 data/numbers.txt
+$ wc -l data/numbers.txt > data/numbers.txt
++ cat data/numbers.txt
+$ wc -l data/numbers.txt >> data/numbers.txt
++ tail -n 2 data/numbers.txt
+$ ls > listing.txt
++ cat listing.txt
+$ ls -R src > listing.txt
++ wc -l listing.txt
+$ find src -name '*.c' > found.txt
++ wc -l found.txt
+$ ls nope > err.txt
++ wc -c err.txt
+$ echo hi > a.txt | cat
++ cat a.txt
+$ echo hi | cat > a.txt
++ cat a.txt
+$ echo hi > a.txt | wc -c
+$ cat README.md | head -n 2 > h.txt | wc -l
++ cat h.txt
+$ cat README.md | grep TODO >> notes.txt
++ tail -n 1 notes.txt
+$ rm notes.txt > notes.txt
++ ls
+$ cp README.md notes.txt > notes.txt
++ wc -c notes.txt
+$ mv README.md notes.txt > notes.txt
++ wc -c notes.txt
++ ls
+
+$ mkdir newdir
++ ls -p
+$ mkdir a b c
++ ls -p
+$ mkdir newdir/
++ ls -p
+$ mkdir src
+$ mkdir README.md
+$ mkdir README.md/
+$ mkdir README.md/x
+$ mkdir nope/x
+$ mkdir src/new
++ ls -p src
+$ mkdir empty/x empty/y
++ ls empty
+$ mkdir a a
+$ mkdir a src b
++ ls -p
+$ mkdir
+$ mkdir .
+$ mkdir ./
+$ mkdir ''
+$ mkdir 'new dir' "another dir"
++ ls -p
+$ mkdir -p x/y/z
++ find x
+$ mkdir -p src/lib/new/deeper
++ find src/lib -type d
+$ mkdir -p src
+$ mkdir -p src docs empty
+$ mkdir -p README.md
+$ mkdir -p README.md/x
+$ mkdir -p README.md/x/y
+$ mkdir -p ./README.md/x
+$ mkdir -p src/main.c/x
+$ mkdir -p x/y/ z//w
++ find x z
+$ mkdir -p ./x/./y
++ find x
+$ mkdir -p x/../y
++ ls -p
+$ mkdir -p .
+$ mkdir -p
+$ mkdir -p ''
+$ mkdir -p a/b a/c a/b/d
++ find a
+$ mkdir x -p y/z
++ find x y
+$ mkdir -- -p
++ ls
+$ mkdir .hid
++ ls -a
+$ mkdir {ROOT}/absdir
++ ls -p
+$ mkdir -p {ROOT}/x/y
++ find x
+! mkdir -m 755 x ## mkdir -m
+! mkdir -v x ## mkdir -v
+! mkdir --parents x ## long options
+
+$ touch new.txt
++ ls
++ wc -c new.txt
+$ touch a b c
++ ls
+$ touch README.md
++ wc -c README.md
+$ touch src
++ ls -p
+$ touch src/new.c
++ ls src
+$ touch nope/x
+$ touch README.md/x
+$ touch README.md/
+$ touch nope/
+$ touch src/
+$ touch
+$ touch ''
+$ touch 'with space 2.txt'
++ ls
+$ touch a nope/x b
++ ls
+$ touch .dotfile
++ ls -a
+$ touch -- -n
++ ls
+$ touch empty/x
++ ls empty
+$ touch {ROOT}/abs.txt
++ ls
+! touch -c x ## touch -c
+! touch -t 202001010000 x ## touch -t
+! touch -d yesterday x ## touch -d
+! touch -a x ## touch -a

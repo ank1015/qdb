@@ -1,0 +1,283 @@
+# The shell layer: quoting, globs, pipes, redirection, and everything
+# that must be rejected by name.
+@fixture basic
+
+# Paths: no current directory, everything resolves from the root.
+$ cat README.md | wc -c
+$ cat ./README.md | wc -c
+$ cat .//README.md | wc -c
+$ cat src/../README.md | wc -c
+$ cat src/./lib/../../README.md | wc -c
+$ cat {ROOT}/README.md | wc -c
+$ cat {ROOT}/src/../README.md | wc -c
+= cat /README.md | wc -c
+> 91
+= cat ../README.md | wc -c
+> 91
+= cat /../../README.md | wc -c
+> 91
+= ls /src/lib
+> lex.c
+> lex.h
+> parse.c
+= ls ..
+> Makefile
+> README.md
+> data
+> deep
+> docs
+> empty
+> notes.txt
+> src
+> with space.txt
+= find /src/lib -name '*.h'
+> /src/lib/lex.h
+= grep -rl TODO /src
+> /src/lib/lex.c
+> /src/main.c
+= echo hi > /top.txt
++= cat top.txt ./top.txt /top.txt
+> hi
+> hi
+> hi
+
+# Globs
+$ echo *
+$ echo *.md
+$ echo *.txt
+$ echo src/*
+$ echo src/*.c
+$ echo src/*/*.c
+$ echo */*.md
+$ echo */
+$ echo */*/
+$ echo src/*/
+$ echo ./*
+$ echo ./src/*.h
+$ echo .*
+$ echo .h*
+$ echo src/.*
+$ echo src/.c*
+$ echo data/?????.txt
+$ echo data/???.txt
+$ echo data/[a-m]*
+$ echo data/[!a-m]*
+$ echo data/[^a-m]*
+$ echo data/[bo]*.txt
+$ echo data/*[es].txt
+$ echo data/[[:lower:]]ne.txt
+$ echo [A-Z]*
+$ echo [a-z]*
+$ echo [[:upper:]]*
+$ echo ?akefile
+$ echo M*e
+$ echo *e*
+$ echo nomatch*
+$ echo *.nomatch src/*.c
+$ echo no[match
+$ echo 'src/*'
+$ echo "src/*"
+$ echo src/\*
+$ echo src/'*'.c
+$ echo "src"/*.c
+$ echo s'r'c/*.h
+$ echo with*
+$ echo with\ *
+$ echo "with "*
+$ echo *' '*
+$ echo src//*.c
+$ echo src/lib/../*.h
+$ echo */../*.md
+$ echo src/*/../*.h
+$ echo ***
+$ echo src/**
+$ echo **/*.c
+$ echo ?
+$ echo ????
+$ echo [
+$ echo []
+$ echo [a
+$ echo data/[b]lank.txt
+$ echo data/[]b]lank.txt
+$ echo data/b[l]ank.tx[t]
+$ echo data/[a-]*
+$ echo README.md/*
+$ echo empty/*
+$ echo deep/*/*/*/*
+$ echo {ROOT}/src/*.c
+$ echo {ROOT}/*/*.md
+$ cat src/*.h
+$ wc -l src/*.c src/lib/*.c
+$ ls -p */
+$ grep -c include src/*.c
+$ rm data/*.txt
++ ls -a data
+$ mkdir g
++ touch g/a g/b g/.c
++ echo g/*
++ echo g/.*
++ rm g/*
++ echo g/*
++ ls -a g
+
+# Pipes
+$ cat README.md | head -n 3 | tail -n 1
+$ cat data/numbers.txt | grep 1 | wc -l
+$ cat data/numbers.txt | grep 1 | head -n 3 | tail -n 1
+$ ls | wc -l
+$ ls -a | grep -c '^\.'
+$ ls src | grep '\.c$'
+$ ls src | grep -v '\.c$' | wc -l
+$ find . -type f | wc -l
+$ find . -type f | grep -c md
+$ grep -r TODO . | wc -l
+$ grep -rc TODO . | grep -v ':0$' | wc -l
+$ echo one two three | wc -w
+$ echo hello | cat | cat | cat
+$ echo hello |cat|wc -c
+$ echo hello |⏎ cat
+$ cat nope | wc -l
+$ cat nope | cat README.md | wc -l
+$ ls nope | wc -l
+$ grep nomatch README.md | wc -l
+$ echo x | grep y
+$ echo x | grep y | wc -l
+$ echo x | ls src
+$ echo x | echo y
+$ mkdir p1 | ls
+$ echo ignored | mkdir p2
++ ls -p
+$ cat README.md | head -n 1
+$ cat data/long.txt | head -n 1
+$ wc -l data/numbers.txt | sed 's/ .*//'
+$ head -n 3 data/numbers.txt | sed 's/$/,/' | cat -n
+$ ls src/lib | sed -E 's/\.(c|h)$//' | grep -c lex
+
+# Comments and blank input
+$ echo hi # a comment
+$ # only a comment
+= 
+? 0
+=    
+? 0
+
+# Unknown commands, flags and syntax are rejected by name, and nothing
+# on the line runs.
+! awk '{print $1}' README.md ## command: awk
+! sort README.md ## command: sort
+! uniq README.md ## command: uniq
+! cut -c1 README.md ## command: cut
+! tr a b ## command: tr
+! rg TODO ## command: rg
+! xargs ls ## command: xargs
+! tee x ## command: tee
+! cd src ## command: cd
+! pwd ## command: pwd
+! export A=1 ## command: export
+! test -f README.md ## command: test
+! [ -f README.md ] ## command: [
+! true ## command: true
+! printf hi ## command: printf
+! diff a b ## command: diff
+! less README.md ## command: less
+! chmod +x README.md ## command: chmod
+! ln -s a b ## command: ln
+! stat README.md ## command: stat
+! du -sh . ## command: du
+! bash -c ls ## command: bash
+! /bin/ls ## command: /bin/ls
+! ./ls ## command: ./ls
+! 'ls -a' ## command: ls -a
+! "" ## command: 
+! cat README.md | sort ## command: sort
+! mkdir shouldnotexist | sort ## command: sort
+! rm README.md | awk x ## command: awk
+! echo hi > x.txt | nosuch ## command: nosuch
+! echo $HOME ## variable expansion ($HOME)
+! echo "$HOME" ## variable expansion ($HOME)
+! echo "a $b c" ## variable expansion ($b)
+! echo ${HOME} ## parameter expansion
+! echo "${x:-y}" ## parameter expansion
+! echo $1 ## special parameter ($1)
+! echo $? ## special parameter ($?)
+! echo "$@" ## special parameter ($@)
+! echo $$ ## special parameter ($$)
+! echo $(ls) ## command substitution $(...)
+! echo "$(ls)" ## command substitution $(...)
+! echo `ls` ## command substitution (`...`)
+! echo "`ls`" ## command substitution (`...`)
+! echo $((1 + 2)) ## arithmetic expansion
+! echo $[1+2] ## arithmetic expansion
+! echo $'a\nb' ## ANSI-C quoting
+! echo $"hi" ## locale translation
+! ls && ls ## && lists
+! ls nope || ls ## || lists
+! ls ; ls ## command lists (;)
+! ls; ## command lists (;)
+! ls & ## background jobs
+! ls⏎ls ## more than one command
+! rm README.md && ls ## && lists
+! rm README.md; ls ## command lists (;)
+! mkdir z; cd z ## command lists (;)
+! cat < README.md ## input redirection (<)
+! wc -l < README.md ## input redirection (<)
+! cat << EOF ## here-documents
+! cat <<EOF⏎hi⏎EOF ## here-documents
+! cat <<- EOF ## here-documents
+! cat <<< hello ## here-strings
+! ls 2> err.txt ## standard error redirection (2>)
+! ls 2>> err.txt ## standard error redirection (2>>)
+! ls 2>&1 ## standard error redirection (2>&)
+! ls > out.txt 2>&1 ## standard error redirection (2>&)
+! ls &> out.txt ## &>
+! ls &>> out.txt ## &>
+! ls >& out.txt ## file descriptor duplication (>&)
+! ls >| out.txt ## noclobber override
+! ls 3> out.txt ## file descriptor redirection (3>)
+! cat 0< README.md ## file descriptor redirection (0<)
+! cat <> README.md ## read-write redirection
+! ls |& cat ## |&
+! diff <(ls) <(ls -a) ## process substitution
+! ls > >(cat) ## process substitution
+! A=1 ## variable assignment
+! A=1 ls ## variable assignment
+! A+=1 ## variable assignment
+! arr[0]=1 ## variable assignment
+! for f in *; do echo x; done ## for loop
+! while true; do ls; done ## while loop
+! until false; do ls; done ## until loop
+! if ls; then ls; fi ## if statement
+! case x in x) ls;; esac ## case statement
+! select x in a b; do ls; done ## select statement
+! function f { ls; } ## function definition
+! f() { ls; } ## function definition
+! { ls; } ## group command
+! ( ls ) ## subshell
+! (ls) ## subshell
+! (( 1 + 2 )) ## arithmetic command
+! [[ -f README.md ]] ## [[ conditional ]]
+! ! ls ## pipeline negation
+! time ls ## time keyword
+! coproc ls ## coprocess
+! echo {a,b} ## brace expansion
+! echo {1..3} ## brace expansion
+! echo x{a,b}y ## brace expansion
+! mkdir -p x/{a,b} ## brace expansion
+! ls ~ ## tilde expansion
+! ls ~/src ## tilde expansion
+! cat ~root/x ## tilde expansion
+! ls | ## syntax error
+! | ls ## syntax error
+! ls || ## || lists
+! ls | | ls ## syntax error
+! echo 'unterminated ## matching `''
+! echo "unterminated ## matching `"'
+! ls > ## syntax error
+! ls >> ## syntax error
+! ls > | cat ## syntax error
+! ls ) ## syntax error
+! ) ## syntax error
+! ls ;; ## syntax error
+! && ls ## syntax error
+! ; ## syntax error
+! echo a ( b ## syntax error
