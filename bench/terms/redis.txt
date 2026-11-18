@@ -1,0 +1,17 @@
+# Values for the placeholders in bench/commands.txt, for the redis dataset.
+# Chosen by qdb-bench from measured frequencies; delete this file to choose again.
+ABSENT=qdbzzabsentterm  # 0 of 1672 files, 0.00%
+COMMON=for  # 1104 of 1672 files, 66.03%
+DIR=tests  # holds 263 of 1672 files, 15.73%
+EXT=json  # 406 files in the whole dataset
+EXT2=c  # 435 files in the whole dataset
+FEW=implementing  # 17 of 1672 files, 1.02%
+FILE=src/commands/xinfo-stream.json  # 17801 bytes
+GLOB=src/commands/*.json  # 405 files
+GLOBDIR=src/commands  # the folder of GLOB
+ONE=nestedcallreplyarray  # 1 of 1672 files, 0.06%
+PREFIX=arena  # PREFIX_[a-z]+\( matches in 34 of 1672 files, 2.03%
+RARE=xmallctlmibnametomib  # 2 of 1672 files, 0.12%
+RAREUP=XMALLCTLMIBNAMETOMIB  # the RARE term in capitals, for -i
+SMALLDIR=.github  # holds 15 of 1672 files, 0.90%
+SOME=between  # 167 of 1672 files, 9.99%

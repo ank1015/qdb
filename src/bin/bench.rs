@@ -1,14 +1,19 @@
-//! The benchmark: generates a dataset, runs a list of commands on the real
-//! GNU tools and on the engine, checks that they agree, and reports how
-//! long each took.
+//! The benchmark: runs a list of commands on the real GNU tools and on the
+//! engine against the same data, checks that they agree, and records time
+//! and memory for each.
 //!
 //! See bench/README.md.
 
+use qdb::shell;
 use qdb::store;
-use qdb::testing::{check_safe, order_is_unspecified, run_real, same_output};
-use qdb::{execute, Db};
+use qdb::testing::{check_safe, order_is_unspecified, sorted_lines};
+use qdb::Db;
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "\
@@ -16,14 +21,75 @@ Usage: qdb-bench [OPTIONS]
 
 Times a list of commands on the real GNU tools and on the engine.
 
-  --dataset NAME    small, medium or large (default small); or all
-  --dir PATH        use an existing directory as the dataset instead
+  --dataset NAME    a generated dataset (small, medium, large) or one of
+                    the real ones listed in bench/datasets.txt
+  --dir PATH        use this directory as the dataset instead
+  --data DIR        where the real datasets are unpacked
+                    (default ../qdb-data/src, see bench/fetch.sh)
+  --label NAME      what to call this run in the results (default dev);
+                    one file per label is kept under bench/results/DATASET/
+  --no-index        run the engine with the trigram index switched off
   --commands FILE   the command list (default bench/commands.txt)
-  --reps N          timed runs per read-only command (default 5)
+  --reps N          timed runs per read-only command (default 5; fewer
+                    for commands that take longer than 0.3 s)
+  --filter TEXT     only run commands containing TEXT
   --out DIR         where to write results (default bench/results)
   --scratch DIR     where to put the real copy of the dataset
                     (default: the system temporary directory)
-  --export DIR      only generate the dataset into DIR and stop";
+  --export DIR      only generate the dataset into DIR and stop
+  --report          only rebuild the tables from the stored results";
+
+// ------------------------------------------------------ memory accounting
+
+/// Counts live heap bytes and their high-water mark, so that the peak
+/// memory of one command can be read off exactly. The engine runs on one
+/// thread, so plain loads and stores are enough.
+struct Counting;
+
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+static PEAK: AtomicUsize = AtomicUsize::new(0);
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let p = System.alloc(layout);
+        if !p.is_null() {
+            let live = LIVE.load(Relaxed) + layout.size();
+            LIVE.store(live, Relaxed);
+            if live > PEAK.load(Relaxed) {
+                PEAK.store(live, Relaxed);
+            }
+        }
+        p
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        System.dealloc(ptr, layout);
+        LIVE.store(LIVE.load(Relaxed).wrapping_sub(layout.size()), Relaxed);
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let p = System.realloc(ptr, layout, new_size);
+        if !p.is_null() {
+            let live = LIVE.load(Relaxed).wrapping_sub(layout.size()) + new_size;
+            LIVE.store(live, Relaxed);
+            if live > PEAK.load(Relaxed) {
+                PEAK.store(live, Relaxed);
+            }
+        }
+        p
+    }
+}
+
+#[global_allocator]
+static ALLOC: Counting = Counting;
+
+/// Resident memory of this process, from /proc.
+fn resident_bytes() -> usize {
+    std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|s| s.split_whitespace().nth(1).and_then(|p| p.parse::<usize>().ok()))
+        .map_or(0, |pages| pages * 4096)
+}
 
 // ------------------------------------------------------------- datasets
 
@@ -227,41 +293,393 @@ fn generate(spec: &Spec) -> Db {
     db
 }
 
-// ------------------------------------------------------------ measuring
+// ------------------------------------------------------------ the engine
 
-struct Row {
-    command: String,
-    mutating: bool,
-    real: Duration,
-    engine: Duration,
+/// One run of a command on the engine.
+struct EngineRun {
+    time: Duration,
+    /// Most heap held during the run, above what was held before it.
+    peak: usize,
+    code: i32,
     out_bytes: usize,
-    agree: bool,
-    note: String,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
+
+/// Anything the engine needs after loading, such as building its index.
+fn engine_setup(_db: &mut Db, _opts: &Options) {}
+
+/// Facts about the engine's state for the results, as key and value.
+fn engine_facts(_db: &Db) -> Vec<(String, String)> {
+    Vec::new()
+}
+
+fn engine_run(db: &mut Db, command: &str, _keep_output: bool) -> EngineRun {
+    let base = LIVE.load(Relaxed);
+    PEAK.store(base, Relaxed);
+    let t = Instant::now();
+    let out = qdb::execute(db, command.as_bytes());
+    let time = t.elapsed();
+    let peak = PEAK.load(Relaxed) - base;
+    EngineRun { time, peak, code: out.code, out_bytes: out.stdout.len(), stdout: out.stdout, stderr: out.stderr }
+}
+
+// -------------------------------------------------------- real datasets
+
+/// One line of bench/datasets.txt: name | folder under the data root |
+/// where it came from.
+struct RealDataset {
+    name: String,
+    folder: String,
+    source: String,
+}
+
+fn real_datasets() -> Vec<RealDataset> {
+    let text = std::fs::read_to_string("bench/datasets.txt").unwrap_or_default();
+    text.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| {
+            let mut parts = l.splitn(3, '|').map(|p| p.trim().to_string());
+            Some(RealDataset { name: parts.next()?, folder: parts.next()?, source: parts.next()? })
+        })
+        .collect()
+}
+
+// ------------------------------------------------- real tools, for timing
+
+/// Run a command line with the real tools: bash in the C locale, in
+/// `root`, no standard input, output captured through a pipe.
+fn run_real(root: &Path, command: &str) -> (Duration, std::process::Output) {
+    let t = Instant::now();
+    let out = Command::new("bash")
+        .args(["--noprofile", "--norc", "-c", command])
+        .current_dir(root)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .output()
+        .expect("cannot run bash");
+    (t.elapsed(), out)
+}
+
+fn shell_quote(arg: &[u8]) -> String {
+    format!("'{}'", String::from_utf8_lossy(arg).replace('\'', "'\\''"))
+}
+
+/// The ripgrep command that does the same search as a recursive grep, on
+/// one thread and without its ignore rules, or None if there is no direct
+/// equivalent. Used for timing only: its output is never compared.
+fn rg_equivalent(command: &str) -> Option<String> {
+    let pipeline = shell::parse(command.as_bytes()).ok()??;
+    if pipeline.commands.len() != 1 || !pipeline.commands[0].redirects.is_empty() {
+        return None;
+    }
+    let words: Vec<Vec<u8>> = pipeline.commands[0].words.iter().map(|w| w.text()).collect();
+    if words.first().map(|w| w.as_slice()) != Some(b"grep") {
+        return None;
+    }
+    let mut flags: Vec<u8> = Vec::new();
+    let mut operands: Vec<&[u8]> = Vec::new();
+    for w in &words[1..] {
+        if w.len() > 1 && w[0] == b'-' {
+            flags.extend_from_slice(&w[1..]);
+        } else {
+            operands.push(w);
+        }
+    }
+    if !flags.contains(&b'r') || operands.is_empty() {
+        return None;
+    }
+    let pattern = operands[0];
+    let fixed = flags.contains(&b'F');
+    let extended = flags.contains(&b'E');
+    // A basic regular expression means the same to ripgrep only if it has
+    // none of the characters the two syntaxes read differently.
+    if !fixed && !extended && pattern.iter().any(|c| b"\\(){}|+?".contains(c)) {
+        return None;
+    }
+    let mut rg = String::from("rg -j 1 --no-ignore --hidden --no-config --no-heading");
+    rg.push_str(if flags.contains(&b'n') { " -n" } else { " -N" });
+    for (flag, arg) in [(b'i', " -i"), (b'l', " -l"), (b'c', " -c"), (b'v', " -v"), (b'F', " -F")] {
+        if flags.contains(&flag) {
+            rg.push_str(arg);
+        }
+    }
+    let _ = write!(rg, " -e {}", shell_quote(pattern));
+    for path in operands[1..].iter().copied().chain(if operands.len() == 1 { Some(&b"."[..]) } else { None }) {
+        let _ = write!(rg, " {}", shell_quote(path));
+    }
+    Some(rg)
+}
+
+// ------------------------------------------------------------ parameters
+
+/// The values that fill the {NAME} placeholders of the command list for
+/// one dataset: search terms chosen by how many files contain them, and a
+/// few paths. Kept in bench/terms/DATASET.txt so every run uses the same.
+struct Terms {
+    values: BTreeMap<String, String>,
+    notes: BTreeMap<String, String>,
+}
+
+impl Terms {
+    fn read(path: &Path) -> Option<Terms> {
+        let text = std::fs::read_to_string(path).ok()?;
+        let mut t = Terms { values: BTreeMap::new(), notes: BTreeMap::new() };
+        for line in text.lines() {
+            if line.starts_with('#') || line.trim().is_empty() {
+                continue;
+            }
+            let (key, rest) = line.split_once('=')?;
+            let (value, note) = match rest.split_once("  # ") {
+                Some((v, n)) => (v, n),
+                None => (rest, ""),
+            };
+            t.values.insert(key.trim().to_string(), value.to_string());
+            t.notes.insert(key.trim().to_string(), note.to_string());
+        }
+        Some(t)
+    }
+
+    fn write(&self, path: &Path, dataset: &str) -> Result<(), String> {
+        let mut text = format!(
+            "# Values for the placeholders in bench/commands.txt, for the {} dataset.\n\
+             # Chosen by qdb-bench from measured frequencies; delete this file to choose again.\n",
+            dataset
+        );
+        for (k, v) in &self.values {
+            let _ = writeln!(text, "{}={}  # {}", k, v, self.notes.get(k).map(|s| s.as_str()).unwrap_or(""));
+        }
+        std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+        std::fs::write(path, text).map_err(|e| e.to_string())
+    }
+
+    /// Fill the placeholders of one command. None if one has no value.
+    fn fill(&self, template: &str) -> Option<String> {
+        let mut out = String::new();
+        let mut rest = template;
+        while let Some(open) = rest.find('{') {
+            out.push_str(&rest[..open]);
+            let after = &rest[open + 1..];
+            match after.find('}') {
+                Some(close) if close > 0 && after[..close].bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) => {
+                    out.push_str(self.values.get(&after[..close])?);
+                    rest = &after[close + 1..];
+                }
+                _ => {
+                    out.push('{');
+                    rest = after;
+                }
+            }
+        }
+        out.push_str(rest);
+        Some(out)
+    }
+}
+
+fn plain_name(name: &[u8]) -> bool {
+    !name.is_empty() && name.iter().all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(c)) && name[0] != b'-'
+}
+
+/// How many files the real grep finds for a pattern.
+fn real_file_count(root: &Path, flags: &str, pattern: &str) -> usize {
+    let (_, out) = run_real(root, &format!("grep {} -e {} . | wc -l", flags, shell_quote(pattern.as_bytes())));
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+}
+
+fn pick_terms(db: &Db, root: &Path) -> Terms {
+    let snapshot = db.snapshot();
+    let files: Vec<(&[u8], &[u8])> = snapshot.iter().filter_map(|(p, c)| c.as_ref().map(|c| (p.as_slice(), c.as_slice()))).collect();
+    let n = files.len().max(1);
+    let mut terms = Terms { values: BTreeMap::new(), notes: BTreeMap::new() };
+    let set = |terms: &mut Terms, key: &str, value: String, note: String| {
+        terms.values.insert(key.into(), value);
+        terms.notes.insert(key.into(), note);
+    };
+
+    // In how many files does each word occur, and each word prefix that is
+    // followed by an underscore?
+    let mut word_files: HashMap<&[u8], u32> = HashMap::new();
+    let mut prefix_files: HashMap<&[u8], u32> = HashMap::new();
+    for (_, content) in &files {
+        let mut seen: HashSet<&[u8]> = HashSet::new();
+        let mut seen_prefix: HashSet<&[u8]> = HashSet::new();
+        let mut i = 0;
+        while i < content.len() {
+            if !(content[i].is_ascii_alphabetic() || content[i] == b'_') {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < content.len() && (content[i].is_ascii_alphanumeric() || content[i] == b'_') {
+                i += 1;
+            }
+            let word = &content[start..i];
+            if !(3..=20).contains(&word.len()) || !word.iter().all(|c| c.is_ascii_lowercase() || *c == b'_') || word[0] == b'_' {
+                continue;
+            }
+            if seen.insert(word) {
+                *word_files.entry(word).or_insert(0) += 1;
+            }
+            if let Some(us) = word.iter().position(|c| *c == b'_') {
+                if us >= 3 && us + 1 < word.len() && seen_prefix.insert(&word[..us]) {
+                    *prefix_files.entry(&word[..us]).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    let mut words: Vec<(&[u8], u32)> = word_files.into_iter().collect();
+    words.sort();
+
+    // A word counted in k files can still be found by grep in more, as part
+    // of a longer word. So take the nearest few and ask the real grep.
+    let pct = |count: usize| format!("{} of {} files, {:.2}%", count, n, 100.0 * count as f64 / n as f64);
+    let choose = |terms: &mut Terms, key: &str, target: usize, ok: &dyn Fn(usize) -> bool, min_len: usize| {
+        let mut near: Vec<&(&[u8], u32)> = words.iter().filter(|(w, _)| w.len() >= min_len && !w.contains(&b'_')).collect();
+        near.sort_by_key(|(w, c)| ((*c as i64 - target as i64).abs(), std::cmp::Reverse(w.len()), *w));
+        let mut best: Option<(String, usize)> = None;
+        for (w, _) in near.into_iter().take(8) {
+            let word = String::from_utf8_lossy(w).into_owned();
+            let count = real_file_count(root, "-rlF", &word);
+            if !ok(count) {
+                continue;
+            }
+            let better = best.as_ref().map_or(true, |(_, c)| (count as i64 - target as i64).abs() < (*c as i64 - target as i64).abs());
+            if better {
+                best = Some((word, count));
+            }
+        }
+        if let Some((word, count)) = best {
+            set(terms, key, word, pct(count));
+        }
+    };
+    let share = |per_thousand: usize| (n * per_thousand).div_ceil(1000).max(2);
+    choose(&mut terms, "ONE", 1, &|c| c == 1, 6);
+    choose(&mut terms, "RARE", share(1), &|c| c >= 2, 6);
+    choose(&mut terms, "FEW", share(10), &|c| c >= 2, 6);
+    choose(&mut terms, "SOME", share(100), &|c| c >= 2, 6);
+    choose(&mut terms, "COMMON", share(600), &|c| 2 * c > n, 5);
+    if !terms.values.contains_key("COMMON") {
+        choose(&mut terms, "COMMON", share(600), &|c| 2 * c > n, 3);
+    }
+    let absent = "qdbzzabsentterm";
+    set(&mut terms, "ABSENT", absent.into(), pct(real_file_count(root, "-rlF", absent)));
+    if let Some(rare) = terms.values.get("RARE").cloned() {
+        set(&mut terms, "RAREUP", rare.to_ascii_uppercase(), "the RARE term in capitals, for -i".into());
+    }
+
+    // A prefix for the pattern PREFIX_[a-z]+\( .
+    let mut prefixes: Vec<(&[u8], u32)> = prefix_files.into_iter().collect();
+    prefixes.sort_by_key(|(w, c)| ((*c as i64 - share(50) as i64).abs(), *w));
+    for (w, _) in prefixes.into_iter().take(8) {
+        let prefix = String::from_utf8_lossy(w).into_owned();
+        let count = real_file_count(root, "-rlE", &format!("{}_[a-z]+\\(", prefix));
+        if count > 0 {
+            set(&mut terms, "PREFIX", prefix, format!("PREFIX_[a-z]+\\( matches in {}", pct(count)));
+            break;
+        }
+    }
+
+    // Folders by the share of all files underneath them.
+    let mut under: BTreeMap<&[u8], usize> = BTreeMap::new();
+    let mut direct: BTreeMap<(&[u8], &[u8]), Vec<(&[u8], usize)>> = BTreeMap::new();
+    let mut by_ext: BTreeMap<&[u8], usize> = BTreeMap::new();
+    for (path, content) in &files {
+        let mut ok = true;
+        for (i, c) in path.iter().enumerate() {
+            if *c == b'/' {
+                ok &= plain_name(path[..i].rsplit(|c| *c == b'/').next().unwrap());
+                if ok && path[..i].iter().filter(|c| **c == b'/').count() < 3 {
+                    *under.entry(&path[..i]).or_insert(0) += 1;
+                }
+            }
+        }
+        let (dir, name) = match path.iter().rposition(|c| *c == b'/') {
+            Some(i) => (&path[..i], &path[i + 1..]),
+            None => (&b""[..], *path),
+        };
+        if !ok || !plain_name(name) {
+            continue;
+        }
+        if let Some(dot) = name.iter().rposition(|c| *c == b'.') {
+            let ext = &name[dot + 1..];
+            if dot > 0 && !ext.is_empty() && ext.iter().all(|c| c.is_ascii_alphanumeric()) {
+                direct.entry((dir, ext)).or_default().push((path, content.len()));
+                *by_ext.entry(ext).or_insert(0) += 1;
+            }
+        }
+    }
+    let nearest = |target: usize, lo: usize, hi: usize| {
+        under.iter().filter(|(_, c)| **c >= lo && **c <= hi).min_by_key(|(p, c)| ((**c as i64 - target as i64).abs(), **p)).map(|(p, c)| (*p, *c))
+    };
+    if let Some((dir, count)) = nearest(n * 15 / 100, n * 3 / 100, n * 40 / 100) {
+        set(&mut terms, "DIR", String::from_utf8_lossy(dir).into_owned(), format!("holds {}", pct(count)));
+    }
+    if let Some((dir, count)) = nearest((n / 100).max(3), 2, n * 3 / 100 + 3) {
+        set(&mut terms, "SMALLDIR", String::from_utf8_lossy(dir).into_owned(), format!("holds {}", pct(count)));
+    }
+    // The folder with the most files of one extension directly inside it.
+    if let Some(((dir, ext), group)) = direct.iter().filter(|(_, g)| g.len() <= 1500).max_by_key(|((d, e), g)| (g.len(), std::cmp::Reverse((*d, *e)))) {
+        let dir_s = String::from_utf8_lossy(dir).into_owned();
+        let ext_s = String::from_utf8_lossy(ext).into_owned();
+        let glob = if dir.is_empty() { format!("*.{}", ext_s) } else { format!("{}/*.{}", dir_s, ext_s) };
+        set(&mut terms, "GLOB", glob, format!("{} files", group.len()));
+        if !dir.is_empty() {
+            set(&mut terms, "GLOBDIR", dir_s, "the folder of GLOB".into());
+        }
+        set(&mut terms, "EXT", ext_s, format!("{} files in the whole dataset", by_ext[ext]));
+        if let Some((path, size)) = group.iter().min_by_key(|(p, size)| ((*size as i64 - 20_000).abs(), *p)) {
+            set(&mut terms, "FILE", String::from_utf8_lossy(path).into_owned(), format!("{} bytes", size));
+        }
+        if let Some((ext2, count)) = by_ext.iter().filter(|(e, _)| *e != ext).max_by_key(|(e, c)| (**c, std::cmp::Reverse(**e))) {
+            set(&mut terms, "EXT2", String::from_utf8_lossy(ext2).into_owned(), format!("{} files in the whole dataset", count));
+        }
+    }
+    terms
+}
+
+// ------------------------------------------------------------ measuring
 
 fn median(mut v: Vec<Duration>) -> Duration {
     v.sort();
     v[v.len() / 2]
 }
 
-fn ms(d: Duration) -> String {
-    let m = d.as_secs_f64() * 1000.0;
-    if m < 10.0 {
-        format!("{:.3}", m)
-    } else if m < 100.0 {
-        format!("{:.2}", m)
+fn ms(d: f64) -> String {
+    if d < 0.0 {
+        String::new()
+    } else if d < 10.0 {
+        format!("{:.3}", d)
+    } else if d < 100.0 {
+        format!("{:.2}", d)
     } else {
-        format!("{:.1}", m)
+        format!("{:.1}", d)
+    }
+}
+
+fn millis(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
+
+fn size(bytes: usize) -> String {
+    if bytes < 10_000 {
+        format!("{} B", bytes)
+    } else if bytes < 10_000_000 {
+        format!("{:.1} KB", bytes as f64 / 1e3)
+    } else {
+        format!("{:.1} MB", bytes as f64 / 1e6)
     }
 }
 
 fn tool_version(tool: &str) -> String {
-    std::process::Command::new(tool)
+    Command::new(tool)
         .arg("--version")
         .output()
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(|l| l.to_string()))
-        .unwrap_or_else(|| "unknown".into())
+        .unwrap_or_else(|| "not installed".into())
 }
 
 struct Options {
@@ -269,11 +687,71 @@ struct Options {
     reps: usize,
     out: PathBuf,
     scratch: PathBuf,
+    label: String,
+    index: bool,
+    filter: Option<String>,
 }
 
-fn bench(name: &str, db: Db, opts: &Options) -> Result<bool, String> {
+/// How many more timed runs a command gets after its first one.
+fn more_reps(first: Duration, reps: usize) -> usize {
+    if first > Duration::from_secs(2) {
+        0
+    } else if first > Duration::from_millis(300) {
+        reps.min(3) - 1
+    } else {
+        reps - 1
+    }
+}
+
+/// Whether a later stage keeps only part of what an unordered stage
+/// printed, so that the real result depends on directory order.
+fn order_dependent(command: &str) -> bool {
+    let pipeline = match shell::parse(command.as_bytes()) {
+        Ok(Some(p)) => p,
+        _ => return false,
+    };
+    order_is_unspecified(command)
+        && pipeline.commands.iter().skip(1).any(|c| matches!(c.words.first().map(|w| w.text()).as_deref(), Some(b"head") | Some(b"tail")))
+}
+
+struct Row {
+    command: String,
+    kind: &'static str,
+    gnu_ms: f64,
+    rg_ms: f64,
+    engine_ms: f64,
+    out_bytes: usize,
+    peak_bytes: usize,
+    agree: String,
+}
+
+fn csv_field(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                cur.push('"');
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            ',' if !quoted => fields.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    fields.push(cur);
+    fields
+}
+
+fn bench(name: &str, source: &str, db: Db, opts: &Options) -> Result<bool, String> {
     let text = std::fs::read_to_string(&opts.commands).map_err(|e| format!("{}: {}", opts.commands.display(), e))?;
-    let commands: Vec<(String, bool)> = text
+    let templates: Vec<(String, bool)> = text
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
@@ -283,131 +761,308 @@ fn bench(name: &str, db: Db, opts: &Options) -> Result<bool, String> {
         })
         .collect();
 
-    let root = opts.scratch.join(format!("qdb-bench-{}-{}", std::process::id(), name)).join("root");
-    let _ = std::fs::remove_dir_all(root.parent().unwrap());
-    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    store::dump_dir(&db, &root).map_err(|e| format!("writing the dataset: {}", e))?;
+    // The real tools work on a copy of exactly what the engine holds.
+    let base = opts.scratch.join(format!("qdb-bench-{}", name));
+    let root = base.join("root");
+    let stamp = format!("{} nodes, {} bytes\n", db.node_count(), db.content_bytes());
+    if std::fs::read_to_string(base.join("stamp")).ok().as_deref() != Some(&stamp) {
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+        store::dump_dir(&db, &root).map_err(|e| format!("writing the dataset: {}", e))?;
+        std::fs::write(base.join("stamp"), &stamp).map_err(|e| e.to_string())?;
+    }
+    let _ = std::fs::remove_dir_all(root.join("bench_out"));
+    drop(db);
 
-    // How long the engine takes to read the dataset from disk.
+    let terms_path = PathBuf::from("bench/terms").join(format!("{}.txt", name));
+    let live_before = LIVE.load(Relaxed);
     let t = Instant::now();
-    let mut db = store::load_dir(&root).map_err(|e| e.to_string())?;
+    let (mut db, report) = store::load_dir(&root).map_err(|e| e.to_string())?;
     let load = t.elapsed();
-    let before = db.snapshot();
-    let files = before.iter().filter(|(_, c)| c.is_some()).count();
-    let folders = before.len() - files;
-    let bytes = db.content_bytes();
-    eprintln!("{}: {} files, {} folders, {:.1} MB", name, files, folders, bytes as f64 / 1e6);
+    engine_setup(&mut db, opts);
+    let load_with_index = t.elapsed();
+    let heap_after_load = LIVE.load(Relaxed) - live_before;
+    let rss_after_load = resident_bytes();
+    eprintln!("{}: {} files, {} folders, {:.1} MB, loaded in {} ms", name, report.files, report.folders, report.bytes as f64 / 1e6, ms(millis(load_with_index)));
+
+    let terms = match Terms::read(&terms_path) {
+        Some(t) => t,
+        None => {
+            eprintln!("{}: choosing search terms", name);
+            let t = pick_terms(&db, &root);
+            t.write(&terms_path, name)?;
+            t
+        }
+    };
 
     // What starting a process costs the real tools, for reference.
-    let startup = median((0..opts.reps.max(3)).map(|_| {
-        let t = Instant::now();
-        run_real(&root, "echo -n");
-        t.elapsed()
-    }).collect());
+    let startup = median((0..5).map(|_| run_real(&root, "echo -n").0).collect());
 
     let mut rows: Vec<Row> = Vec::new();
-    for (command, mutating) in &commands {
-        check_safe(command, &root)?;
-        let unordered = order_is_unspecified(command);
-        let reps = if *mutating { 1 } else { opts.reps };
-        let mut real_times = Vec::new();
-        let mut engine_times = Vec::new();
-        let mut real_out = None;
-        let mut engine_out = None;
-        for _ in 0..reps {
-            let t = Instant::now();
-            let r = run_real(&root, command);
-            real_times.push(t.elapsed());
-            real_out = Some(r);
-            let t = Instant::now();
-            let e = execute(&mut db, command.as_bytes());
-            engine_times.push(t.elapsed());
-            engine_out = Some(e);
+    let mut all_agree = true;
+    for (template, mutating) in &templates {
+        let command = match terms.fill(template) {
+            Some(c) => c,
+            None => {
+                eprintln!("  skipped, no value for a placeholder: {}", template);
+                continue;
+            }
+        };
+        if opts.filter.as_ref().is_some_and(|f| !command.contains(f.as_str())) && !mutating {
+            continue;
         }
-        let (r, e) = (real_out.unwrap(), engine_out.unwrap());
-        let mut note = String::new();
-        if r.code != e.code {
-            note = format!("exit status: real {}, engine {}", r.code, e.code);
-        } else if !same_output(&r.stdout, &e.stdout, unordered) {
-            note = "standard output differs".into();
-        } else if !same_output(&r.stderr, &e.stderr, unordered) {
-            note = "standard error differs".into();
-        }
-        eprintln!("  {:>10} ms real {:>10} ms engine  {}", ms(median(real_times.clone())), ms(median(engine_times.clone())), command);
-        rows.push(Row {
-            command: command.clone(),
-            mutating: *mutating,
-            real: median(real_times),
-            engine: median(engine_times),
-            out_bytes: e.stdout.len(),
-            agree: note.is_empty(),
-            note,
-        });
-    }
-    // After the whole list, both sides must hold the same tree.
-    let real_tree = store::snapshot_dir(&root).map_err(|e| e.to_string())?;
-    let trees_agree = real_tree == db.snapshot();
-    let _ = std::fs::remove_dir_all(root.parent().unwrap());
+        check_safe(&command, &root)?;
+        let unordered = order_is_unspecified(&command);
 
-    // Report.
-    let all_agree = trees_agree && rows.iter().all(|r| r.agree);
-    let mut md = String::new();
-    let _ = writeln!(md, "# Benchmark: {} dataset\n", name);
-    let _ = writeln!(md, "- Dataset: {} files in {} folders, {:.1} MB of text", files, folders, bytes as f64 / 1e6);
-    let _ = writeln!(md, "- Engine load time (reading the dataset from disk into memory): {} ms", ms(load));
-    let _ = writeln!(md, "- Real tools: {}; {}; {}; {}; {}", tool_version("bash"), tool_version("grep"), tool_version("sed"), tool_version("ls"), tool_version("find"));
-    let _ = writeln!(md, "- Process start-up cost of the real tools (`bash -c 'echo -n'`): {} ms. Every real time below includes it; engine times are measured in-process and include parsing the command.", ms(startup));
-    let _ = writeln!(md, "- Read-only commands: median of {} runs. Commands that change data: one run.", opts.reps);
-    let _ = writeln!(md, "- Results agree with the real tools: {}\n", if all_agree { "yes, for every command and for the final tree" } else { "NO, see the last column" });
-    let _ = writeln!(md, "| Command | Real (ms) | Engine (ms) | Engine / real | Output (bytes) | Agree |");
-    let _ = writeln!(md, "|---|---:|---:|---:|---:|---|");
-    let mut csv = String::from("dataset,command,kind,real_ms,engine_ms,ratio,output_bytes,agree\n");
+        // The real tools.
+        let (first, real) = run_real(&root, &command);
+        let mut real_times = vec![first];
+        if !mutating {
+            for _ in 0..more_reps(first, opts.reps) {
+                real_times.push(run_real(&root, &command).0);
+            }
+        }
+        let rg_ms = match rg_equivalent(&command).filter(|_| !mutating && have_rg()) {
+            None => -1.0,
+            Some(rg) => {
+                let first = run_real(&root, &rg).0;
+                let mut times = vec![first];
+                for _ in 0..more_reps(first, opts.reps) {
+                    times.push(run_real(&root, &rg).0);
+                }
+                millis(median(times))
+            }
+        };
+
+        // The engine.
+        let first = engine_run(&mut db, &command, true);
+        let mut engine_times = vec![first.time];
+        let mut peak = first.peak;
+        if !mutating {
+            for _ in 0..more_reps(first.time, opts.reps) {
+                let again = engine_run(&mut db, &command, false);
+                engine_times.push(again.time);
+                peak = again.peak;
+            }
+        }
+
+        let real_code = real.status.code().unwrap_or(-1);
+        let agree = if real_code != first.code {
+            format!("NO: exit status, real {}, engine {}", real_code, first.code)
+        } else if order_dependent(&command) {
+            let lines = |b: &[u8]| b.iter().filter(|c| **c == b'\n').count();
+            if lines(&real.stdout) == lines(&first.stdout) {
+                "order differs".to_string()
+            } else {
+                "NO: number of lines differs".to_string()
+            }
+        } else if (unordered && sorted_lines(&real.stdout) != sorted_lines(&first.stdout)) || (!unordered && real.stdout != first.stdout) {
+            "NO: standard output differs".to_string()
+        } else if real.stderr != first.stderr {
+            "NO: standard error differs".to_string()
+        } else {
+            "yes".to_string()
+        };
+        all_agree &= !agree.starts_with("NO");
+        let row = Row {
+            command: command.clone(),
+            kind: if *mutating { "write" } else { "read" },
+            gnu_ms: millis(median(real_times)),
+            rg_ms,
+            engine_ms: millis(median(engine_times)),
+            out_bytes: first.out_bytes,
+            peak_bytes: peak,
+            agree,
+        };
+        eprintln!("  {:>10} gnu {:>10} rg {:>10} engine {:>10} peak  {}  {}", ms(row.gnu_ms), ms(row.rg_ms), ms(row.engine_ms), size(row.peak_bytes), row.command, if row.agree == "yes" { "" } else { &row.agree });
+        rows.push(row);
+    }
+
+    // After the whole list, both sides must hold the same tree.
+    let trees_agree = opts.filter.is_some() || store::snapshot_dir(&root).map_err(|e| e.to_string())? == db.snapshot();
+    all_agree &= trees_agree;
+
+    let dir = opts.out.join(name);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut csv = String::from("command,kind,gnu_ms,rg_ms,engine_ms,output_bytes,peak_bytes,agree\n");
     for r in &rows {
-        let ratio = r.engine.as_secs_f64() / r.real.as_secs_f64().max(1e-9);
-        let _ = writeln!(
-            md,
-            "| `{}` | {} | {} | {:.2}x | {} | {} |",
-            r.command.replace('|', "\\|"),
-            ms(r.real),
-            ms(r.engine),
-            ratio,
-            r.out_bytes,
-            if r.agree { "yes".to_string() } else { format!("NO: {}", r.note) }
-        );
-        let _ = writeln!(
-            csv,
-            "{},\"{}\",{},{:.4},{:.4},{:.3},{},{}",
-            name,
-            r.command.replace('"', "\"\""),
-            if r.mutating { "write" } else { "read" },
-            r.real.as_secs_f64() * 1000.0,
-            r.engine.as_secs_f64() * 1000.0,
-            ratio,
-            r.out_bytes,
-            r.agree
-        );
+        let rg = if r.rg_ms < 0.0 { String::new() } else { format!("{:.4}", r.rg_ms) };
+        let _ = writeln!(csv, "{},{},{:.4},{},{:.4},{},{},{}", csv_field(&r.command), r.kind, r.gnu_ms, rg, r.engine_ms, r.out_bytes, r.peak_bytes, csv_field(&r.agree));
+    }
+    let mut meta = String::new();
+    let _ = writeln!(meta, "source={}", source);
+    let _ = writeln!(meta, "files={}", report.files);
+    let _ = writeln!(meta, "folders={}", report.folders);
+    let _ = writeln!(meta, "bytes={}", report.bytes);
+    let _ = writeln!(meta, "index={}", if opts.index { "on" } else { "off" });
+    let _ = writeln!(meta, "load_ms={:.1}", millis(load));
+    let _ = writeln!(meta, "load_with_index_ms={:.1}", millis(load_with_index));
+    let _ = writeln!(meta, "heap_after_load={}", heap_after_load);
+    let _ = writeln!(meta, "rss_after_load={}", rss_after_load);
+    let _ = writeln!(meta, "startup_ms={:.3}", millis(startup));
+    let _ = writeln!(meta, "trees_agree={}", trees_agree);
+    let _ = writeln!(meta, "all_agree={}", all_agree);
+    let _ = writeln!(meta, "tools={}; {}; {}; {}; {}; {}", tool_version("bash"), tool_version("grep"), tool_version("sed"), tool_version("ls"), tool_version("find"), tool_version("rg"));
+    for (k, v) in engine_facts(&db) {
+        let _ = writeln!(meta, "{}={}", k, v);
+    }
+    if opts.filter.is_none() {
+        std::fs::write(dir.join(format!("{}.csv", opts.label)), csv).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join(format!("{}.meta", opts.label)), meta).map_err(|e| e.to_string())?;
+        report_dataset(name, opts)?;
     }
     if !trees_agree {
-        let _ = writeln!(md, "\nThe trees differ after the command list.");
+        eprintln!("{}: the trees differ after the command list", name);
     }
-    let slower: Vec<&Row> = rows.iter().filter(|r| r.engine > r.real).collect();
-    let _ = writeln!(md, "\n{} of {} commands were slower on the engine than on the real tools.", slower.len(), rows.len());
-    std::fs::create_dir_all(&opts.out).map_err(|e| e.to_string())?;
-    std::fs::write(opts.out.join(format!("{}.md", name)), &md).map_err(|e| e.to_string())?;
-    std::fs::write(opts.out.join(format!("{}.csv", name)), &csv).map_err(|e| e.to_string())?;
-    println!("{}", md);
     Ok(all_agree)
+}
+
+fn have_rg() -> bool {
+    static HAVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HAVE.get_or_init(|| Command::new("rg").arg("--version").output().is_ok_and(|o| o.status.success()))
+}
+
+// -------------------------------------------------------------- reporting
+
+/// The runs a table shows, in order: label, column heading.
+const LABELS: &[(&str, &str)] = &[
+    ("before", "Stage 1"),
+    ("part2", "Part 2"),
+    ("part3", "Part 3, no index"),
+    ("part4-noindex", "Part 4, index off"),
+    ("part4", "Part 4, index on"),
+];
+
+struct Stored {
+    rows: Vec<Vec<String>>,
+    meta: BTreeMap<String, String>,
+}
+
+fn read_stored(dir: &Path, label: &str) -> Option<Stored> {
+    let csv = std::fs::read_to_string(dir.join(format!("{}.csv", label))).ok()?;
+    let meta = std::fs::read_to_string(dir.join(format!("{}.meta", label))).unwrap_or_default();
+    Some(Stored {
+        rows: csv.lines().skip(1).map(parse_csv_line).collect(),
+        meta: meta.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+    })
+}
+
+/// Rebuild bench/results/DATASET.md from every stored run of a dataset.
+fn report_dataset(name: &str, opts: &Options) -> Result<(), String> {
+    let dir = opts.out.join(name);
+    let mut labels: Vec<(String, String)> = LABELS.iter().map(|(l, h)| (l.to_string(), h.to_string())).collect();
+    if !labels.iter().any(|(l, _)| *l == opts.label) {
+        labels.push((opts.label.clone(), opts.label.clone()));
+    }
+    let runs: Vec<(String, String, Stored)> = labels.into_iter().filter_map(|(l, h)| read_stored(&dir, &l).map(|s| (l, h, s))).collect();
+    let last = match runs.last() {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+    let get = |s: &Stored, k: &str| s.meta.get(k).cloned().unwrap_or_default();
+    let num = |s: &Stored, k: &str| get(s, k).parse::<f64>().unwrap_or(0.0);
+    let mut md = String::new();
+    let _ = writeln!(md, "# Benchmark: {}\n", name);
+    let _ = writeln!(md, "- Data: {}", get(&last.2, "source"));
+    let _ = writeln!(md, "- Size: {} files in {} folders, {:.1} MB of text", get(&last.2, "files"), get(&last.2, "folders"), num(&last.2, "bytes") / 1e6);
+    let _ = writeln!(md, "- Tools: {}", get(&last.2, "tools"));
+    let _ = writeln!(md, "- GNU and rg times are from the latest run ({}), and include starting bash and the tool ({} ms for `bash -c 'echo -n'`). Their output is captured through a pipe. rg runs on one thread with `-j 1 --no-ignore --hidden` and is there for timing only.", last.1, get(&last.2, "startup_ms"));
+    let _ = writeln!(md, "- Engine times are in process, on one thread, and include parsing the command. Read-only commands: median of up to 5 runs, fewer above 0.3 s. Commands that change data: one run.");
+    let _ = writeln!(md, "- Peak memory is the most heap the engine held during the command, above what it held before it.\n");
+
+    let _ = writeln!(md, "## Loading and memory\n");
+    let _ = writeln!(md, "| Run | Index | Load (ms) | Load with index build (ms) | Heap after load | Resident after load | Agrees with GNU |");
+    let _ = writeln!(md, "|---|---|---:|---:|---:|---:|---|");
+    for (_, heading, s) in &runs {
+        let _ = writeln!(
+            md,
+            "| {} | {} | {} | {} | {} | {} | {} |",
+            heading,
+            get(s, "index"),
+            ms(num(s, "load_ms")),
+            ms(num(s, "load_with_index_ms")),
+            size(num(s, "heap_after_load") as usize),
+            size(num(s, "rss_after_load") as usize),
+            if get(s, "all_agree") == "true" { "yes" } else { "NO" }
+        );
+    }
+    for (_, heading, s) in &runs {
+        let facts: Vec<String> = s.meta.iter().filter(|(k, _)| k.starts_with("index_")).map(|(k, v)| format!("{} = {}", k, v)).collect();
+        if !facts.is_empty() {
+            let _ = writeln!(md, "\nIndex facts ({}): {}.", heading, facts.join("; "));
+        }
+    }
+
+    let _ = writeln!(md, "\n## Time per command, in milliseconds\n");
+    let mut head = String::from("| Command | GNU | rg |");
+    let mut rule = String::from("|---|---:|---:|");
+    for (_, heading, _) in &runs {
+        let _ = write!(head, " {} |", heading);
+        rule.push_str("---:|");
+    }
+    let _ = writeln!(md, "{} Agree |\n{}---|", head, rule);
+    let by_command: Vec<HashMap<&str, &Vec<String>>> = runs.iter().map(|(_, _, s)| s.rows.iter().map(|r| (r[0].as_str(), r)).collect()).collect();
+    for row in &last.2.rows {
+        let mut line = format!("| `{}` | {} | {} |", row[0].replace('|', "\\|"), ms(row[2].parse().unwrap_or(-1.0)), ms(row[3].parse().unwrap_or(-1.0)));
+        let mut agree = "yes".to_string();
+        for map in &by_command {
+            match map.get(row[0].as_str()) {
+                Some(r) => {
+                    let _ = write!(line, " {} |", ms(r[4].parse().unwrap_or(-1.0)));
+                    if r[7] != "yes" {
+                        agree = r[7].clone();
+                    }
+                }
+                None => line.push_str(" |"),
+            }
+        }
+        let _ = writeln!(md, "{} {} |", line, agree);
+    }
+
+    let _ = writeln!(md, "\n## Peak memory per command\n");
+    let mut head = String::from("| Command | Output |");
+    let mut rule = String::from("|---|---:|");
+    for (_, heading, _) in &runs {
+        let _ = write!(head, " {} |", heading);
+        rule.push_str("---:|");
+    }
+    let _ = writeln!(md, "{}\n{}", head, rule);
+    for row in &last.2.rows {
+        let mut line = format!("| `{}` | {} |", row[0].replace('|', "\\|"), size(row[5].parse().unwrap_or(0)));
+        for map in &by_command {
+            match map.get(row[0].as_str()) {
+                Some(r) => {
+                    let _ = write!(line, " {} |", size(r[6].parse().unwrap_or(0)));
+                }
+                None => line.push_str(" |"),
+            }
+        }
+        let _ = writeln!(md, "{}", line);
+    }
+
+    if let Some(terms) = Terms::read(&PathBuf::from("bench/terms").join(format!("{}.txt", name))) {
+        let _ = writeln!(md, "\n## Search terms and paths\n\n| Placeholder | Value | Measured |\n|---|---|---|");
+        for (k, v) in &terms.values {
+            let _ = writeln!(md, "| {} | `{}` | {} |", k, v, terms.notes.get(k).map(|s| s.as_str()).unwrap_or(""));
+        }
+    }
+    std::fs::write(opts.out.join(format!("{}.md", name)), md).map_err(|e| e.to_string())
 }
 
 fn run() -> Result<bool, String> {
     let mut dataset = String::from("small");
     let mut dir: Option<PathBuf> = None;
     let mut export: Option<PathBuf> = None;
+    let mut data = PathBuf::from(std::env::var("QDB_BENCH_DATA").unwrap_or_else(|_| "../qdb-data/src".into()));
+    let mut report_only = false;
     let mut opts = Options {
         commands: "bench/commands.txt".into(),
         reps: 5,
         out: "bench/results".into(),
         scratch: std::env::temp_dir(),
+        label: "dev".into(),
+        index: true,
+        filter: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -415,11 +1070,16 @@ fn run() -> Result<bool, String> {
         match a.as_str() {
             "--dataset" => dataset = value("--dataset")?,
             "--dir" => dir = Some(value("--dir")?.into()),
+            "--data" => data = value("--data")?.into(),
+            "--label" => opts.label = value("--label")?,
+            "--no-index" => opts.index = false,
             "--commands" => opts.commands = value("--commands")?.into(),
             "--reps" => opts.reps = value("--reps")?.parse().map_err(|_| "--reps needs a number")?,
+            "--filter" => opts.filter = Some(value("--filter")?),
             "--out" => opts.out = value("--out")?.into(),
             "--scratch" => opts.scratch = value("--scratch")?.into(),
             "--export" => export = Some(value("--export")?.into()),
+            "--report" => report_only = true,
             "-h" | "--help" => {
                 println!("{}", USAGE);
                 return Ok(true);
@@ -430,27 +1090,37 @@ fn run() -> Result<bool, String> {
     if opts.reps == 0 {
         return Err("--reps must be at least 1".into());
     }
-    if let Some(dir) = dir {
-        let db = store::load_dir(&dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
-        let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dir".into());
-        return bench(&name, db, &opts);
-    }
-    let specs: Vec<&Spec> = if dataset == "all" {
-        SPECS.iter().collect()
-    } else {
-        vec![SPECS.iter().find(|s| s.name == dataset).ok_or(format!("unknown dataset {}", dataset))?]
-    };
-    let mut ok = true;
-    for spec in specs {
-        let db = generate(spec);
-        if let Some(dir) = &export {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-            store::dump_dir(&db, dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
-            continue;
+    if report_only {
+        for entry in std::fs::read_dir(&opts.out).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                report_dataset(&entry.file_name().to_string_lossy(), &opts)?;
+            }
         }
-        ok &= bench(spec.name, db, &opts)?;
+        return Ok(true);
     }
-    Ok(ok)
+    if let Some(dir) = dir {
+        let (db, _) = store::load_dir(&dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
+        let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dir".into());
+        return bench(&name, &dir.display().to_string(), db, &opts);
+    }
+    if let Some(real) = real_datasets().into_iter().find(|d| d.name == dataset) {
+        let path = data.join(&real.folder);
+        let (db, report) = store::load_dir(&path).map_err(|e| format!("{}: {} (see bench/fetch.sh)", path.display(), e))?;
+        let source = format!(
+            "{}. Skipped on import: {} symbolic links, {} files that are not valid text, {} other",
+            real.source, report.skipped_symlinks, report.skipped_not_text, report.skipped_other
+        );
+        return bench(&real.name, &source, db, &opts);
+    }
+    let spec = SPECS.iter().find(|s| s.name == dataset).ok_or(format!("unknown dataset {}", dataset))?;
+    let db = generate(spec);
+    if let Some(dir) = &export {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        store::dump_dir(&db, dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
+        return Ok(true);
+    }
+    bench(spec.name, "generated by qdb-bench from a fixed seed", db, &opts)
 }
 
 fn main() -> std::process::ExitCode {

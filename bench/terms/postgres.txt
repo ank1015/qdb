@@ -1,0 +1,17 @@
+# Values for the placeholders in bench/commands.txt, for the postgres dataset.
+# Chosen by qdb-bench from measured frequencies; delete this file to choose again.
+ABSENT=qdbzzabsentterm  # 0 of 8419 files, 0.00%
+COMMON=not  # 5013 of 8419 files, 59.54%
+DIR=src/backend  # holds 1350 of 8419 files, 16.04%
+EXT=html  # 1169 files in the whole dataset
+EXT2=c  # 1437 files in the whole dataset
+FEW=undesirable  # 85 of 8419 files, 1.01%
+FILE=doc/src/sgml/html/bug-reporting.html  # 19990 bytes
+GLOB=doc/src/sgml/html/*.html  # 1169 files
+GLOBDIR=doc/src/sgml/html  # the folder of GLOB
+ONE=abcdefghijklabcdefgh  # 1 of 8419 files, 0.01%
+PREFIX=size  # PREFIX_[a-z]+\( matches in 45 of 8419 files, 0.53%
+RARE=btvarstrequalimage  # 9 of 8419 files, 0.11%
+RAREUP=BTVARSTREQUALIMAGE  # the RARE term in capitals, for -i
+SMALLDIR=src/include/access  # holds 88 of 8419 files, 1.05%
+SOME=passed  # 843 of 8419 files, 10.01%

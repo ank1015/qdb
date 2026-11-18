@@ -10,7 +10,8 @@ Usage: qdb [--load DIR | --fixture FILE] [--dump DIR] [-c COMMAND]...
 
 Runs bash command lines against an in-memory tree of text files.
 
-  --load DIR       start from a copy of the directory DIR
+  --load DIR       start from a copy of the directory DIR; symbolic links
+                   and files that are not valid text are skipped and counted
   --fixture FILE   start from a fixture file (see tests/fixtures)
   --dump DIR       when done, write the tree into the empty directory DIR
   -c COMMAND       run COMMAND; can be given more than once
@@ -28,7 +29,19 @@ fn run() -> Result<i32, String> {
         match a.as_str() {
             "--load" => {
                 let dir = value("--load")?;
-                db = store::load_dir(dir.as_ref()).map_err(|e| format!("{}: {}", dir, e))?;
+                let (loaded, report) = store::load_dir(dir.as_ref()).map_err(|e| format!("{}: {}", dir, e))?;
+                db = loaded;
+                if report.skipped() > 0 {
+                    eprintln!(
+                        "qdb: {}: loaded {} files, skipped {} ({} symbolic links, {} not valid text, {} other)",
+                        dir,
+                        report.files,
+                        report.skipped(),
+                        report.skipped_symlinks,
+                        report.skipped_not_text,
+                        report.skipped_other
+                    );
+                }
             }
             "--fixture" => {
                 let file = value("--fixture")?;

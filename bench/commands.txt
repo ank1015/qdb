@@ -1,87 +1,116 @@
 # The benchmark command list.
 #
 # One command per line. Every command runs on the real GNU tools and on the
-# engine, against the same dataset, and the outputs are compared.
+# engine, against the same data, and the results are compared.
+#
+# {NAME} is a placeholder. Its value differs per dataset and is kept in
+# bench/terms/DATASET.txt: search terms chosen by the share of files that
+# contain them, and a few paths.
+#
+#   {ABSENT}  a term in no file          {SOME}    a term in about 10% of files
+#   {ONE}     a term in exactly one file {COMMON}  a term in over half the files
+#   {RARE}    a term in about 0.1%       {RAREUP}  {RARE} in capitals
+#   {FEW}     a term in about 1%         {PREFIX}  the start of many function names
+#   {DIR}     a folder with about 15% of the files, {SMALLDIR} one with about 1%
+#   {GLOB}    many files of one kind in one folder ({GLOBDIR}), {FILE} one of them
+#   {EXT}, {EXT2}  the two most common file extensions
 #
 # Lines starting with "mut: " change the data. They run once, in order,
-# and the list ends by removing everything it created.
-# All other lines only read, and are timed over several runs.
-#
-# The paths below exist in every generated dataset (see bench/README.md).
+# and the list ends by removing everything it created. All other lines
+# only read, and are timed over several runs.
 
 # List
 ls
 ls -a
 ls -R
-ls -aR src
-ls -p src
+ls -aR {DIR}
+ls -p {DIR}
 find .
-find . -name '*.c'
-find . -name '*.md'
+find . -name '*.{EXT}'
+find . -name '*.{EXT2}'
 find . -type d
 find . -type f
 find . -maxdepth 2 -type f
-find src -name 'mod_*' -type d
-find . -name 'README.md'
+find {DIR} -name '*.{EXT}' -type f
+find . -name 'Makefile'
 
 # Read
-cat README.md
-cat src/main.c
-cat -n src/main.c
-head -n 20 src/main.c
-head -n 1 README.md
-tail -n 20 src/main.c
-tail -n +100 src/main.c
-wc src/main.c
-wc -l src/main.c
-wc -l src/*.c
-cat src/*.c | wc -l
-cat src/main.c | head -n 50 | tail -n 10
+cat {FILE}
+cat -n {FILE}
+head -n 20 {FILE}
+tail -n 20 {FILE}
+tail -n +100 {FILE}
+wc {FILE}
+wc -l {GLOB}
+cat {GLOB} | wc -l
+cat {FILE} | head -n 50 | tail -n 10
+grep -c {COMMON} {FILE}
+grep -n {COMMON} {FILE}
+sed 's/{COMMON}/XX/g' {FILE}
+sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' {FILE}
+cat {FILE} | sed 's/^/> /' | wc -c
 
-# Find: a common word, a rare word, a word that is not there
-grep -c the src/main.c
-grep -n TODO src/main.c
-grep -rn TODO .
-grep -rl TODO .
-grep -rc TODO .
-grep -r error .
-grep -ri fixme .
-grep -rn handle_request src
-grep -rn zzz_not_present .
-grep -rl zzz_not_present .
-grep -rF 'error:' .
-grep -rE 'TODO|FIXME' .
+# Search, one term from each frequency class: lines, then file names
+grep -rn {ABSENT} .
+grep -rl {ABSENT} .
+grep -rn {ONE} .
+grep -rl {ONE} .
+grep -rn {RARE} .
+grep -rl {RARE} .
+grep -rn {FEW} .
+grep -rl {FEW} .
+grep -rn {SOME} .
+grep -rl {SOME} .
+grep -rn {COMMON} .
+grep -rl {COMMON} .
+
+# Search: other forms
+grep -rc {FEW} .
+grep -rin {RAREUP} .
+grep -ri {FEW} .
+grep -rn {FEW} {DIR}
+grep -rl {SOME} {DIR}
+grep -rF '{FEW}' .
+grep -rE '{PREFIX}_[a-z]+\(' .
+grep -rE '{RARE}|{ONE}' .
+grep -rE '{SOME}|{FEW}' .
 grep -rE '[0-9]{4,}' .
-grep -rn '^#include' src
+grep -rn '^#include' .
 grep -rE '^(import|from) ' .
-grep -rv e docs
-grep -rin 'return [a-z_]*;$' src
-grep -rE '(alpha|beta)_[a-z]+\(' .
-grep -r '\(TODO\).*\1' .
-grep -rl error . | wc -l
-grep -rc the . | grep -v ':0$' | wc -l
-find . -name '*.md' | wc -l
-find . -type f | grep -c mod_
-sed 's/the/THE/g' src/main.c
-sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' src/main.c
-cat src/main.c | sed 's/^/> /' | wc -c
+grep -rin 'return [a-z_]*;$' {DIR}
+grep -rv e {SMALLDIR}
+grep -r '\({FEW}\).*\1' .
+
+# Pipelines
+grep -rl {SOME} . | wc -l
+grep -rc {COMMON} . | grep -v ':0$' | wc -l
+find . -name '*.{EXT}' | wc -l
+find . -type f | grep -c {EXT}
+
+# Pipelines that end in head
+grep -rn {COMMON} . | head -n 5
+grep -rn {SOME} . | head -n 1
+find . -type f | head -n 3
+cat {GLOB} | head -n 2
 
 # Add, edit, delete
 mut: mkdir -p bench_out/a/b
 mut: touch bench_out/empty.txt
 mut: echo 'hello world' > bench_out/hello.txt
 mut: echo 'another line' >> bench_out/hello.txt
-mut: cp src/main.c bench_out/main_copy.c
-mut: cp -r src bench_out/src_copy
-mut: cp -r docs bench_out/docs_copy
-mut: sed -i 's/TODO/DONE/g' bench_out/main_copy.c
-mut: sed -i -E 's/[0-9]+/N/g' bench_out/src_copy/main.c
-mut: sed -i 's/the/THE/g' bench_out/docs_copy/guide.md
-mut: grep -rc DONE bench_out
-mut: mv bench_out/src_copy bench_out/src_moved
+mut: cp {FILE} bench_out/copy.txt
+mut: cp -r {DIR} bench_out/dir_copy
+mut: cp -r {GLOBDIR} bench_out/work
+mut: sed -i 's/{COMMON}/QDBBENCHONE/g' bench_out/copy.txt
+mut: sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt
+mut: sed -i 's/{COMMON}/QDBBENCHMANY/g' bench_out/work/*.{EXT}
+mut: grep -rc QDBBENCHMANY bench_out
+mut: grep -rl QDBBENCHMANY .
+mut: grep -rl QDBBENCHONE .
+mut: mv bench_out/dir_copy bench_out/dir_moved
 mut: mv bench_out/hello.txt bench_out/a/b
 mut: ls -R bench_out/a
 mut: rm bench_out/a/b/hello.txt
 mut: rmdir bench_out/a/b
-mut: rm -r bench_out/src_moved
+mut: rm -r bench_out/dir_moved
 mut: rm -rf bench_out

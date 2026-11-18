@@ -21,36 +21,63 @@ fn name_os(name: &[u8]) -> std::ffi::OsString {
     std::ffi::OsStr::from_bytes(name).to_os_string()
 }
 
-fn invalid(msg: String) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, msg)
+
+/// What `load_dir` did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LoadReport {
+    pub files: usize,
+    pub folders: usize,
+    /// Bytes of file content loaded.
+    pub bytes: usize,
+    pub skipped_symlinks: usize,
+    /// Regular files that are not valid UTF-8 text, or contain a NUL.
+    pub skipped_not_text: usize,
+    /// Devices, sockets and other things that are neither file nor folder.
+    pub skipped_other: usize,
 }
 
-/// Import a directory tree. Anything that is not a folder or a UTF-8 text
-/// file (symlinks, binary files, devices) is an error.
-pub fn load_dir(path: &Path) -> io::Result<Db> {
+impl LoadReport {
+    pub fn skipped(&self) -> usize {
+        self.skipped_symlinks + self.skipped_not_text + self.skipped_other
+    }
+}
+
+/// Import a directory tree. Symbolic links, files that are not valid text
+/// and anything that is neither a file nor a folder are skipped and
+/// counted; the data model has no place for them.
+pub fn load_dir(path: &Path) -> io::Result<(Db, LoadReport)> {
     let mut db = Db::new();
+    let mut report = LoadReport::default();
     let root = db.root();
-    load_into(&mut db, root, path)?;
-    Ok(db)
+    load_into(&mut db, root, path, &mut report)?;
+    Ok((db, report))
 }
 
-fn load_into(db: &mut Db, parent: NodeId, path: &Path) -> io::Result<()> {
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
+fn load_into(db: &mut Db, parent: NodeId, path: &Path, report: &mut LoadReport) -> io::Result<()> {
+    // Sorted, so that a load always builds the same database.
+    let mut entries: Vec<_> = fs::read_dir(path)?.collect::<Result<_, _>>()?;
+    entries.sort_by_key(|e| name_bytes(&e.file_name()));
+    for entry in entries {
         let name = name_bytes(&entry.file_name());
         let kind = entry.file_type()?;
         let child = entry.path();
-        if kind.is_dir() {
+        if kind.is_symlink() {
+            report.skipped_symlinks += 1;
+        } else if kind.is_dir() {
             let id = db.create_folder(parent, &name);
-            load_into(db, id, &child)?;
+            report.folders += 1;
+            load_into(db, id, &child, report)?;
         } else if kind.is_file() {
             let content = fs::read(&child)?;
             if !is_valid_text(&content) {
-                return Err(invalid(format!("{}: not UTF-8 text", child.display())));
+                report.skipped_not_text += 1;
+                continue;
             }
+            report.files += 1;
+            report.bytes += content.len();
             db.create_file(parent, &name, content);
         } else {
-            return Err(invalid(format!("{}: not a regular file or folder", child.display())));
+            report.skipped_other += 1;
         }
     }
     Ok(())
