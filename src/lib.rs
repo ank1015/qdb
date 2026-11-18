@@ -15,6 +15,8 @@ pub mod bytes;
 mod cmd;
 pub mod engine;
 pub mod glob;
+mod index;
+pub mod query;
 pub mod regex;
 pub mod scan;
 pub mod shell;

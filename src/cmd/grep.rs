@@ -8,7 +8,7 @@ use crate::bytes::{count_newlines, memchr, push_decimal};
 use crate::engine::{Filter, Input, Io, Prepared, Runner};
 use crate::regex::{Flavor, Regex, Syntax};
 use crate::scan::Searcher;
-use crate::tree::{Db, NodeId};
+use crate::tree::{Candidate, Candidates, Db, NodeId, Shortlist};
 use crate::util::lossy;
 
 #[derive(Clone, Copy)]
@@ -206,10 +206,10 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         let implicit_dot = files.is_empty() && opts.recursive;
         let single_dir = files.len() == 1 && db.resolve(&files[0]).is_ok_and(|id| db.is_dir(id));
         let with_filename = files.len() > 1 || opts.recursive && (implicit_dot || single_dir);
-        let mut run = Run { opts, searcher, with_filename, selected: false, error: false, line: Vec::new() };
+        let mut run = Run { opts, searcher, with_filename, selected: false, error: false, line: Vec::new(), only: None, probe: None, top: (db.root(), 0), rest: None };
         if implicit_dot {
             let mut path = Vec::new();
-            run.walk(db, io, db.root(), &mut path);
+            run.tree(db, io, db.root(), &mut path);
         } else if files.is_empty() {
             let data = io.take_stdin();
             run.search(io, b"(standard input)", data, None);
@@ -246,7 +246,7 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                     if base != b"/" {
                         base.push(b'/');
                     }
-                    run.walk(db, io, id, &mut base);
+                    run.tree(db, io, id, &mut base);
                 }
                 Ok(id) => run.search(io, f, db.content(id), Some(id)),
             }
@@ -270,16 +270,98 @@ struct Run {
     error: bool,
     /// Scratch for putting an output line together.
     line: Vec<u8>,
+    /// During a walk: which of the files can have a match.
+    only: Option<Only>,
+    /// During a walk that has not asked storage yet: how many more bytes
+    /// to read before asking.
+    probe: Option<usize>,
+    /// The folder being searched, and how much of the path names it.
+    top: (NodeId, usize),
+    /// Set to end a walk: the files still to read, from the given place.
+    rest: Option<(Vec<Candidate>, usize)>,
+}
+
+enum Only {
+    /// These, in walk order; and how many of them the walk has reached.
+    Listed(Vec<Candidate>, usize),
+    /// Those that pass.
+    Passing(Shortlist),
 }
 
 impl Run {
+    /// Search the files under a folder; the output is what reading every
+    /// file in order would give.
+    ///
+    /// Storage can say which files can match, and that answer costs
+    /// something to work out. So the search starts by simply reading
+    /// files, which is all a command like `grep -rn x . | head -n 1` may
+    /// ever need, and asks storage once it has read about as much as the
+    /// answer costs. From there on only the files that can match are read.
+    fn tree(&mut self, db: &Db, io: &mut Io, dir: NodeId, path: &mut Vec<u8>) {
+        // With -v a file is selected for the lines that do not match, so
+        // what it must contain says nothing.
+        self.probe = if self.opts.invert { None } else { db.candidates_cost(self.searcher.query()) };
+        self.top = (dir, path.len());
+        self.walk(db, io, dir, path);
+        self.probe = None;
+        self.only = None;
+        // The walk stops early when what is left is a short list of files.
+        if let Some((files, from)) = self.rest.take() {
+            let base = path.len();
+            for file in &files[from..] {
+                if io.stopped() {
+                    return;
+                }
+                path.extend_from_slice(&file.path);
+                self.search(io, path, db.content(file.id), Some(file.id));
+                path.truncate(base);
+            }
+        }
+    }
+
+    /// Ask storage which files can match, part of the way through a walk:
+    /// `path` is the file the walk has reached and not yet read.
+    fn consult(&mut self, db: &Db, io: &mut Io, path: &[u8]) {
+        let o = self.opts;
+        let (dir, prefix) = self.top;
+        let here = &path[prefix..];
+        let order = |a: &[u8], b: &[u8]| a.split(|c| *c == b'/').cmp(b.split(|c| *c == b'/'));
+        let mut files = match db.candidates(dir, self.searcher.query()) {
+            Candidates::All => return,
+            Candidates::Among(set) => {
+                self.only = Some(Only::Passing(set));
+                return;
+            }
+            Candidates::Files(files) => files,
+        };
+        let counting = o.count && !o.list;
+        // Writing into a file that is being searched is an error whatever
+        // the file holds, so that file is always looked at.
+        if let (Some(out), false) = (io.out_file, counting) {
+            if let Some(rel) = db.path_below(dir, out) {
+                if let Err(at) = files.binary_search_by(|c| order(&c.path, &rel)) {
+                    files.insert(at, Candidate { id: out, path: rel });
+                }
+            }
+        }
+        // The candidates the walk has not passed yet.
+        let from = files.partition_point(|c| order(&c.path, here).is_lt());
+        if counting {
+            // Every file gets a line, so every file is still visited, but
+            // only the candidates are read.
+            self.only = Some(Only::Listed(files, from));
+        } else {
+            self.rest = Some((files, from));
+        }
+    }
+
     /// Search every file under a folder, depth first in byte order.
     /// `path` is what goes in front of each child's name; it is restored
     /// before returning.
     fn walk(&mut self, db: &Db, io: &mut Io, dir: NodeId, path: &mut Vec<u8>) {
         let base = path.len();
         for (name, child) in db.children(dir) {
-            if io.stopped() {
+            if io.stopped() || self.rest.is_some() {
                 return;
             }
             path.extend_from_slice(name);
@@ -287,7 +369,40 @@ impl Run {
                 path.push(b'/');
                 self.walk(db, io, *child, path);
             } else {
-                self.search(io, path, db.content(*child), Some(*child));
+                if let Some(budget) = self.probe {
+                    // A file costs its bytes, and a little for the visit.
+                    let cost = db.content(*child).len() + 256;
+                    if budget >= cost {
+                        self.probe = Some(budget - cost);
+                    } else {
+                        self.probe = None;
+                        self.consult(db, io, path);
+                        if self.rest.is_some() {
+                            path.truncate(base);
+                            return;
+                        }
+                    }
+                }
+                let o = self.opts;
+                let candidate = match &mut self.only {
+                    None => true,
+                    Some(Only::Listed(files, reached)) => {
+                        let next = files.get(*reached).is_some_and(|f| f.id == *child);
+                        *reached += next as usize;
+                        next
+                    }
+                    Some(Only::Passing(filter)) => db.passes(filter, *child),
+                };
+                if candidate {
+                    self.search(io, path, db.content(*child), Some(*child));
+                } else if o.count && !o.list {
+                    // No line of it matches, and it still gets its count.
+                    self.search(io, path, b"", Some(*child));
+                } else if io.out_file == Some(*child) && !o.list {
+                    // Writing into a file that is being searched is an
+                    // error whatever the file holds.
+                    self.search(io, path, db.content(*child), Some(*child));
+                }
             }
             path.truncate(base);
         }

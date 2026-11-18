@@ -67,6 +67,22 @@ unsafe impl GlobalAlloc for Counting {
         LIVE.store(LIVE.load(Relaxed).wrapping_sub(layout.size()), Relaxed);
     }
 
+    // Without these the default versions would be used, which allocate
+    // afresh and copy: slower than the allocator the engine really runs
+    // on, and the times would not be the engine's.
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let p = System.alloc_zeroed(layout);
+        if !p.is_null() {
+            let live = LIVE.load(Relaxed) + layout.size();
+            LIVE.store(live, Relaxed);
+            if live > PEAK.load(Relaxed) {
+                PEAK.store(live, Relaxed);
+            }
+        }
+        p
+    }
+
+
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         let p = System.realloc(ptr, layout, new_size);
         if !p.is_null() {
@@ -306,12 +322,52 @@ struct EngineRun {
     stderr: Vec<u8>,
 }
 
-/// Anything the engine needs after loading, such as building its index.
-fn engine_setup(_db: &mut Db, _opts: &Options) {}
+/// Load the dataset into the engine, building the search index unless
+/// it is switched off. Returns the time to read the files and the time
+/// to read them and build the index.
+fn engine_load(root: &Path, opts: &Options) -> Result<(Db, store::LoadReport, Duration, Duration), String> {
+    let (db, report) = store::load_dir_with(root, opts.index).map_err(|e| e.to_string())?;
+    let read = Duration::from_micros(report.read_micros);
+    let total = read + Duration::from_micros(report.index_micros.unwrap_or(0));
+    Ok((db, report, read, total))
+}
 
 /// Facts about the engine's state for the results, as key and value.
-fn engine_facts(_db: &Db) -> Vec<(String, String)> {
-    Vec::new()
+fn engine_facts(db: &Db) -> Vec<(String, String)> {
+    let s = match db.index_stats() {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    let lengths: Vec<String> = s
+        .lists_by_length
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| **n > 0)
+        .map(|(i, n)| if i == 0 { format!("1:{}", n) } else { format!("{}-{}:{}", (1usize << (i - 1)) + 1, 1usize << i, n) })
+        .collect();
+    let fact = |k: &str, v: String| (format!("index_{}", k), v);
+    vec![
+        fact("bytes", s.total_bytes().to_string()),
+        fact("table_bytes", s.table_bytes.to_string()),
+        fact("list_bytes", s.list_bytes.to_string()),
+        fact("document_bytes", s.document_bytes.to_string()),
+        fact("posting_bytes", s.posting_bytes.to_string()),
+        fact("trigrams", s.trigrams.to_string()),
+        fact("postings", s.postings.to_string()),
+        fact("stale_postings", s.stale_postings.to_string()),
+        fact("live_documents", s.live_documents.to_string()),
+        fact("documents_ever", s.documents_ever.to_string()),
+        fact("lists_by_length", lengths.join(" ")),
+        fact("top100_posting_bytes", s.top_list_bytes[0].to_string()),
+        fact("top1000_posting_bytes", s.top_list_bytes[1].to_string()),
+        fact("top10000_posting_bytes", s.top_list_bytes[2].to_string()),
+    ]
+}
+
+/// The index's running totals of work: documents added, documents
+/// retired, postings added, bytes of lists rewritten, rebuilds.
+fn engine_work(db: &Db) -> Option<[u64; 5]> {
+    db.index_work().map(|w| [w.documents_added, w.documents_retired, w.postings_added, w.bytes_swept, w.rebuilds])
 }
 
 /// Counts output and throws it away.
@@ -398,18 +454,96 @@ fn real_datasets() -> Vec<RealDataset> {
 
 /// Run a command line with the real tools: bash in the C locale, in
 /// `root`, no standard input, output captured through a pipe.
-fn run_real(root: &Path, command: &str) -> (Duration, std::process::Output) {
-    let t = Instant::now();
-    let out = Command::new("bash")
-        .args(["--noprofile", "--norc", "-c", command])
-        .current_dir(root)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .output()
-        .expect("cannot run bash");
-    (t.elapsed(), out)
+/// What a real command produced.
+struct RealOutput {
+    code: i32,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+/// Run a command on the real tools: bash, in the dataset's folder, with
+/// its output captured through pipes. The time is from starting bash to
+/// its exit with all output read.
+///
+/// The command is started by a small helper process, not by this one.
+/// This process holds the whole dataset in memory, and starting a child
+/// from a process that large costs time that would be charged to the
+/// real tools; it also leaves this process's memory marked to be copied
+/// on the next write, which would be charged to the engine.
+fn run_real(root: &Path, command: &str) -> (Duration, RealOutput) {
+    use std::io::{Read, Write};
+    static HELPER: std::sync::Mutex<Option<(std::process::ChildStdin, std::process::ChildStdout)>> = std::sync::Mutex::new(None);
+    let mut helper = HELPER.lock().unwrap();
+    if helper.is_none() {
+        let exe = std::env::current_exe().expect("own path");
+        let mut child = Command::new(exe).arg("--helper").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("starting the helper");
+        *helper = Some((child.stdin.take().unwrap(), child.stdout.take().unwrap()));
+    }
+    let (to, from) = helper.as_mut().unwrap();
+    let root = root.to_string_lossy();
+    let mut request = Vec::new();
+    for part in [root.as_bytes(), command.as_bytes()] {
+        request.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        request.extend_from_slice(part);
+    }
+    to.write_all(&request).and_then(|_| to.flush()).expect("writing to the helper");
+    let number = |from: &mut std::process::ChildStdout| {
+        let mut b = [0u8; 8];
+        from.read_exact(&mut b).expect("reading from the helper");
+        u64::from_le_bytes(b)
+    };
+    let nanos = number(from);
+    let code = number(from) as i64 as i32;
+    let read = |from: &mut std::process::ChildStdout| {
+        let mut data = vec![0u8; number(from) as usize];
+        from.read_exact(&mut data).expect("reading from the helper");
+        data
+    };
+    let stdout = read(from);
+    let stderr = read(from);
+    (Duration::from_nanos(nanos), RealOutput { code, stdout, stderr })
+}
+
+/// The helper process: runs each command it is sent and sends back the
+/// time, exit status and output. Ends when its input does.
+fn helper() {
+    use std::io::{Read, Write};
+    let mut input = std::io::stdin().lock();
+    let mut output = std::io::stdout().lock();
+    loop {
+        let mut field = || -> Option<Vec<u8>> {
+            let mut b = [0u8; 8];
+            input.read_exact(&mut b).ok()?;
+            let mut data = vec![0u8; u64::from_le_bytes(b) as usize];
+            input.read_exact(&mut data).ok()?;
+            Some(data)
+        };
+        let (root, command) = match (field(), field()) {
+            (Some(r), Some(c)) => (String::from_utf8_lossy(&r).into_owned(), String::from_utf8_lossy(&c).into_owned()),
+            _ => return,
+        };
+        let t = Instant::now();
+        let out = Command::new("bash")
+            .args(["--noprofile", "--norc", "-c", &command])
+            .current_dir(&root)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("LC_ALL", "C")
+            .stdin(Stdio::null())
+            .output()
+            .expect("cannot run bash");
+        let nanos = t.elapsed().as_nanos() as u64;
+        let mut reply = Vec::new();
+        reply.extend_from_slice(&nanos.to_le_bytes());
+        reply.extend_from_slice(&(out.status.code().unwrap_or(-1) as i64 as u64).to_le_bytes());
+        for part in [&out.stdout, &out.stderr] {
+            reply.extend_from_slice(&(part.len() as u64).to_le_bytes());
+            reply.extend_from_slice(part);
+        }
+        if output.write_all(&reply).and_then(|_| output.flush()).is_err() {
+            return;
+        }
+    }
 }
 
 fn shell_quote(arg: &[u8]) -> String {
@@ -771,6 +905,9 @@ struct Row {
     out_bytes: usize,
     peak_bytes: usize,
     agree: String,
+    /// For a command that changes data with the index on: what the index
+    /// did for it.
+    index_work: String,
 }
 
 fn csv_field(s: &str) -> String {
@@ -846,11 +983,10 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
 
     let terms_path = PathBuf::from("bench/terms").join(format!("{}.txt", name));
     let live_before = LIVE.load(Relaxed);
-    let t = Instant::now();
-    let (mut db, report) = store::load_dir(&root).map_err(|e| e.to_string())?;
-    let load = t.elapsed();
-    engine_setup(&mut db, opts);
-    let load_with_index = t.elapsed();
+    // Start the helper that runs the real tools while this process is
+    // still small.
+    run_real(&root, "true");
+    let (mut db, report, load, load_with_index) = engine_load(&root, opts)?;
     let heap_after_load = LIVE.load(Relaxed) - live_before;
     let rss_after_load = resident_bytes();
     eprintln!("{}: {} files, {} folders, {:.1} MB, loaded in {} ms", name, report.files, report.folders, report.bytes as f64 / 1e6, ms(millis(load_with_index)));
@@ -905,7 +1041,19 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         };
 
         // The engine.
+        let work_before = engine_work(&db);
         let first = engine_run(&mut db, &command, true);
+        let index_work = match (work_before, engine_work(&db)) {
+            (Some(b), Some(a)) if *mutating => format!(
+                "documents +{} -{}; postings +{}; list bytes rewritten {}; rebuilds {}",
+                a[0].wrapping_sub(b[0]),
+                a[1].wrapping_sub(b[1]),
+                a[2].wrapping_sub(b[2]),
+                a[3].wrapping_sub(b[3]),
+                a[4] - b[4]
+            ),
+            _ => String::new(),
+        };
         let mut engine_times = vec![first.time];
         let mut peak = first.peak;
         if !mutating {
@@ -916,7 +1064,7 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
             }
         }
 
-        let real_code = real.status.code().unwrap_or(-1);
+        let real_code = real.code;
         let agree = if real_code != first.code {
             format!("NO: exit status, real {}, engine {}", real_code, first.code)
         } else if order_dependent(&command) {
@@ -943,6 +1091,7 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
             out_bytes: first.out_bytes,
             peak_bytes: peak,
             agree,
+            index_work,
         };
         eprintln!("  {:>10} gnu {:>10} rg {:>10} engine {:>10} peak  {}  {}", ms(row.gnu_ms), ms(row.rg_ms), ms(row.engine_ms), size(row.peak_bytes), row.command, if row.agree == "yes" { "" } else { &row.agree });
         rows.push(row);
@@ -954,10 +1103,10 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
 
     let dir = opts.out.join(name);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let mut csv = String::from("command,kind,gnu_ms,rg_ms,engine_ms,output_bytes,peak_bytes,agree\n");
+    let mut csv = String::from("command,kind,gnu_ms,rg_ms,engine_ms,output_bytes,peak_bytes,agree,index_work\n");
     for r in &rows {
         let rg = if r.rg_ms < 0.0 { String::new() } else { format!("{:.4}", r.rg_ms) };
-        let _ = writeln!(csv, "{},{},{:.4},{},{:.4},{},{},{}", csv_field(&r.command), r.kind, r.gnu_ms, rg, r.engine_ms, r.out_bytes, r.peak_bytes, csv_field(&r.agree));
+        let _ = writeln!(csv, "{},{},{:.4},{},{:.4},{},{},{},{}", csv_field(&r.command), r.kind, r.gnu_ms, rg, r.engine_ms, r.out_bytes, r.peak_bytes, csv_field(&r.agree), csv_field(&r.index_work));
     }
     let mut meta = String::new();
     let _ = writeln!(meta, "source={}", source);
@@ -967,6 +1116,7 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
     let _ = writeln!(meta, "index={}", if opts.index { "on" } else { "off" });
     let _ = writeln!(meta, "load_ms={:.1}", millis(load));
     let _ = writeln!(meta, "load_with_index_ms={:.1}", millis(load_with_index));
+    let _ = writeln!(meta, "index_build_ms={:.1}", millis(load_with_index - load));
     let _ = writeln!(meta, "heap_after_load={}", heap_after_load);
     let _ = writeln!(meta, "rss_after_load={}", rss_after_load);
     let _ = writeln!(meta, "startup_ms={:.3}", millis(startup));
@@ -1057,9 +1207,45 @@ fn report_dataset(name: &str, opts: &Options) -> Result<(), String> {
         );
     }
     for (_, heading, s) in &runs {
-        let facts: Vec<String> = s.meta.iter().filter(|(k, _)| k.starts_with("index_")).map(|(k, v)| format!("{} = {}", k, v)).collect();
-        if !facts.is_empty() {
-            let _ = writeln!(md, "\nIndex facts ({}): {}.", heading, facts.join("; "));
+        if !s.meta.contains_key("index_trigrams") {
+            continue;
+        }
+        let text = num(s, "bytes");
+        let posting = num(s, "index_posting_bytes");
+        let share = |k: &str| 100.0 * num(s, k) / posting.max(1.0);
+        let _ = writeln!(md, "\n## The index ({})\n", heading);
+        let _ = writeln!(md, "- Built in {} ms while loading.", ms(num(s, "index_build_ms")));
+        let _ = writeln!(
+            md,
+            "- Size: {} in memory, {:.1}% of the text ({} table, {} lists, {} document table). The posting data itself is {}.",
+            size(num(s, "index_bytes") as usize),
+            100.0 * num(s, "index_bytes") / text.max(1.0),
+            size(num(s, "index_table_bytes") as usize),
+            size(num(s, "index_list_bytes") as usize),
+            size(num(s, "index_document_bytes") as usize),
+            size(posting as usize)
+        );
+        let _ = writeln!(md, "- {} distinct trigrams, {} postings, {} documents.", get(s, "index_trigrams"), get(s, "index_postings"), get(s, "index_live_documents"));
+        let _ = writeln!(
+            md,
+            "- Share of posting data in the longest lists: top 100 trigrams {:.1}%, top 1,000 {:.1}%, top 10,000 {:.1}%.",
+            share("index_top100_posting_bytes"),
+            share("index_top1000_posting_bytes"),
+            share("index_top10000_posting_bytes")
+        );
+        let _ = writeln!(md, "- These figures are taken after the command list has run, so they include its writes.");
+        let _ = writeln!(md, "\n| Files in a trigram's list | Trigrams |\n|---:|---:|");
+        for part in get(s, "index_lists_by_length").split_whitespace() {
+            if let Some((range, n)) = part.split_once(':') {
+                let _ = writeln!(md, "| {} | {} |", range, n);
+            }
+        }
+        let work: Vec<&Vec<String>> = s.rows.iter().filter(|r| r.len() > 8 && !r[8].is_empty()).collect();
+        if !work.is_empty() {
+            let _ = writeln!(md, "\nIndex work per command that changes data:\n\n| Command | Index work |\n|---|---|");
+            for r in work {
+                let _ = writeln!(md, "| `{}` | {} |", r[0].replace('|', "\\|"), r[8]);
+            }
         }
     }
 
@@ -1120,6 +1306,10 @@ fn report_dataset(name: &str, opts: &Options) -> Result<(), String> {
 }
 
 fn run() -> Result<bool, String> {
+    if std::env::args().nth(1).as_deref() == Some("--helper") {
+        helper();
+        return Ok(true);
+    }
     let mut dataset = String::from("small");
     let mut dir: Option<PathBuf> = None;
     let mut export: Option<PathBuf> = None;
@@ -1173,7 +1363,7 @@ fn run() -> Result<bool, String> {
         let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dir".into());
         let source = dir.display().to_string();
         if !prepared(&name, &source, &opts) {
-            let (db, _) = store::load_dir(&dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
+            let (db, _) = store::load_dir_with(&dir, false).map_err(|e| format!("{}: {}", dir.display(), e))?;
             prepare(&name, &source, &db, &opts)?;
             return run_again();
         }
@@ -1183,7 +1373,7 @@ fn run() -> Result<bool, String> {
         let path = data.join(&real.folder);
         let skipped_note = PathBuf::from("bench/terms").join(format!("{}.skipped", real.name));
         if !prepared(&real.name, &real.source, &opts) {
-            let (db, report) = store::load_dir(&path).map_err(|e| format!("{}: {} (see bench/fetch.sh)", path.display(), e))?;
+            let (db, report) = store::load_dir_with(&path, false).map_err(|e| format!("{}: {} (see bench/fetch.sh)", path.display(), e))?;
             let note = format!(
                 "Skipped on import: {} symbolic links, {} files that are not valid text, {} other",
                 report.skipped_symlinks, report.skipped_not_text, report.skipped_other

@@ -34,6 +34,10 @@ pub struct LoadReport {
     pub skipped_not_text: usize,
     /// Devices, sockets and other things that are neither file nor folder.
     pub skipped_other: usize,
+    /// Time spent reading the tree, in microseconds.
+    pub read_micros: u64,
+    /// Time spent building the search index, or None when it is off.
+    pub index_micros: Option<u64>,
 }
 
 impl LoadReport {
@@ -46,10 +50,23 @@ impl LoadReport {
 /// and anything that is neither a file nor a folder are skipped and
 /// counted; the data model has no place for them.
 pub fn load_dir(path: &Path) -> io::Result<(Db, LoadReport)> {
-    let mut db = Db::new();
+    load_dir_with(path, true)
+}
+
+/// `load_dir`, with the search index built (`index` true) or left off.
+/// The index is built after the files are read, and timed on its own.
+pub fn load_dir_with(path: &Path, index: bool) -> io::Result<(Db, LoadReport)> {
+    let mut db = Db::without_index();
     let mut report = LoadReport::default();
     let root = db.root();
+    let start = std::time::Instant::now();
     load_into(&mut db, root, path, &mut report)?;
+    report.read_micros = start.elapsed().as_micros() as u64;
+    if index {
+        let start = std::time::Instant::now();
+        db.set_index(true);
+        report.index_micros = Some(start.elapsed().as_micros() as u64);
+    }
     Ok((db, report))
 }
 

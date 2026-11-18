@@ -11,7 +11,11 @@
 //! properties, so a move keeps the node. No metadata is stored: size and line
 //! count are derived from content.
 
+use crate::index::Index;
+pub use crate::index::{IndexStats, IndexWork};
+use crate::query::Query;
 use std::collections::{BTreeMap, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 
 pub type NodeId = u64;
 
@@ -29,6 +33,62 @@ pub struct Node {
     pub name: Vec<u8>,
     pub parent: Option<NodeId>,
     pub kind: NodeKind,
+    /// Bookkeeping, not part of the data model. For a folder, how many
+    /// files lie anywhere beneath it. For a file, the number its content
+    /// has in the index (0 for none).
+    aux: u32,
+}
+
+/// Node ids are handed out in sequence, so one multiplication spreads
+/// them well enough for a hash table.
+#[derive(Default, Clone, Copy)]
+pub struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0 ^ *b as u64).wrapping_mul(0x100_0000_01b3);
+        }
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = n.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+type NodeMap = HashMap<NodeId, Node, BuildHasherDefault<IdHasher>>;
+
+/// A file that may contain a match, with its path below the folder that
+/// was asked about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidate {
+    pub id: NodeId,
+    pub path: Vec<u8>,
+}
+
+/// The answer to "which files under this folder can match this query?"
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Candidates {
+    /// Any of them: search every file under the folder.
+    All,
+    /// Only these, listed in the order a walk of the folder visits them
+    /// (depth first, names in byte order). The list may hold files that
+    /// turn out not to match; it never lacks one that does.
+    Files(Vec<Candidate>),
+    /// A good share of them: walk the folder and ask `Db::passes` of each
+    /// file. A file that does not pass cannot match.
+    Among(Shortlist),
+}
+
+/// A set of files that may contain a match. Only `Db::passes` reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shortlist {
+    /// Document numbers of the index, ascending.
+    docs: Vec<u32>,
 }
 
 /// The errors a tree operation can produce, named after the errno a
@@ -58,9 +118,12 @@ impl Errno {
 
 #[derive(Debug, Clone)]
 pub struct Db {
-    nodes: HashMap<NodeId, Node>,
+    nodes: NodeMap,
     root: NodeId,
     next_id: NodeId,
+    /// Derived from file content and kept current by every change to it.
+    /// None when indexing is switched off.
+    index: Option<Index>,
 }
 
 impl Default for Db {
@@ -80,13 +143,193 @@ pub fn is_valid_name(name: &[u8]) -> bool {
 }
 
 impl Db {
+    /// An empty database, with the search index on.
     pub fn new() -> Db {
-        let mut nodes = HashMap::new();
+        let mut nodes = NodeMap::default();
         nodes.insert(
             0,
-            Node { id: 0, name: Vec::new(), parent: None, kind: NodeKind::Folder(BTreeMap::new()) },
+            Node { id: 0, name: Vec::new(), parent: None, kind: NodeKind::Folder(BTreeMap::new()), aux: 0 },
         );
-        Db { nodes, root: 0, next_id: 1 }
+        Db { nodes, root: 0, next_id: 1, index: Some(Index::new()) }
+    }
+
+    /// An empty database that answers every search by scanning.
+    pub fn without_index() -> Db {
+        let mut db = Db::new();
+        db.index = None;
+        db
+    }
+
+    // ------------------------------------------------------ the index
+
+    pub fn has_index(&self) -> bool {
+        self.index.is_some()
+    }
+
+    /// Switch the search index on or off. Switching it on builds it from
+    /// the files; switching it off throws it away. Results never depend
+    /// on it, only speed.
+    pub fn set_index(&mut self, on: bool) {
+        if on {
+            self.rebuild_index();
+        } else if self.index.take().is_some() {
+            for node in self.nodes.values_mut() {
+                if matches!(node.kind, NodeKind::File(_)) {
+                    node.aux = 0;
+                }
+            }
+        }
+    }
+
+    /// Build the index again from the files, in the order a walk visits
+    /// them so that neighbouring files get neighbouring numbers.
+    pub fn rebuild_index(&mut self) {
+        let mut order = Vec::new();
+        let mut stack = vec![self.root];
+        while let Some(id) = stack.pop() {
+            match &self.nodes[&id].kind {
+                NodeKind::File(_) => order.push(id),
+                NodeKind::Folder(children) => stack.extend(children.values().rev().copied()),
+            }
+        }
+        let mut index = Index::new();
+        index.begin_bulk();
+        for id in order {
+            let node = self.nodes.get_mut(&id).unwrap();
+            if let NodeKind::File(content) = &node.kind {
+                node.aux = index.add(id, content);
+            }
+        }
+        index.end_bulk();
+        // The totals of work carry on; building the index for the first
+        // time is not a rebuild.
+        if let Some(old) = &self.index {
+            let mut work = old.work();
+            work.rebuilds += 1;
+            index.set_work(work);
+        }
+        self.index = Some(index);
+    }
+
+    /// Facts about the index, or None when it is off.
+    pub fn index_stats(&self) -> Option<IndexStats> {
+        self.index.as_ref().map(|i| i.stats())
+    }
+
+    /// Running totals of index work, or None when it is off.
+    pub fn index_work(&self) -> Option<IndexWork> {
+        self.index.as_ref().map(|i| i.work())
+    }
+
+    /// What asking `candidates` would cost, as the number of bytes of file
+    /// content that could be searched in the same time; None when the
+    /// answer would be "any of them" and costs nothing. A command that may
+    /// be stopped early can read that much before it asks.
+    pub fn candidates_cost(&self, query: &Query) -> Option<usize> {
+        // Reading a byte of a list takes about as long as searching
+        // sixteen bytes of text.
+        Some(self.index.as_ref()?.cost(query)?.saturating_mul(16))
+    }
+
+    /// Which files under `folder` can match `query`? This is the one
+    /// question commands ask of the index; how it is answered stays in
+    /// here.
+    pub fn candidates(&self, folder: NodeId, query: &Query) -> Candidates {
+        let index = match &self.index {
+            Some(i) => i,
+            None => return Candidates::All,
+        };
+        let docs = match index.docs(query) {
+            Some(d) => d,
+            None => return Candidates::All,
+        };
+        let below = self.nodes[&folder].aux as usize;
+        if docs.len() * 8 >= below {
+            // Many candidates for the size of this folder: a list of them
+            // would cost a walk of the folder to put in order, so leave
+            // the walk to the caller.
+            return Candidates::Among(Shortlist { docs });
+        }
+        // Few candidates: place each one by following its parents up,
+        // without looking at the rest of the folder.
+        let mut placed: Vec<(Vec<&[u8]>, NodeId)> = Vec::new();
+        for id in docs.into_iter().filter_map(|d| index.file_of(d)) {
+            let mut names = Vec::new();
+            let mut cur = id;
+            let inside = loop {
+                if cur == folder {
+                    break true;
+                }
+                let node = &self.nodes[&cur];
+                match node.parent {
+                    Some(p) => {
+                        names.push(node.name.as_slice());
+                        cur = p;
+                    }
+                    None => break false,
+                }
+            };
+            if inside {
+                names.reverse();
+                placed.push((names, id));
+            }
+        }
+        // Comparing name by name gives the order of a walk.
+        placed.sort_unstable();
+        Candidates::Files(placed.into_iter().map(|(names, id)| Candidate { id, path: names.join(&b'/') }).collect())
+    }
+
+    /// For checks: every file the index holds as able to satisfy the
+    /// query, ascending, wherever it is in the tree. None when the index
+    /// is off or the query says nothing.
+    pub fn index_answer(&self, query: &Query) -> Option<Vec<NodeId>> {
+        self.index.as_ref()?.files(query)
+    }
+
+    /// Whether a file is in the set a `Candidates::Among` stands for.
+    pub fn passes(&self, filter: &Shortlist, file: NodeId) -> bool {
+        // A file's `aux` is its document number, 0 if it has none.
+        let doc = self.nodes[&file].aux;
+        doc != 0 && filter.docs.binary_search(&doc).is_ok()
+    }
+
+    /// The path of a file from a folder above it, or None when the file
+    /// is not under that folder.
+    pub fn path_below(&self, folder: NodeId, id: NodeId) -> Option<Vec<u8>> {
+        let mut names = Vec::new();
+        let mut cur = id;
+        while cur != folder {
+            let node = self.nodes.get(&cur)?;
+            names.push(node.name.as_slice());
+            cur = node.parent?;
+        }
+        if names.is_empty() {
+            return None;
+        }
+        names.reverse();
+        Some(names.join(&b'/'))
+    }
+
+    /// How many files lie anywhere beneath a folder.
+    pub fn files_below(&self, folder: NodeId) -> usize {
+        self.nodes[&folder].aux as usize
+    }
+
+    /// Add to the file count of a folder and of every folder above it.
+    fn count_files(&mut self, mut folder: Option<NodeId>, delta: i64) {
+        while let Some(id) = folder {
+            let node = self.nodes.get_mut(&id).unwrap();
+            node.aux = (node.aux as i64 + delta) as u32;
+            folder = node.parent;
+        }
+    }
+
+    /// After a change: start the index afresh if it has used up too many
+    /// document numbers.
+    fn index_upkeep(&mut self) {
+        if self.index.as_ref().is_some_and(|i| i.wants_rebuild()) {
+            self.rebuild_index();
+        }
     }
 
     pub fn root(&self) -> NodeId {
@@ -218,13 +461,22 @@ impl Db {
         assert!(is_valid_name(name), "invalid node name");
         let id = self.next_id;
         self.next_id += 1;
-        self.nodes.insert(id, Node { id, name: name.to_vec(), parent: Some(parent), kind });
+        let is_file = matches!(kind, NodeKind::File(_));
+        let aux = match (&kind, &mut self.index) {
+            (NodeKind::File(content), Some(index)) => index.add(id, content),
+            _ => 0,
+        };
+        self.nodes.insert(id, Node { id, name: name.to_vec(), parent: Some(parent), kind, aux });
         match &mut self.nodes.get_mut(&parent).unwrap().kind {
             NodeKind::Folder(c) => {
                 let old = c.insert(name.to_vec(), id);
                 assert!(old.is_none(), "duplicate name in folder");
             }
             NodeKind::File(_) => panic!("parent is a file"),
+        }
+        if is_file {
+            self.count_files(Some(parent), 1);
+            self.index_upkeep();
         }
         id
     }
@@ -242,10 +494,18 @@ impl Db {
     /// The caller must have checked the content with `is_valid_text`.
     pub fn set_content(&mut self, id: NodeId, content: Vec<u8>) {
         debug_assert!(is_valid_text(&content));
-        match &mut self.nodes.get_mut(&id).unwrap().kind {
-            NodeKind::File(c) => *c = content,
+        let node = self.nodes.get_mut(&id).unwrap();
+        match &mut node.kind {
+            NodeKind::File(c) => {
+                if let Some(index) = &mut self.index {
+                    index.retire(node.aux);
+                    node.aux = index.add(id, &content);
+                }
+                *c = content;
+            }
             NodeKind::Folder(_) => panic!("set_content() on a folder"),
         }
+        self.index_upkeep();
     }
 
     /// Remove a node and everything under it. The root cannot be removed.
@@ -258,14 +518,25 @@ impl Db {
         if let NodeKind::Folder(c) = &mut self.nodes.get_mut(&parent).unwrap().kind {
             c.remove(&name);
         }
+        let gone = match &self.nodes[&id].kind {
+            NodeKind::File(_) => 1,
+            NodeKind::Folder(_) => self.nodes[&id].aux as i64,
+        };
+        self.count_files(Some(parent), -gone);
         let mut stack = vec![id];
         while let Some(n) = stack.pop() {
             if let Some(node) = self.nodes.remove(&n) {
-                if let NodeKind::Folder(c) = node.kind {
-                    stack.extend(c.values().copied());
+                match node.kind {
+                    NodeKind::Folder(c) => stack.extend(c.values().copied()),
+                    NodeKind::File(_) => {
+                        if let Some(index) = &mut self.index {
+                            index.retire(node.aux);
+                        }
+                    }
                 }
             }
         }
+        self.index_upkeep();
     }
 
     /// Move a node to a new parent and name, keeping its id. The destination
@@ -292,6 +563,14 @@ impl Db {
         let n = self.nodes.get_mut(&id).unwrap();
         n.parent = Some(new_parent);
         n.name = new_name.to_vec();
+        // The index is keyed by node id, so a move costs it nothing; only
+        // the file counts of the folders on both sides change.
+        let moved = match n.kind {
+            NodeKind::File(_) => 1,
+            NodeKind::Folder(_) => n.aux as i64,
+        };
+        self.count_files(Some(old_parent), -moved);
+        self.count_files(Some(new_parent), moved);
         Ok(())
     }
 

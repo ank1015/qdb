@@ -16,6 +16,7 @@
 //! Nothing is split into lines or allocated until there is a candidate.
 
 use crate::bytes::{memchr, memrchr, Finder};
+use crate::query::Query;
 use crate::regex::{Dfa, Literals, MatchError, Regex};
 
 /// One or more fixed strings, searched for together.
@@ -87,6 +88,8 @@ enum Kind {
 /// A compiled search for the lines that match.
 pub struct Searcher {
     kind: Kind,
+    /// What a file must contain to have a matching line.
+    query: Query,
 }
 
 /// A filter that lets through more than one line in this many bytes, on
@@ -104,15 +107,16 @@ impl Searcher {
     pub fn fixed(strings: Vec<Vec<u8>>, ignore_case: bool) -> Searcher {
         let strings: Vec<Vec<u8>> = if ignore_case { strings.iter().map(|s| s.to_ascii_lowercase()).collect() } else { strings };
         if strings.iter().any(|s| s.is_empty()) {
-            return Searcher { kind: Kind::All };
+            return Searcher { kind: Kind::All, query: Query::All };
         }
+        let query = Query::any_string(&strings);
         if strings.len() <= 8 {
-            return Searcher { kind: Kind::Strings(Strings::new(&Literals { strings, fold: ignore_case })) };
+            return Searcher { kind: Kind::Strings(Strings::new(&Literals { strings, fold: ignore_case })), query };
         }
         // Many strings: one pass of a DFA beats one pass per string.
         match Regex::from_strings(&strings, ignore_case) {
-            Some(re) => Searcher::regex(vec![re]),
-            None => Searcher { kind: Kind::Strings(Strings::new(&Literals { strings, fold: ignore_case })) },
+            Some(re) => Searcher { query, ..Searcher::regex(vec![re]) },
+            None => Searcher { kind: Kind::Strings(Strings::new(&Literals { strings, fold: ignore_case })), query },
         }
     }
 
@@ -122,22 +126,39 @@ impl Searcher {
         let combined = match combined {
             Some(c) => c,
             // Several patterns, at least one with a back-reference.
-            None => return Searcher { kind: Kind::Regex { filter: None, dfa: None, regexes, candidates: 0, searched: 0 } },
+            None => {
+                let kind = Kind::Regex { filter: None, dfa: None, regexes, candidates: 0, searched: 0 };
+                return Searcher { kind, query: Query::All };
+            }
         };
         if let Some(lits) = combined.as_literals() {
             if lits.strings.iter().any(|s| s.is_empty()) {
-                return Searcher { kind: Kind::All };
+                return Searcher { kind: Kind::All, query: Query::All };
             }
             if lits.strings.len() <= 8 {
-                return Searcher { kind: Kind::Strings(Strings::new(&lits)) };
+                let query = Query::any_string(&lits.strings);
+                return Searcher { kind: Kind::Strings(Strings::new(&lits)), query };
             }
         }
-        let filter = combined
-            .required_literals()
-            .filter(|l| l.strings.len() <= 8 && l.strings.iter().all(|s| s.len() >= 2))
-            .map(|l| Strings::new(&l));
+        let required = combined.required_literals().filter(|l| l.strings.len() <= 8 && l.strings.iter().all(|s| s.len() >= 2));
         let dfa = Dfa::new(&combined);
-        Searcher { kind: Kind::Regex { filter, dfa, regexes: vec![combined], candidates: 0, searched: 0 } }
+        let query = match (&dfa, &required) {
+            (Some(_), _) => Query::or(regexes.iter().map(|re| re.trigram_query()).collect()),
+            // The backtracking matcher can give up on a line. So that a
+            // search reports that for the same files with and without an
+            // index, the index may rule out only the files the filter
+            // below would pass over without trying a line.
+            (None, Some(lits)) => Query::any_string(&lits.strings),
+            (None, None) => Query::All,
+        };
+        let filter = required.map(|l| Strings::new(&l));
+        Searcher { kind: Kind::Regex { filter, dfa, regexes: vec![combined], candidates: 0, searched: 0 }, query }
+    }
+
+    /// What a file must contain to have a matching line: the question to
+    /// put to `Db::candidates`.
+    pub fn query(&self) -> &Query {
+        &self.query
     }
 
     /// The first matching line that starts at or after `from`, as (start,

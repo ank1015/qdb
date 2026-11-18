@@ -17,6 +17,7 @@ use crate::glob::class_by_name;
 use std::cell::RefCell;
 
 mod dfa;
+mod trigram;
 pub use dfa::Dfa;
 
 pub const DUP_MAX: u32 = 32767;
