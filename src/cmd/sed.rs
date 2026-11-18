@@ -428,7 +428,7 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             // without reading it, read. The first files are simply read;
             // storage is asked once that has cost what its answer costs.
             let mut finder = Searcher::regex(vec![subst.re.clone()]);
-            let mut probe = if files.len() > 1 { db.candidates_cost(finder.query()) } else { None };
+            let mut probe = db.candidates_cost(finder.query());
             let mut only = None;
             for f in &files {
                 let id = match db.resolve(f) {
@@ -456,18 +456,48 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                 if only.as_ref().is_some_and(|set| !db.passes(set, id)) {
                     continue;
                 }
-                if let Ok(None) = finder.next_line(&db.content(id), 0) {
-                    continue;
-                }
+                // A piece at a time: pieces hold whole lines, so a
+                // piece with no line the pattern matches stays where it
+                // is, unread if storage can tell, and only the pieces
+                // that change are written.
+                let saved = db.save_pieces(id);
+                let mut at = 0;
+                let mut changed = false;
+                let mut failed = None;
                 let mut out = Vec::new();
-                if subst.apply_all(&db.content(id), &mut out).is_err() {
-                    io.err_line(format!("qdb: sed: {}: {}", lossy(f), too_complex));
+                for p in &saved {
+                    if only.as_ref().is_some_and(|set| !db.piece_passes(set, p)) {
+                        at += 1;
+                        continue;
+                    }
+                    out.clear();
+                    let rewrite = {
+                        let text = db.text_of(p);
+                        if let Ok(None) = finder.next_line(&text, 0) {
+                            false
+                        } else if subst.apply_all(&text, &mut out).is_err() {
+                            failed = Some(format!("qdb: sed: {}: {}", lossy(f), too_complex));
+                            break;
+                        } else if !is_valid_text(&out) {
+                            failed = Some(format!("qdb: sed: {}: result is not valid UTF-8 text, file left unchanged", lossy(f)));
+                            break;
+                        } else {
+                            out != *text
+                        }
+                    };
+                    if rewrite {
+                        at += db.replace_pieces(id, at, 1, &out);
+                        changed = true;
+                    } else {
+                        at += 1;
+                    }
+                }
+                if let Some(message) = failed {
+                    if changed {
+                        db.restore_pieces(id, saved);
+                    }
+                    io.err_line(message);
                     status = status.max(1);
-                } else if !is_valid_text(&out) {
-                    io.err_line(format!("qdb: sed: {}: result is not valid UTF-8 text, file left unchanged", lossy(f)));
-                    status = status.max(1);
-                } else {
-                    db.set_content(id, &out);
                 }
             }
             return status;
@@ -478,7 +508,6 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             if io.stopped() {
                 break;
             }
-            let held;
             let data: &[u8] = if f == b"-" {
                 io.take_stdin()
             } else {
@@ -494,8 +523,20 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                         return 4;
                     }
                     Ok(id) => {
-                        held = db.content(id);
-                        &held
+                        // A file is read a piece at a time.
+                        'file: for p in db.pieces(id) {
+                            for line in lines(&db.text_of(p)) {
+                                if joined.line(&subst, line, io).is_err() {
+                                    io.err_line(format!("qdb: sed: {}: {}", lossy(f), too_complex));
+                                    status = status.max(1);
+                                    break 'file;
+                                }
+                            }
+                            if io.stopped() {
+                                break;
+                            }
+                        }
+                        continue;
                     }
                 }
             };

@@ -65,6 +65,10 @@ fn run() -> Result<i32, String> {
             "--piece" => {
                 cfg.piece = value("--piece")?.parse().ok().filter(|n| *n >= 16 && *n <= 16 << 20).ok_or("--piece needs a number of bytes from 16 to 16777216")?
             }
+            // For tests: small values make new data files and saves of
+            // the tree frequent.
+            "--segment" => cfg.segment = value("--segment")?.parse().ok().filter(|n| *n >= 4096).ok_or("--segment needs a number of bytes, at least 4096")?,
+            "--checkpoint" => cfg.checkpoint = value("--checkpoint")?.parse().map_err(|_| "--checkpoint needs a number of bytes")?,
             "--no-index" => cfg.index = false,
             "--check" => check = true,
             "--stats" => stats = true,

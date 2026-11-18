@@ -694,6 +694,9 @@ impl Db {
                     break;
                 }
                 db.replay(ops).map_err(|e| format!("{}: damaged: {}", seg.name(), e))?;
+                // What was replayed is log that the next save of the
+                // tree will make unnecessary.
+                db.log_since += ops.len() as u64 + 16 + REC_HEADER;
                 db.seq += 1;
                 report.replayed += 1;
                 good_end = *end;
@@ -799,7 +802,19 @@ impl Db {
                         None
                     }
                 };
+                let active = db.active;
                 let seg = db.segs[id as usize].as_mut().unwrap();
+                let mut packed = packed;
+                if packed.as_ref().is_some_and(|p| id == active && p.ndocs as usize > seg.owners.len()) {
+                    // It covers pieces the data file no longer has: the
+                    // file was cut back below what the index was built
+                    // from. New pieces would take those numbers, so it
+                    // must go before anything is written.
+                    packed = None;
+                    db.vfs.remove(&disk::idx_name(id)).map_err(io)?;
+                    db.vfs.sync_dir().map_err(io)?;
+                    report.removed.push(format!("{} (covers more than its data file holds)", disk::idx_name(id)));
+                }
                 if let Some(p) = &packed {
                     seg.grow_owners(p.ndocs);
                     seg.indexed = p.ndocs;
@@ -1017,6 +1032,11 @@ impl Db {
         }
         if self.volatile {
             return Ok(());
+        }
+        // An index file must never cover content that is not on disk.
+        self.sync();
+        if let Some(e) = &self.failed {
+            return Err(e.clone());
         }
         let r = (|| {
             if self.cfg.index {
@@ -1261,6 +1281,102 @@ impl Db {
         self.splice(id, pre, old.len() - pre - suf, new);
         self.unveil(id);
         true
+    }
+
+    /// `set_content` for content that arrives in stretches: `next` fills
+    /// the buffer it is given with the next stretch and returns false
+    /// when there is no more. Memory in use stays at a few megabytes
+    /// (or one line, if a line is longer) whatever the size of the
+    /// content. As with `set_content`, the pieces at the start of the
+    /// file that the new content begins with are kept, and if the content
+    /// is what the file holds already, nothing is written and the answer
+    /// is false.
+    ///
+    /// The caller must know the content to be valid text.
+    pub fn set_content_stream(&mut self, id: NodeId, next: &mut dyn FnMut(&Db, &mut Vec<u8>) -> bool) -> bool {
+        let old = self.text(id).pieces.clone();
+        let mut buf: Vec<u8> = Vec::new();
+        // While the new content is what the file holds: `k` whole pieces
+        // and `within` bytes of the next have been matched.
+        let (mut k, mut within, mut pos) = (0usize, 0usize, 0usize);
+        let mut ended = false;
+        loop {
+            if pos == buf.len() {
+                buf.clear();
+                pos = 0;
+                if !next(&*self, &mut buf) {
+                    ended = true;
+                    break;
+                }
+                continue;
+            }
+            if k == old.len() {
+                break;
+            }
+            let text = self.text_of(&old[k]);
+            let n = (text.len() - within).min(buf.len() - pos);
+            if text[within..within + n] != buf[pos..pos + n] {
+                break;
+            }
+            within += n;
+            pos += n;
+            if within == text.len() {
+                k += 1;
+                within = 0;
+            }
+        }
+        if ended && k == old.len() {
+            self.unveil(id);
+            return false;
+        }
+        // Only a file's last piece may end without a newline: if the
+        // file's last piece does and more follows it now, it is written
+        // again with what follows.
+        if k == old.len() && k > 0 && !self.text_of(&old[k - 1]).ends_with(b"\n") {
+            k -= 1;
+            within = old[k].len as usize;
+        }
+        // From piece `k` on the file is written anew, starting with the
+        // part of that piece that was the same.
+        let mut pending: Vec<u8> = Vec::new();
+        if within > 0 {
+            pending.extend_from_slice(&self.text_of(&old[k])[..within]);
+        }
+        let mut new: Vec<Piece> = Vec::new();
+        const STRETCH: usize = 4 << 20;
+        while !ended {
+            pending.extend_from_slice(&buf[pos..]);
+            if pending.len() >= STRETCH {
+                // Whole lines go to the data file; the rest waits for
+                // its end.
+                if let Some(nl) = memchr::memrchr(b'\n', &pending) {
+                    new.extend(self.store(id, &pending[..nl + 1]));
+                    pending.drain(..nl + 1);
+                }
+            }
+            buf.clear();
+            pos = 0;
+            ended = !next(&*self, &mut buf);
+        }
+        new.extend(self.store(id, &pending));
+        self.splice(id, k, old.len() - k, new);
+        self.unveil(id);
+        true
+    }
+
+    /// Give a file the content of another, a piece at a time. False if
+    /// it held that already.
+    pub fn copy_content(&mut self, from: NodeId, to: NodeId) -> bool {
+        let pieces = self.pieces(from).to_vec();
+        let mut i = 0;
+        self.set_content_stream(to, &mut |db, buf| {
+            if i == pieces.len() {
+                return false;
+            }
+            buf.extend_from_slice(&db.text_of(&pieces[i]));
+            i += 1;
+            true
+        })
     }
 
     /// Add to the end of a file. What is written is what is added, plus
@@ -2142,6 +2258,10 @@ impl Db {
             }
             if self.volatile {
                 return Ok(());
+            }
+            self.sync();
+            if let Some(e) = &self.failed {
+                return Err(io_err(e.clone()));
             }
             if self.cfg.index {
                 self.index_backlog()?;

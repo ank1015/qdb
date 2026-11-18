@@ -268,7 +268,9 @@ impl Copy {
             }
             return self.copy_dir(db, io, src_id, src, dst, top_src, top_dst);
         }
-        let content = db.content(src_id).to_vec();
+        // A large file is copied a piece at a time.
+        let large = db.size(src_id) > 1 << 20;
+        let content = if large { Vec::new() } else { db.content(src_id).into_owned() };
         match db.resolve(dst) {
             Ok(d) if d == src_id => {
                 io.err_line(format!("cp: {} and {} are the same file", quote(src), quote(dst)));
@@ -279,7 +281,11 @@ impl Copy {
                 false
             }
             Ok(d) => {
-                db.set_content(d, &content);
+                if large {
+                    db.copy_content(src_id, d);
+                } else {
+                    db.set_content(d, &content);
+                }
                 true
             }
             Err(Errno::NoEnt) => {
@@ -287,7 +293,10 @@ impl Copy {
                     Err(Errno::NotDir)
                 } else {
                     db.resolve_parent(dst).map(|(parent, name)| {
-                        db.create_file(parent, &name, &content);
+                        let made = db.create_file(parent, &name, &content);
+                        if large {
+                            db.copy_content(src_id, made);
+                        }
                     })
                 };
                 if let Err(e) = made {

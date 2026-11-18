@@ -206,9 +206,10 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         let implicit_dot = files.is_empty() && opts.recursive;
         let single_dir = files.len() == 1 && db.resolve(&files[0]).is_ok_and(|id| db.is_dir(id));
         let with_filename = files.len() > 1 || opts.recursive && (implicit_dot || single_dir);
-        let mut run = Run { opts, searcher, with_filename, selected: false, error: false, line: Vec::new(), only: None, probe: None, top: (db.root(), 0), rest: None, list_probe: None, list_only: None };
+        let mut run = Run { opts, searcher, with_filename, selected: false, error: false, line: Vec::new(), only: None, probe: None, top: (db.root(), 0), rest: None, list_probe: None, list_only: None, pieces: None };
         // Several files named: storage may know which of them can match.
-        if files.len() > 1 && !opts.invert {
+        // (Or one large file: storage may know which pieces of it can.)
+        if !files.is_empty() && !opts.invert {
             run.list_probe = db.candidates_cost(run.searcher.query());
         }
         if implicit_dot {
@@ -287,13 +288,16 @@ struct Run {
     /// before asking storage, and what it answered.
     list_probe: Option<usize>,
     list_only: Option<Shortlist>,
+    /// During a walk, once storage has been asked: the pieces that can
+    /// have a match.
+    pieces: Option<Shortlist>,
 }
 
 enum Only {
     /// These, in walk order; and how many of them the walk has reached.
     Listed(Vec<Candidate>, usize),
-    /// Those that pass.
-    Passing(Shortlist),
+    /// Those with a piece in `Run::pieces`.
+    Passing,
 }
 
 impl Run {
@@ -310,6 +314,7 @@ impl Run {
         // what it must contain says nothing.
         self.probe = if self.opts.invert { None } else { db.candidates_cost(self.searcher.query()) };
         self.top = (dir, path.len());
+        self.pieces = None;
         self.walk(db, io, dir, path);
         self.probe = None;
         self.only = None;
@@ -321,10 +326,13 @@ impl Run {
                     return;
                 }
                 path.extend_from_slice(&file.path);
-                self.search(io, path, &db.content(file.id), Some(file.id));
+                let pieces = self.pieces.take();
+                self.search_file(db, io, path, file.id, pieces.as_ref());
+                self.pieces = pieces;
                 path.truncate(base);
             }
         }
+        self.pieces = None;
     }
 
     /// Search a file that was named on the command line. As in a walk,
@@ -342,14 +350,16 @@ impl Run {
         }
         let o = self.opts;
         if self.list_only.as_ref().map_or(true, |set| db.passes(set, id)) {
-            self.search(io, label, &db.content(id), Some(id));
+            let only = self.list_only.take();
+            self.search_file(db, io, label, id, only.as_ref());
+            self.list_only = only;
         } else if o.count && !o.list {
             // No line of it matches, and it still gets its count.
             self.search(io, label, b"", Some(id));
         } else if io.out_file == Some(id) && !o.list {
             // Writing into a file that is being searched is an error
             // whatever the file holds.
-            self.search(io, label, &db.content(id), Some(id));
+            self.is_output(io, label, Some(id));
         }
     }
 
@@ -363,10 +373,14 @@ impl Run {
         let mut files = match db.candidates(dir, self.searcher.query()) {
             Candidates::All => return,
             Candidates::Among(set) => {
-                self.only = Some(Only::Passing(set));
+                self.only = Some(Only::Passing);
+                self.pieces = Some(set);
                 return;
             }
-            Candidates::Files(files, _) => files,
+            Candidates::Files(files, set) => {
+                self.pieces = Some(set);
+                files
+            }
         };
         let counting = o.count && !o.list;
         // Writing into a file that is being searched is an error whatever
@@ -425,17 +439,19 @@ impl Run {
                         *reached += next as usize;
                         next
                     }
-                    Some(Only::Passing(filter)) => db.passes(filter, *child),
+                    Some(Only::Passing) => self.pieces.as_ref().is_some_and(|set| db.passes(set, *child)),
                 };
                 if candidate {
-                    self.search(io, path, &db.content(*child), Some(*child));
+                    let pieces = self.pieces.take();
+                    self.search_file(db, io, path, *child, pieces.as_ref());
+                    self.pieces = pieces;
                 } else if o.count && !o.list {
                     // No line of it matches, and it still gets its count.
                     self.search(io, path, b"", Some(*child));
                 } else if io.out_file == Some(*child) && !o.list {
                     // Writing into a file that is being searched is an
                     // error whatever the file holds.
-                    self.search(io, path, &db.content(*child), Some(*child));
+                    self.is_output(io, path, Some(*child));
                 }
             }
             path.truncate(base);
@@ -458,18 +474,62 @@ impl Run {
         io.put(b"\n");
     }
 
-    fn search(&mut self, io: &mut Io, label: &[u8], content: &[u8], id: Option<NodeId>) {
+    /// Writing into a file that is being searched is an error whatever
+    /// the file holds. True if this file is that one.
+    fn is_output(&mut self, io: &mut Io, label: &[u8], id: Option<NodeId>) -> bool {
         let o = self.opts;
         if id.is_some() && id == io.out_file && !o.count && !o.list {
             io.err_line(format!("grep: {}: input file is also the output", lossy(label)));
             self.error = true;
+            return true;
+        }
+        false
+    }
+
+    /// Search content that is all in one place.
+    fn search(&mut self, io: &mut Io, label: &[u8], content: &[u8], id: Option<NodeId>) {
+        if self.is_output(io, label, id) {
             return;
         }
+        let mut count = 0;
+        if self.scan(io, label, content, 0, &mut count) != Scan::Failed {
+            self.finish(io, label, count);
+        }
+    }
+
+    /// Search a file a piece at a time. Pieces hold whole lines and say
+    /// how many, so a piece that storage says cannot match (`filter`) is
+    /// stepped over without being read and the line numbers after it are
+    /// still right.
+    fn search_file(&mut self, db: &Db, io: &mut Io, label: &[u8], id: NodeId, filter: Option<&Shortlist>) {
+        if self.is_output(io, label, Some(id)) {
+            return;
+        }
+        let mut count = 0;
+        let mut lines_before = 0usize;
+        for p in db.pieces(id) {
+            if filter.is_some_and(|f| !db.piece_passes(f, p)) {
+                lines_before += p.lines as usize;
+                continue;
+            }
+            match self.scan(io, label, &db.text_of(p), lines_before, &mut count) {
+                Scan::Failed => return,
+                Scan::Enough => break,
+                Scan::Done => {}
+            }
+            lines_before += p.lines as usize;
+        }
+        self.finish(io, label, count);
+    }
+
+    /// Search one stretch of whole lines. `lines_before` is how many
+    /// lines of the file lie before it; `count` is added to.
+    fn scan(&mut self, io: &mut Io, label: &[u8], content: &[u8], lines_before: usize, count: &mut usize) -> Scan {
+        let o = self.opts;
         let quiet = o.list || o.count;
-        let mut count = 0usize;
         // Line numbers are counted only up to the lines that are printed:
         // `numbered` lines lie before offset `counted_to`.
-        let mut numbered = 0usize;
+        let mut numbered = lines_before;
         let mut counted_to = 0usize;
         let mut pos = 0usize;
         while pos < content.len() {
@@ -478,7 +538,7 @@ impl Run {
                 Err(_) => {
                     io.err_line(format!("qdb: grep: {}: {}", lossy(label), TOO_COMPLEX));
                     self.error = true;
-                    return;
+                    return Scan::Failed;
                 }
             };
             if !o.invert {
@@ -486,9 +546,9 @@ impl Run {
                     Some(line) => line,
                     None => break,
                 };
-                count += 1;
+                *count += 1;
                 if o.list {
-                    break;
+                    return Scan::Enough;
                 }
                 if !quiet {
                     if o.line_numbers {
@@ -497,7 +557,7 @@ impl Run {
                     }
                     self.emit(io, label, numbered, &content[start..end]);
                     if io.stopped() {
-                        return;
+                        return Scan::Failed;
                     }
                 }
                 pos = end + 1;
@@ -507,9 +567,9 @@ impl Run {
                 let mut at = pos;
                 while at < gap_end {
                     let end = memchr(b'\n', &content[at..gap_end]).map_or(gap_end, |i| at + i);
-                    count += 1;
+                    *count += 1;
                     if o.list {
-                        break;
+                        return Scan::Enough;
                     }
                     if !quiet {
                         numbered += 1;
@@ -517,8 +577,8 @@ impl Run {
                     }
                     at = end + 1;
                 }
-                if (o.list && count > 0) || io.stopped() {
-                    break;
+                if io.stopped() {
+                    return Scan::Enough;
                 }
                 match found {
                     // The matching line is skipped, but still numbered.
@@ -530,6 +590,12 @@ impl Run {
                 }
             }
         }
+        Scan::Done
+    }
+
+    /// What follows a file's lines: its name for -l, its count for -c.
+    fn finish(&mut self, io: &mut Io, label: &[u8], count: usize) {
+        let o = self.opts;
         if count > 0 {
             self.selected = true;
             // Hand the lines on now: a reader that wants only a few can
@@ -552,4 +618,15 @@ impl Run {
             io.put(&self.line);
         }
     }
+}
+
+/// How the search of one stretch of a file ended.
+#[derive(PartialEq)]
+enum Scan {
+    /// Searched to its end.
+    Done,
+    /// Nothing more of this file is wanted.
+    Enough,
+    /// Stopped by an error or by the reader; nothing follows.
+    Failed,
 }
