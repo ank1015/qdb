@@ -354,3 +354,16 @@ $ seq $(seq 3 | tail -n 1)
 # ln
 ! ln -s a b ## no links
 ! ln README.md copy ## no links
+
+# [ with each operator
+$ [ -s README.md ] && echo yes
+$ [ -s nope ] || echo no
+$ [ a == a ] && echo yes
+$ [ a != b ] && echo yes
+$ [ a != a ] || echo no
+$ [ 3 -eq 3 ] && echo yes
+$ [ 3 -ne 4 ] && echo yes
+$ [ 3 -le 3 ] && echo yes
+$ [ 4 -ge 5 ] || echo no
+$ [ a = b -o c = c ] && echo yes
+$ [ a = b -o c = d ] || echo no

@@ -1376,6 +1376,52 @@ fn kill_run(kills: usize, seed: u64, sync: SyncMode, scratch: &mut Scratch) -> R
 
 // --------------------------------------------------------------------- main
 
+/// Count, for each row of tests/coverage.txt, the cases that use it, and
+/// print the table. False if a row has no case.
+fn coverage(table: &str, commands: &[String]) -> Result<bool, String> {
+    use qdb::regex::{Flavor, Regex, Syntax};
+    // The words of every simple command of every case, from each word
+    // that could be a command name on.
+    let words: Vec<Vec<Vec<u8>>> = commands
+        .iter()
+        .map(|c| match qdb::shell::parse(c.as_bytes()) {
+            Ok(script) => script.all_commands().iter().map(|c| c.words.iter().map(|w| w.text()).collect::<Vec<Vec<u8>>>()).collect::<Vec<_>>().concat(),
+            Err(_) => c.split_whitespace().map(|w| w.as_bytes().to_vec()).collect(),
+        })
+        .collect();
+    let mut ok = true;
+    println!("coverage: cases for each command and flag");
+    for row in table.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+        let cols: Vec<&str> = row.split('\t').collect();
+        if cols.len() != 3 {
+            return Err(format!("tests/coverage.txt: not three columns: {}", row));
+        }
+        let (cmd, item, pat) = (cols[0], cols[1], cols[2].replace("\\n", "\n"));
+        let after = |ws: &'_ [Vec<u8>]| -> Vec<usize> { ws.iter().enumerate().filter(|(_, w)| w.as_slice() == cmd.as_bytes()).map(|(i, _)| i + 1).collect() };
+        let count = if let Some(re) = pat.strip_prefix("re:") {
+            let re = Regex::new(re.as_bytes(), Syntax { extended: true, icase: false, flavor: Flavor::Grep }).map_err(|e| format!("tests/coverage.txt: {}: {}", row, e))?;
+            commands.iter().filter(|c| re.is_match(c.as_bytes()).unwrap_or(false)).count()
+        } else {
+            let hit = |w: &[u8]| -> bool {
+                if let Some(word) = pat.strip_prefix("w:") {
+                    w == word.as_bytes()
+                } else if pat == "n:" {
+                    w.len() > 1 && w[0] == b'-' && w[1..].iter().all(|c| c.is_ascii_digit())
+                } else if pat.starts_with("--") {
+                    w == pat.as_bytes() || (w.starts_with(pat.as_bytes()) && w.get(pat.len()) == Some(&b'='))
+                } else {
+                    let flag = pat.as_bytes()[1];
+                    w.len() > 1 && w[0] == b'-' && w[1] != b'-' && w[1..].iter().take_while(|c| c.is_ascii_alphanumeric()).any(|c| *c == flag)
+                }
+            };
+            words.iter().filter(|ws| after(ws).iter().any(|from| ws[*from..].iter().any(|w| hit(w)))).count()
+        };
+        println!("  {:<10} {:<28} {:>5}{}", cmd, item, count, if count == 0 { "   NO CASE" } else { "" });
+        ok &= count > 0;
+    }
+    Ok(ok)
+}
+
 fn run() -> Result<bool, String> {
     let mut fixtures_dir = PathBuf::from("tests/fixtures");
     let mut files: Vec<PathBuf> = Vec::new();
@@ -1384,6 +1430,7 @@ fn run() -> Result<bool, String> {
     let mut seed = 1u64;
     let mut verbose = false;
     let mut brief = false;
+    let mut coverage_only = false;
     let mut index = true;
     let mut diff = 0usize;
     let mut crash = 0usize;
@@ -1398,6 +1445,7 @@ fn run() -> Result<bool, String> {
             "--fuzz" => fuzz = value("--fuzz")?.parse().map_err(|_| "--fuzz needs a number")?,
             "--seed" => seed = value("--seed")?.parse().map_err(|_| "--seed needs a number")?,
             "--list-failures" => brief = true,
+            "--coverage" => coverage_only = true,
             "--no-index" => index = false,
             "--store" => {
                 setup.mode = match value("--store")?.as_str() {
@@ -1450,6 +1498,10 @@ fn run() -> Result<bool, String> {
         return diff_run(diff, seed, &setup, &mut scratch);
     }
     let default_run = files.is_empty() && fuzz == 0;
+    if coverage_only {
+        // Every case is read and none is run.
+        filter = Some("\u{0}".into());
+    }
     if default_run {
         let mut found: Vec<PathBuf> = std::fs::read_dir("tests/cases")
             .map_err(|e| format!("tests/cases: {}", e))?
@@ -1462,6 +1514,7 @@ fn run() -> Result<bool, String> {
 
     let mut scratch = Scratch::new();
     let mut fixtures: std::collections::HashMap<String, Db> = std::collections::HashMap::new();
+    let mut every_command: Vec<String> = Vec::new();
     let (mut passed, mut failed, mut steps) = (0usize, 0usize, 0usize);
     let mut report = |case: &Case, result: Result<(), String>| {
         steps += case.steps.len();
@@ -1487,6 +1540,7 @@ fn run() -> Result<bool, String> {
         let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {}", file.display(), e))?;
         let cases = parse_cases(&file.to_string_lossy(), &text)?;
         for case in &cases {
+            every_command.extend(case.steps.iter().map(|s| s.command.clone()));
             if let Some(f) = &filter {
                 if !case.steps.iter().any(|s| s.command.contains(f.as_str())) {
                     continue;
@@ -1511,8 +1565,16 @@ fn run() -> Result<bool, String> {
             report(case, result);
         }
     }
+    let mut covered = true;
+    if default_run || coverage_only {
+        let table = std::fs::read_to_string("tests/coverage.txt").map_err(|e| format!("tests/coverage.txt: {}", e))?;
+        covered = coverage(&table, &every_command)?;
+        if !covered {
+            println!("FAIL  coverage: a command or flag has no case");
+        }
+    }
     println!("{} cases ({} steps), {}: {} passed, {} failed", passed + failed, steps, setup.describe(), passed, failed);
-    Ok(failed == 0)
+    Ok(failed == 0 && covered)
 }
 
 fn main() -> std::process::ExitCode {

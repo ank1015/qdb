@@ -1,0 +1,353 @@
+# One row for each command and flag of stage 4: the command, what is
+# covered, and how a case is seen to use it. `-x` is a short flag, `--x` a
+# long one, `w:` a word of the command, `n:` a word of the form -NUM, and
+# `re:` an expression matched against the whole case.
+shell	;	re:;
+shell	newline	re:\n
+shell	&&	re:&&
+shell	||	re:\|\|
+shell	<	re:[^<0-9&]< ?[^<( ]
+shell	2>	re:2>[^>&]
+shell	2>>	re:2>>
+shell	2>&1	re:2>&1
+shell	>&2	re:>&2
+shell	&>	re:&>[^>]
+shell	&>>	re:&>>
+shell	/dev/null as target	re:> ?/dev/null
+shell	/dev/null as input	re:(< ?| )/dev/null
+shell	<<EOF	re:<<[A-Z]
+shell	<<'EOF'	re:<<'
+shell	<<"EOF"	re:<<"
+shell	<<-EOF	re:<<-
+shell	several here-documents	re:<<.*<<
+shell	$(...)	re:\$\(
+shell	backticks	re:`
+shell	{a,b}	re:\{[a-z0-9./]*,[a-z0-9./]*\}
+shell	{a,{b,c}}	re:\{[^}]*,\{
+shell	{1..3..2}	re:\{[0-9]+\.\.[0-9]+\.\.[0-9]+\}
+shell	{a..z}	re:\{[a-z]\.\.[a-z]\}
+shell	{01..10}	re:\{0[0-9]+\.\.[0-9]+\}
+shell	line continuation	re:\\\n
+ls	-A	-A
+ls	-d	-d
+ls	-r	-r
+ls	-S	-S
+ls	-t	-t
+ls	-l	-l
+ls	-h	-h
+find	-iname	w:-iname
+find	-path	w:-path
+find	-ipath	w:-ipath
+find	-mindepth	w:-mindepth
+find	-empty	w:-empty
+find	-size	w:-size
+find	-newer	w:-newer
+find	-mmin	w:-mmin
+find	-mtime	w:-mtime
+find	-print	w:-print
+find	-print0	w:-print0
+find	-prune	w:-prune
+find	!	w:!
+find	-not	w:-not
+find	-a	w:-a
+find	-and	w:-and
+find	-o	w:-o
+find	-or	w:-or
+find	-exec ... ;	re:-exec .*\\;|-exec .*';'
+find	-exec ... +	re:-exec .*\{\} \+
+find	( )	re:\\\(|'\('
+cat	-A	-A
+cat	-b	-b
+cat	-e	-e
+cat	-E	-E
+cat	-s	-s
+cat	-t	-t
+cat	-T	-T
+cat	-u	-u
+cat	-v	-v
+head	-c	-c
+head	-q	-q
+head	-v	-v
+head	-NUM	n:
+head	-n -N	re:head.* -n ?-[0-9]
+head	size suffix	re:head.* -[cn] ?-?[0-9]+(K|M|k|m)
+tail	-c	-c
+tail	-q	-q
+tail	-v	-v
+tail	-c +N	re:tail.* -c ?\+
+tail	-NUM	n:
+tail	size suffix	re:tail.* -[cn] ?[+-]?[0-9]+(K|M|k|m|b)
+wc	-m	-m
+grep	-G	-G
+grep	-R	-R
+grep	-o	-o
+grep	-L	-L
+grep	-q	-q
+grep	-s	-s
+grep	-w	-w
+grep	-x	-x
+grep	-h	-h
+grep	-H	-H
+grep	-I	-I
+grep	-a	-a
+grep	-e	-e
+grep	-A	-A
+grep	-B	-B
+grep	-C	-C
+grep	-m	-m
+grep	-NUM	n:
+grep	--include	--include
+grep	--exclude	--exclude
+grep	--exclude-dir	--exclude-dir
+sed	-n	-n
+sed	-r	-r
+sed	-E	-E
+sed	-e	-e
+sed	-s	-s
+sed	-i	-i
+sed	-i with a suffix	re:sed.* -i[.a-z~]
+sed	address N	re:sed .*'[0-9]+[a-z{=!]
+sed	address $	re:sed .*'\$[a-z{=!]
+sed	address /re/	re:sed .*'/[^/]+/[a-zIQ{=!]
+sed	address \%re%	re:sed .*'\\[%,|#:;]
+sed	address N,M	re:sed .*'[0-9]+,[0-9]+
+sed	address N,+M	re:sed .*,\+[0-9]
+sed	address first~step	re:sed .*[0-9]~[0-9]
+sed	address 0,/re/	re:sed .*'0,/
+sed	address !	re:sed .*'[^']*[0-9$/]!
+sed	command p	re:sed .*'[^']*[0-9$/!;{ ]p|sed .*'p'
+sed	command d	re:sed .*'[^']*[0-9$/!;{ ]d|sed .*'d'
+sed	command s	re:sed .*'[^']*s/
+sed	command q	re:sed .*'[^']*[0-9$/!;{ ]q|sed .*'q
+sed	command Q	re:sed .*'[^']*[0-9$/!;{ ]Q|sed .*'Q
+sed	command =	re:sed .*'[^']*[0-9$/!;{ ]=|sed .*'='
+sed	command a	re:sed .*'[^']*[0-9$/!;{ ]a[ \\]|sed .*'a[ \\]
+sed	command i	re:sed .*'[^']*[0-9$/!;{ ]i[ \\]|sed .*'i[ \\]
+sed	command c	re:sed .*'[^']*[0-9$/!;{ ]c[ \\]|sed .*'c[ \\]
+sed	command y	re:sed .*'[^']*y/
+sed	blocks { }	re:sed .*\{.*\}
+sed	s flag g	re:sed .*s/.*/[a-zI0-9]*g
+sed	s flag p	re:sed .*s/.*/[a-zI0-9]*p
+sed	s flag number	re:sed .*s/.*/[a-zI]*[0-9]
+sed	s flag i	re:sed .*s/.*/[a-z0-9]*i
+sed	s flag I	re:sed .*s/.*/[a-z0-9]*I
+sed	replacement &	re:sed .*s/.*/.*&
+sed	replacement \N	re:sed .*s/.*/.*\\[0-9]
+touch	-c	-c
+touch	-d	-d
+touch	-t	-t
+cp	-R	-R
+cp	-a	-a
+cp	-p	-p
+cp	-f	-f
+cp	-n	-n
+cp	-T	-T
+cp	-v	-v
+mv	-f	-f
+mv	-n	-n
+mv	-v	-v
+rm	-R	-R
+rm	-d	-d
+rm	-v	-v
+rmdir	-p	-p
+rg	-i	-i
+rg	-S	-S
+rg	-s	-s
+rg	-F	-F
+rg	-w	-w
+rg	-x	-x
+rg	-v	-v
+rg	-c	-c
+rg	-l	-l
+rg	-n	-n
+rg	-N	-N
+rg	-0	-0
+rg	-A	-A
+rg	-B	-B
+rg	-C	-C
+rg	-m	-m
+rg	-g	-g
+rg	-t	-t
+rg	-T	-T
+rg	-u	-u
+rg	-j	-j
+rg	--null	--null
+rg	--no-heading	--no-heading
+rg	--glob	--glob
+rg	--type	--type
+rg	--type-not	--type-not
+rg	--files	--files
+rg	--hidden	--hidden
+rg	--no-ignore	--no-ignore
+rg	--sort	--sort
+rg	-uu	re:rg.* -uu
+rg	-uuu	re:rg.* -uuu
+rg	type c	re:rg.* (-[tT] ?|--type(-not)?[= ])c( |$)
+rg	type cpp	re:rg.* (-[tT] ?|--type(-not)?[= ])cpp( |$)
+rg	type css	re:rg.* (-[tT] ?|--type(-not)?[= ])css( |$)
+rg	type go	re:rg.* (-[tT] ?|--type(-not)?[= ])go( |$)
+rg	type html	re:rg.* (-[tT] ?|--type(-not)?[= ])html( |$)
+rg	type js	re:rg.* (-[tT] ?|--type(-not)?[= ])js( |$)
+rg	type json	re:rg.* (-[tT] ?|--type(-not)?[= ])json( |$)
+rg	type md	re:rg.* (-[tT] ?|--type(-not)?[= ])md( |$)
+rg	type py	re:rg.* (-[tT] ?|--type(-not)?[= ])py( |$)
+rg	type rust	re:rg.* (-[tT] ?|--type(-not)?[= ])rust( |$)
+rg	type sh	re:rg.* (-[tT] ?|--type(-not)?[= ])sh( |$)
+rg	type toml	re:rg.* (-[tT] ?|--type(-not)?[= ])toml( |$)
+rg	type ts	re:rg.* (-[tT] ?|--type(-not)?[= ])ts( |$)
+rg	type txt	re:rg.* (-[tT] ?|--type(-not)?[= ])txt( |$)
+rg	type yaml	re:rg.* (-[tT] ?|--type(-not)?[= ])yaml( |$)
+sort	-u	-u
+sort	-n	-n
+sort	-r	-r
+sort	-k	-k
+sort	-t	-t
+sort	-h	-h
+sort	-f	-f
+sort	-b	-b
+sort	-s	-s
+sort	-c	-c
+sort	-k with character positions	re:sort.* -k ?[0-9]+\.[0-9]
+sort	-k with modifiers	re:sort.* -k ?[0-9.,]+[bfnr]
+uniq	-c	-c
+uniq	-d	-d
+uniq	-u	-u
+uniq	-i	-i
+uniq	-f	-f
+uniq	-s	-s
+cut	-b	-b
+cut	-c	-c
+cut	-f	-f
+cut	-d	-d
+cut	-s	-s
+cut	--complement	--complement
+tr	-d	-d
+tr	-s	-s
+tr	-c	-c
+tr	-C	-C
+tr	-t	-t
+tee	-a	-a
+tee	several files	re:tee [a-z][a-z0-9./]* [a-z]
+nl	-b a	re:nl.* -b ?a
+nl	-b t	re:nl.* -b ?t
+nl	-v	-v
+nl	-w	-w
+nl	-s	-s
+nl	-n ln	re:nl.* -n ?ln
+nl	-n rn	re:nl.* -n ?rn
+nl	-n rz	re:nl.* -n ?rz
+seq	-s	-s
+seq	-w	-w
+seq	-f	-f
+basename	-a	-a
+basename	-s	-s
+dirname	several operands	re:dirname [^ |;]+ [^ |;]
+du	-s	-s
+du	-h	-h
+du	-a	-a
+du	-c	-c
+du	-d	-d
+du	-b	-b
+du	-k	-k
+du	-m	-m
+du	-x	-x
+du	--summarize	--summarize
+du	--human-readable	--human-readable
+du	--all	--all
+du	--total	--total
+du	--max-depth	--max-depth
+du	--bytes	--bytes
+du	--apparent-size	--apparent-size
+du	--exclude	--exclude
+date	-u	-u
+date	-d	-d
+date	-I	-I
+date	-R	-R
+date	+FORMAT	re:date.* '?\+
+xargs	-n	-n
+xargs	-I	-I
+xargs	-i	-i
+xargs	-L	-L
+xargs	-l	-l
+xargs	-0	-0
+xargs	-d	-d
+xargs	-r	-r
+xargs	-t	-t
+xargs	-s	-s
+xargs	-x	-x
+xargs	-P	-P
+xargs	--max-args	--max-args
+xargs	--replace	--replace
+xargs	--max-lines	--max-lines
+xargs	--null	--null
+xargs	--delimiter	--delimiter
+xargs	--no-run-if-empty	--no-run-if-empty
+xargs	--verbose	--verbose
+xargs	--max-chars	--max-chars
+xargs	--exit	--exit
+xargs	--max-procs	--max-procs
+printf	%s	re:printf.*%[-+ #0-9.*]*s
+printf	%d	re:printf.*%[-+ #0-9.*]*d
+printf	%i	re:printf.*%[-+ #0-9.*]*i
+printf	%u	re:printf.*%[-+ #0-9.*]*u
+printf	%f	re:printf.*%[-+ #0-9.*]*f
+printf	%F	re:printf.*%[-+ #0-9.*]*F
+printf	%e	re:printf.*%[-+ #0-9.*]*e
+printf	%E	re:printf.*%[-+ #0-9.*]*E
+printf	%g	re:printf.*%[-+ #0-9.*]*g
+printf	%G	re:printf.*%[-+ #0-9.*]*G
+printf	%x	re:printf.*%[-+ #0-9.*]*x
+printf	%X	re:printf.*%[-+ #0-9.*]*X
+printf	%o	re:printf.*%[-+ #0-9.*]*o
+printf	%c	re:printf.*%[-+ #0-9.*]*c
+printf	%b	re:printf.*%[-+ #0-9.*]*b
+printf	%%	re:printf.*%%
+printf	flags	re:printf.*%[-+ #0]
+printf	width	re:printf.*%[-+ #0]*[0-9*]
+printf	precision	re:printf.*%[-+ #0-9*]*\.
+printf	escapes	re:printf.*\\[ntabfrv0x\\]
+printf	reuse of the format	re:printf '[^']*%[^']*' [^ |;>]+ [^ |;>]+
+printf	--	re:printf -- 
+test	-f	w:-f
+test	-d	w:-d
+test	-e	w:-e
+test	-s	w:-s
+test	-z	w:-z
+test	-n	w:-n
+test	=	w:=
+test	==	w:==
+test	!=	w:!=
+test	-eq	w:-eq
+test	-ne	w:-ne
+test	-lt	w:-lt
+test	-le	w:-le
+test	-gt	w:-gt
+test	-ge	w:-ge
+test	!	w:!
+test	-a	w:-a
+test	-o	w:-o
+test	quoted parentheses	re:(test|\[) .*(\\\(|'\(')
+[	-f	w:-f
+[	-d	w:-d
+[	-e	w:-e
+[	-s	w:-s
+[	-z	w:-z
+[	-n	w:-n
+[	=	w:=
+[	==	w:==
+[	!=	w:!=
+[	-eq	w:-eq
+[	-ne	w:-ne
+[	-lt	w:-lt
+[	-le	w:-le
+[	-gt	w:-gt
+[	-ge	w:-ge
+[	!	w:!
+[	-a	w:-a
+[	-o	w:-o
+[	quoted parentheses	re:(test|\[) .*(\\\(|'\(')
+true	true	re:(^|[;&| ])true
+false	false	re:(^|[;&| ])false
+:	:	re:(^|[;&|] ?): |^:$
+sleep	sleep	re:sleep 
+ln	refused	re:(^|[;&| ])ln 

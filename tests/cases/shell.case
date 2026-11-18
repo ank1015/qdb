@@ -163,13 +163,13 @@ $ # only a comment
 # Unknown commands, flags and syntax are rejected by name, and nothing
 # on the line runs.
 ! awk '{print $1}' README.md ## command: awk
-! sort README.md ## command: sort
-! uniq README.md ## command: uniq
-! cut -c1 README.md ## command: cut
-! tr a b ## command: tr
-! rg TODO ## command: rg
-! xargs ls ## command: xargs
-! tee x ## command: tee
+$ sort README.md
+$ uniq README.md
+$ cut -c1 README.md
+$ tr a b
+$ rg TODO
+$ xargs ls
+$ tee x
 ! cd src ## command: cd
 ! pwd ## command: pwd
 ! export A=1 ## command: export
@@ -182,14 +182,14 @@ $ printf hi
 ! chmod +x README.md ## command: chmod
 ! ln -s a b ## command: ln
 ! stat README.md ## command: stat
-! du -sh . ## command: du
+$ du -sh .
 ! bash -c ls ## command: bash
 ! /bin/ls ## command: /bin/ls
 ! ./ls ## command: ./ls
 ! 'ls -a' ## command: ls -a
 ! "" ## command: 
-! cat README.md | sort ## command: sort
-! mkdir shouldnotexist | sort ## command: sort
+$ cat README.md | sort
+$ mkdir shouldnotexist | sort
 ! rm README.md | awk x ## command: awk
 ! echo hi > x.txt | nosuch ## command: nosuch
 ! echo $HOME ## variable expansion ($HOME)
