@@ -1,42 +1,42 @@
 # 100000 writes on linux, run `s3-disk-batch`
 
-Seed 1, search index on. The whole run took 16.7 s.
+Seed 1, search index on. The whole run took 16.3 s.
 
 Times in milliseconds.
 
 | Kind of write | Writes | Median | 90% | 99% | 99.9% | Slowest |
 |---|---:|---:|---:|---:|---:|---:|
-| **every small write** | 90912 | 0.013 | 0.055 | 0.921 | 3.08 | 153 |
-| **every large write** | 9088 | 0.082 | 3.26 | 17.2 | 76.2 | 281 |
-| append | 39801 | 0.012 | 0.036 | 0.995 | 3.68 | 153 |
-| create | 20249 | 0.013 | 0.034 | 0.964 | 3.37 | 146 |
-| overwrite | 9827 | 0.014 | 0.040 | 1.11 | 2.94 | 6.90 |
-| sed | 9994 | 0.048 | 0.091 | 0.173 | 2.10 | 7.13 |
-| rm | 5069 | 0.007 | 0.017 | 0.891 | 2.05 | 6.24 |
-| mv | 3940 | 0.010 | 0.017 | 1.02 | 2.80 | 6.43 |
-| same | 2032 | 0.084 | 0.134 | 0.196 | 0.526 | 2.55 |
-| cp file | 5017 | 0.110 | 0.410 | 1.73 | 5.90 | 21.2 |
-| append to a dataset file | 2595 | 0.018 | 0.034 | 1.06 | 2.80 | 6.02 |
-| sed over a folder | 479 | 3.99 | 8.37 | 18.0 | 25.9 | 25.9 |
-| cp -r | 307 | 5.57 | 27.7 | 157 | 281 | 281 |
-| cat into one | 211 | 2.89 | 6.28 | 10.4 | 35.3 | 35.3 |
-| sed on a large file | 285 | 6.45 | 14.2 | 57.3 | 231 | 231 |
-| rm -r | 194 | 0.076 | 1.75 | 12.3 | 32.4 | 32.4 |
+| **every small write** | 90912 | 0.012 | 0.051 | 0.971 | 3.04 | 90.0 |
+| **every large write** | 9088 | 0.080 | 3.25 | 16.1 | 76.8 | 313 |
+| append | 39801 | 0.011 | 0.036 | 1.05 | 4.01 | 90.0 |
+| create | 20249 | 0.012 | 0.033 | 1.01 | 2.87 | 9.58 |
+| overwrite | 9827 | 0.013 | 0.040 | 1.08 | 2.92 | 14.3 |
+| sed | 9994 | 0.043 | 0.080 | 0.150 | 1.99 | 8.08 |
+| rm | 5069 | 0.006 | 0.016 | 0.898 | 2.28 | 6.70 |
+| mv | 3940 | 0.009 | 0.015 | 1.05 | 2.92 | 6.35 |
+| same | 2032 | 0.071 | 0.112 | 0.163 | 0.450 | 2.68 |
+| cp file | 5017 | 0.109 | 0.438 | 1.82 | 7.28 | 18.3 |
+| append to a dataset file | 2595 | 0.017 | 0.033 | 1.23 | 3.16 | 5.73 |
+| sed over a folder | 479 | 3.78 | 8.59 | 16.5 | 24.1 | 24.1 |
+| cp -r | 307 | 5.93 | 28.1 | 182 | 313 | 313 |
+| cat into one | 211 | 3.11 | 7.05 | 11.1 | 42.8 | 42.8 |
+| sed on a large file | 285 | 6.11 | 13.0 | 69.9 | 114 | 114 |
+| rm -r | 194 | 0.070 | 1.86 | 12.5 | 21.6 | 21.6 |
 
 The ten slowest small writes:
 
 | ms | Write number | Command, and what was written to disk during it |
 |---:|---:|---|
-| 153 | 1501 | `echo 'isulmumi soing ulnikiis titoouson lodoju tientjuvu tov` 1 syncs; bytes: 145 content, 0 of it moved, 0 index files, 0 tree |
-| 146 | 13107 | `echo 'anan sost erul ateulerfa toousremi rele paing atemisop` 1 syncs; bytes: 298 content, 0 of it moved, 0 index files, 0 tree |
-| 40.9 | 6697 | `echo 'jupa ousulstate toenton tistnich paju ousdostan dooust` 1 syncs; bytes: 524 content, 0 of it moved, 0 index files, 0 tree |
-| 37.7 | 17534 | `echo 'eringanne baing leki entis kisora soing ulingerra sotr` 1 syncs; bytes: 370 content, 0 of it moved, 0 index files, 0 tree |
-| 34.3 | 16451 | `echo 'sefa chent nevuate kidovutr toer' >> stress/d4/f4467.t` 1 syncs; bytes: 73 content, 0 of it moved, 0 index files, 0 tree |
-| 24.9 | 88091 | `echo 'paentchpa sobajuon entjurado atenimu toer anate doonra` 0 syncs; bytes: 104 content, 0 of it moved, 0 index files, 0 tree |
-| 22.0 | 18730 | `echo 'nevuate isulchni toer faan juous ramu tistnich vujuba ` 1 syncs; bytes: 189 content, 0 of it moved, 0 index files, 0 tree |
-| 15.9 | 6628 | `echo 'kine neate onate lorekito raous tofatrous soing trmiin` 1 syncs; bytes: 218 content, 0 of it moved, 0 index files, 0 tree |
-| 12.4 | 60418 | `echo 'mious tofatrous pavuto vugu soousousous stondo chateon` 2 syncs; bytes: 135 content, 0 of it moved, 13417845 index files, 0 tree |
-| 10.9 | 37042 | `echo 'anerentfa trle pavuto ingtiulfa ulguso' > stress/d0/f1` 1 syncs; bytes: 79 content, 0 of it moved, 0 index files, 0 tree |
+| 90.0 | 90471 | `echo 'nevuate fainger sogu soing totran toer tilo ingtrous v` 1 syncs; bytes: 235 content, 0 of it moved, 0 index files, 0 tree |
+| 24.4 | 41903 | `echo 'leki anousstst anlechst eranleous vufa atejudore repav` 1 syncs; bytes: 338 content, 0 of it moved, 0 index files, 0 tree |
+| 18.8 | 60418 | `echo 'mious tofatrous pavuto vugu soousousous stondo chateon` 2 syncs; bytes: 135 content, 0 of it moved, 13417845 index files, 0 tree |
+| 16.4 | 75311 | `echo 'anousstst isdo vujuba stonsttr tiba tomu tofatrous ras` 1 syncs; bytes: 100 content, 0 of it moved, 0 index files, 0 tree |
+| 16.0 | 75240 | `echo 'chateon vune vugu ousjuvu' >> stress/d3/f12919.txt` 1 syncs; bytes: 66 content, 0 of it moved, 0 index files, 0 tree |
+| 14.3 | 66990 | `echo 'ateulerfa mious juismuul ateulerfa chpachne dois muju ` 1 syncs; bytes: 112 content, 0 of it moved, 0 index files, 0 tree |
+| 12.7 | 47575 | `echo 'baloch eratedo atelopa sotring paso kitierse doch reju` 1 syncs; bytes: 341 content, 0 of it moved, 0 index files, 0 tree |
+| 12.3 | 47652 | `echo 'kipatrti erni paateanti ermu anousstst oner tistnich t` 1 syncs; bytes: 507 content, 0 of it moved, 0 index files, 0 tree |
+| 9.58 | 89253 | `echo 'entre seermi seate atekito bati nese ulontoni soing vu` 1 syncs; bytes: 101 content, 0 of it moved, 0 index files, 0 tree |
+| 8.08 | 20693 | `sed -i 's/raous/bavuul/' stress/d0/f4002.txt` 1 syncs; bytes: 234 content, 0 of it moved, 0 index files, 0 tree |
 
 On disk, sync batch.
 
@@ -68,6 +68,6 @@ Most heap the engine held during the run: 74.8 MB.
 
 Check of the database after the run: ok: 111007 files and 5693 folders, 1587633253 bytes of text in 130353 pieces, 15 data files with 344070 records, 1352855 posting lists compared with a fresh index
 
-Settled afterwards (`--compact`, 15.4 s): 1765758600 bytes, 1.112 of the raw text.
+Settled afterwards (`--compact`, 18.7 s): 1765758600 bytes, 1.112 of the raw text.
 
 Index work over the run: 333429 documents added, 129894 retired, 239837025 bytes of lists rewritten by sweeps, 0 rebuilds.

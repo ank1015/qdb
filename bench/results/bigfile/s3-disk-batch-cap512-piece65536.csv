@@ -1,0 +1,18 @@
+command,kind,gnu_ms,engine_ms,engine_peak_bytes,disk_bytes_written,syncs,agree
+"grep -n qdbrareterm big.txt",read,833.2535,0.3314,15208,0,0,true
+"grep -c qdbrareterm big.txt",read,670.8945,0.2776,15973,0,0,true
+"wc -l big.txt",read,156.1000,0.0804,1060,0,0,true
+"tail -n 5 big.txt",read,2.2708,0.0183,1220,0,0,true
+"head -n 3 big.txt",read,2.2993,0.0182,994,0,0,true
+"echo 'one more line at the end' >> big.txt",write,1.5210,0.1352,542082,118,0,true
+"echo 'and a second one' >> big.txt",write,1.9436,0.0349,2144,135,0,true
+"echo 'and a third' >> big.txt",write,1.4660,0.0276,1194,105,0,true
+"sed -i 's/QDBUNIQUELINE/QDBCHANGEDLINE/' big.txt",write,2475.2309,2.3777,3094360,65535,0,true
+"grep -n QDBCHANGEDLINE big.txt",read,613.3964,0.2856,19132,0,0,true
+"tail -n 4 big.txt",read,3.2884,0.0210,1051,0,0,true
+"wc big.txt",read,15129.4960,1976.9000,2784,0,0,true
+"cp big.txt copy.txt",write,681.4706,7600.1544,25363626,1114085547,64,true
+"cat big.txt > cat.txt",write,1539.0835,10738.8710,39503768,1114082717,64,true
+"grep -c e cat.txt",read,800.1758,499.5503,3411,0,0,true
+"tail -n 1 copy.txt",read,3.1458,0.0264,1221,0,0,true
+"rm copy.txt cat.txt",write,885.0983,16.6351,533071,32,0,true

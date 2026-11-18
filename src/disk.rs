@@ -722,7 +722,17 @@ impl Lists for Packed {
     fn list(&self, t: Trigram) -> &[u8] {
         let b = (t >> 8) as u64;
         let range = self.raw(self.buckets_off + b * 4, 8);
-        let (mut lo, hi) = (u32_at(range, 0), u32_at(range, 4));
+        // The entries of a bucket are in order of trigram: halve the
+        // range until few are left, then look at each.
+        let (mut lo, mut hi) = (u32_at(range, 0), u32_at(range, 4));
+        while hi - lo.min(hi) > 8 {
+            let mid = lo + (hi - lo) / 2;
+            if ((self.entry(mid) >> 40) as Trigram) < t {
+                lo = mid + 1;
+            } else {
+                hi = mid + 1;
+            }
+        }
         while lo < hi {
             let e = self.entry(lo);
             let found = (e >> 40) as Trigram;

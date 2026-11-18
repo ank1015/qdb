@@ -122,6 +122,8 @@ Measurements the command list does not make. Results are under
   write under each sync setting against it.
 - `qdb-stress compare --dataset NAME --count 20000 --db DIR`: the eight
   settings of the three switches on three mixes of reads and writes.
+- `qdb-stress codec --dataset NAME`: what the compression codec does to
+  the dataset a piece at a time: stored size, and speed in both directions.
 
 `results/TARGETS-3.md` checks each stage 3 target against these runs.
 

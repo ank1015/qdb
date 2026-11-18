@@ -1,4 +1,4 @@
 seed 1 sync always: 1000 kills (SIGKILL) of a qdb process over 20238 command lines, 653 of them without waiting for the last line's answer; every one recovered to the tree after a whole number of command lines, with every answered line present, and passed every check
-    recovery applied 20095 command lines from the log in all, cut an unfinished tail off 11 times, built an index again 966 times; 0 answered lines lost
+    recovery applied 14384 command lines from the log in all, cut an unfinished tail off 27 times, built an index again 968 times; 0 answered lines lost
 seed 2 sync batch: 1000 kills (SIGKILL) of a qdb process over 20273 command lines, 675 of them without waiting for the last line's answer; every one recovered to the tree after a whole number of command lines, with every answered line present, and passed every check
-    recovery applied 20001 command lines from the log in all, cut an unfinished tail off 10 times, built an index again 970 times; 0 answered lines lost
+    recovery applied 15654 command lines from the log in all, cut an unfinished tail off 31 times, built an index again 962 times; 0 answered lines lost

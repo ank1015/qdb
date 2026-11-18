@@ -700,7 +700,16 @@ pub fn estimate<L: Lists + ?Sized>(lists: &L, query: &Query) -> usize {
         Query::All => usize::MAX,
         Query::Nothing => 0,
         Query::Has(t) => lists.list(*t).len(),
-        Query::And(parts) => parts.iter().map(|p| estimate(lists, p)).min().unwrap_or(usize::MAX),
+        Query::And(parts) => {
+            let mut least = usize::MAX;
+            for p in parts {
+                least = least.min(estimate(lists, p));
+                if least == 0 {
+                    break;
+                }
+            }
+            least
+        }
         Query::Or(parts) => parts.iter().fold(0usize, |sum, p| sum.saturating_add(estimate(lists, p))),
     }
 }

@@ -3,7 +3,7 @@
 - Data: PostgreSQL 16.15 source tree, from the Ubuntu source package postgresql-16_16.15.orig.tar.gz (sha256 4f200ca23dfb120ff9838f13ce06014aad1d3c432d16ee9f93ab2000c0eeef7b). Skipped on import: 0 symbolic links, 63 files that are not valid text, 0 other
 - Size: 8419 files in 611 folders, 161.2 MB of text
 - Tools: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); grep (GNU grep) 3.11; sed (GNU sed) 4.9; ls (GNU coreutils) 9.4; find (GNU findutils) 4.9.0; ripgrep 14.1.0
-- GNU and rg times are from the latest run (s3p2), and include starting bash and the tool (1.442 ms for `bash -c 'echo -n'`). Their output is captured through a pipe. rg runs on one thread with `-j 1 --no-ignore --hidden` and is there for timing only.
+- GNU and rg times are from the latest run (On disk, after the writes), and include starting bash and the tool (1.874 ms for `bash -c 'echo -n'`). Their output is captured through a pipe. rg runs on one thread with `-j 1 --no-ignore --hidden` and is there for timing only.
 - Engine times are in process, on one thread, and include parsing the command. Read-only commands: median of up to 5 runs, fewer above 0.3 s; from Part 3 on, 16 runs for a command under 50 ms and 51 for one under 2 ms. Commands that change data: one run.
 - Peak memory is the most heap the engine held during the command, above what it held before it.
 
@@ -11,15 +11,12 @@
 
 | Run | Index | Load (ms) | Load with index build (ms) | Heap after load | Resident after load | New 64 KB file (ms) | Agrees with GNU |
 |---|---|---:|---:|---:|---:|---:|---|
-| Stage 1 | none | 109.3 | 109.3 | 163.5 MB | 258.5 MB |  | yes |
-| Part 2 | none | 131.2 | 131.2 | 163.5 MB | 167.1 MB |  | yes |
-| Part 3, no index | none | 183.1 | 183.1 | 163.5 MB | 167.3 MB | 0.001 | yes |
-| Part 4, index off | off | 214.4 | 214.4 | 163.7 MB | 167.5 MB | 0.001 | yes |
-| Part 4, index on | on | 178.8 | 978.7 | 187.2 MB | 192.5 MB | 0.272 | yes |
-| Stage 3 part 1 | on | 2875.6 | 3675.4 | 187.2 MB | 192.5 MB | 0.272 | yes |
-| s3p2 | on | 1589.5 | 1589.5 | 2200.1 KB | 123.0 MB | 0.402 | yes |
+| Stage 2, in memory | on | 178.8 | 978.7 | 187.2 MB | 192.5 MB | 0.272 | yes |
+| Stage 3, in memory | on | 771.7 | 1719.3 | 199.6 MB | 204.4 MB | 0.284 | yes |
+| On disk, settled | on | 1562.6 | 1562.6 | 2238.5 KB | 136.4 MB | 0.316 | yes |
+| On disk, after the writes | on | 1562.6 | 1562.6 | 2238.5 KB | 136.4 MB | 0.316 | yes |
 
-## The index (Part 4, index on)
+## The index (Stage 2, in memory)
 
 - Built in 799.9 ms while loading.
 - Size: 21.4 MB in memory, 13.3% of the text (4194.3 KB table, 17.0 MB lists, 262.1 KB document table). The posting data itself is 12.7 MB.
@@ -69,30 +66,16 @@ Index work per command that changes data:
 | `rm -r bench_out/dir_moved` | documents +0 -1346; postings +0; list bytes rewritten 3153154; rebuilds 0 |
 | `rm -rf bench_out` | documents +0 -1174; postings +0; list bytes rewritten 5973942; rebuilds 0 |
 
-## The index (Stage 3 part 1)
+## The index (Stage 3, in memory)
 
-- Built in 799.8 ms while loading.
-- Size: 21.4 MB in memory, 13.3% of the text (4194.3 KB table, 17.0 MB lists, 262.1 KB document table). The posting data itself is 12.7 MB.
-- 179569 distinct trigrams, 11900359 postings, 8388 documents.
-- Share of posting data in the longest lists: top 100 trigrams 4.7%, top 1,000 29.6%, top 10,000 77.0%.
+- Built in 947.7 ms while loading.
+- Size: 23.0 MB in memory, 14.3% of the text (5688.0 KB table, 17.2 MB lists, 114.7 KB document table). The posting data itself is 12.9 MB.
+- 152178 distinct trigrams, 0 postings, 9604 documents.
+- Share of posting data in the longest lists: top 100 trigrams 0.0%, top 1,000 0.0%, top 10,000 0.0%.
 - These figures are taken straight after loading.
 
 | Files in a trigram's list | Trigrams |
 |---:|---:|
-| 1 | 45612 |
-| 2 | 23673 |
-| 3-4 | 27046 |
-| 5-8 | 23649 |
-| 9-16 | 17089 |
-| 17-32 | 14301 |
-| 33-64 | 9985 |
-| 65-128 | 5560 |
-| 129-256 | 4643 |
-| 257-512 | 3165 |
-| 513-1024 | 1930 |
-| 1025-2048 | 1644 |
-| 2049-4096 | 962 |
-| 4097-8192 | 310 |
 
 Index work per command that changes data:
 
@@ -103,11 +86,11 @@ Index work per command that changes data:
 | `echo 'hello world' > bench_out/hello.txt` | documents +1 -0; postings +9; list bytes rewritten 0; rebuilds 0 |
 | `echo 'another line' >> bench_out/hello.txt` | documents +1 -1; postings +19; list bytes rewritten 0; rebuilds 0 |
 | `cp doc/src/sgml/html/bug-reporting.html bench_out/copy.txt` | documents +1 -0; postings +2774; list bytes rewritten 0; rebuilds 0 |
-| `cp -r src/backend bench_out/dir_copy` | documents +1346 -0; postings +2878944; list bytes rewritten 0; rebuilds 0 |
-| `cp -r doc/src/sgml/html bench_out/work` | documents +1173 -0; postings +2134398; list bytes rewritten 0; rebuilds 0 |
+| `cp -r src/backend bench_out/dir_copy` | documents +2007 -0; postings +4681094; list bytes rewritten 0; rebuilds 0 |
+| `cp -r doc/src/sgml/html bench_out/work` | documents +1212 -0; postings +2215436; list bytes rewritten 0; rebuilds 0 |
 | `sed -i 's/not/QDBBENCHONE/g' bench_out/copy.txt` | documents +1 -1; postings +2793; list bytes rewritten 0; rebuilds 0 |
 | `sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt` | documents +1 -1; postings +2724; list bytes rewritten 0; rebuilds 0 |
-| `sed -i 's/not/QDBBENCHMANY/g' bench_out/work/*.html` | documents +920 -920; postings +1840631; list bytes rewritten 0; rebuilds 0 |
+| `sed -i 's/not/QDBBENCHMANY/g' bench_out/work/*.html` | documents +984 -954; postings +1919421; list bytes rewritten 0; rebuilds 0 |
 | `sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.html` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `sed -i 's/btvarstrequalimage/QDBBENCHFEW/g' bench_out/work/*.html` | documents +1 -1; postings +2482; list bytes rewritten 0; rebuilds 0 |
 | `cp doc/src/sgml/html/bug-reporting.html bench_out/same.txt` | documents +1 -0; postings +2774; list bytes rewritten 0; rebuilds 0 |
@@ -121,14 +104,14 @@ Index work per command that changes data:
 | `ls -R bench_out/a` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `rm bench_out/a/b/hello.txt` | documents +0 -1; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `rmdir bench_out/a/b` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
-| `rm -r bench_out/dir_moved` | documents +0 -1346; postings +0; list bytes rewritten 2564442; rebuilds 0 |
-| `rm -rf bench_out` | documents +0 -1175; postings +0; list bytes rewritten 5912714; rebuilds 0 |
+| `rm -r bench_out/dir_moved` | documents +0 -2007; postings +0; list bytes rewritten 9828306; rebuilds 0 |
+| `rm -rf bench_out` | documents +0 -1244; postings +0; list bytes rewritten 5063410; rebuilds 0 |
 
-## The index (s3p2)
+## The index (On disk, settled)
 
 - Built in 0.000 ms while loading.
-- Size: 18.3 MB in memory, 11.4% of the text (2653.6 KB table, 15.6 MB lists, 85.1 KB document table). The posting data itself is 15.6 MB.
-- 152081 distinct trigrams, 0 postings, 9604 documents.
+- Size: 18.3 MB in memory, 11.4% of the text (2653.7 KB table, 15.6 MB lists, 85.1 KB document table). The posting data itself is 15.6 MB.
+- 152072 distinct trigrams, 0 postings, 9604 documents.
 - Share of posting data in the longest lists: top 100 trigrams 0.0%, top 1,000 0.0%, top 10,000 0.0%.
 - These figures are taken straight after loading.
 
@@ -148,10 +131,10 @@ Index work per command that changes data:
 | `cp -r doc/src/sgml/html bench_out/work` | documents +1212 -0; postings +2215436; list bytes rewritten 0; rebuilds 0 |
 | `sed -i 's/not/QDBBENCHONE/g' bench_out/copy.txt` | documents +1 -1; postings +2793; list bytes rewritten 0; rebuilds 0 |
 | `sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt` | documents +1 -1; postings +2724; list bytes rewritten 0; rebuilds 0 |
-| `sed -i 's/not/QDBBENCHMANY/g' bench_out/work/*.html` | documents +957 -955; postings +1916977; list bytes rewritten 321756; rebuilds 0 |
+| `sed -i 's/not/QDBBENCHMANY/g' bench_out/work/*.html` | documents +984 -954; postings +1919421; list bytes rewritten 315271; rebuilds 0 |
 | `sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.html` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
-| `sed -i 's/btvarstrequalimage/QDBBENCHFEW/g' bench_out/work/*.html` | documents +1 -1; postings +2482; list bytes rewritten 25148; rebuilds 0 |
-| `cp doc/src/sgml/html/bug-reporting.html bench_out/same.txt` | documents +1 -0; postings +2774; list bytes rewritten 21859; rebuilds 0 |
+| `sed -i 's/btvarstrequalimage/QDBBENCHFEW/g' bench_out/work/*.html` | documents +1 -1; postings +2482; list bytes rewritten 26379; rebuilds 0 |
+| `cp doc/src/sgml/html/bug-reporting.html bench_out/same.txt` | documents +1 -0; postings +2774; list bytes rewritten 21414; rebuilds 0 |
 | `cp doc/src/sgml/html/bug-reporting.html bench_out/same.txt` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `cat doc/src/sgml/html/bug-reporting.html > bench_out/same.txt` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `grep -rc QDBBENCHMANY bench_out` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
@@ -160,200 +143,161 @@ Index work per command that changes data:
 | `mv bench_out/dir_copy bench_out/dir_moved` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `mv bench_out/hello.txt bench_out/a/b` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `ls -R bench_out/a` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
-| `rm bench_out/a/b/hello.txt` | documents +0 -1; postings +0; list bytes rewritten 73; rebuilds 0 |
+| `rm bench_out/a/b/hello.txt` | documents +0 -1; postings +0; list bytes rewritten 142; rebuilds 0 |
 | `rmdir bench_out/a/b` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
-| `rm -r bench_out/dir_moved` | documents +0 -2007; postings +0; list bytes rewritten 10133378; rebuilds 0 |
-| `rm -rf bench_out` | documents +0 -1216; postings +0; list bytes rewritten 4432249; rebuilds 0 |
+| `rm -r bench_out/dir_moved` | documents +0 -2007; postings +0; list bytes rewritten 10088756; rebuilds 0 |
+| `rm -rf bench_out` | documents +0 -1244; postings +0; list bytes rewritten 4460697; rebuilds 0 |
+
+## The index (On disk, after the writes)
+
+- Built in 0.000 ms while loading.
+- Size: 18.3 MB in memory, 11.4% of the text (2653.7 KB table, 15.6 MB lists, 85.1 KB document table). The posting data itself is 15.6 MB.
+- 152072 distinct trigrams, 0 postings, 9604 documents.
+- Share of posting data in the longest lists: top 100 trigrams 0.0%, top 1,000 0.0%, top 10,000 0.0%.
+- These figures are taken straight after loading.
+
+| Files in a trigram's list | Trigrams |
+|---:|---:|
 
 ## Time per command, in milliseconds
 
-| Command | GNU | rg | Stage 1 | Part 2 | Part 3, no index | Part 4, index off | Part 4, index on | Stage 3 part 1 | s3p2 | Agree |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| `ls` | 2.394 |  | 0.003 | 0.001 | 0.001 | 0.001 | 0.001 | 0.001 | 0.001 | yes |
-| `ls -a` | 2.370 |  | 0.003 | 0.004 | 0.002 | 0.002 | 0.002 | 0.002 | 0.001 | yes |
-| `ls -R` | 10.12 |  | 0.914 | 0.813 | 1.043 | 0.547 | 0.563 | 0.702 | 0.491 | yes |
-| `ls -aR src/backend` | 3.814 |  | 0.102 | 0.093 | 0.097 | 0.062 | 0.059 | 0.062 | 0.054 | yes |
-| `ls -p src/backend` | 2.278 |  | 0.003 | 0.003 | 0.002 | 0.002 | 0.002 | 0.003 | 0.002 | yes |
-| `find .` | 10.82 |  | 2.207 | 1.367 | 1.657 | 1.010 | 1.298 | 1.354 | 0.981 | yes |
-| `find . -name '*.html'` | 9.625 |  | 1.447 | 1.570 | 2.109 | 1.582 | 1.444 | 1.570 | 1.028 | yes |
-| `find . -name '*.c'` | 12.47 |  | 2.411 | 1.344 | 2.195 | 1.616 | 1.706 | 2.007 | 1.235 | yes |
-| `find . -type d` | 10.77 |  | 1.917 | 1.323 | 1.903 | 1.728 | 1.403 | 1.252 | 0.772 | yes |
-| `find . -type f` | 12.84 |  | 1.601 | 1.394 | 1.475 | 1.251 | 1.397 | 1.229 | 0.893 | yes |
-| `find . -maxdepth 2 -type f` | 3.079 |  | 0.013 | 0.013 | 0.010 | 0.009 | 0.015 | 0.009 | 0.009 | yes |
-| `find src/backend -name '*.html' -type f` | 3.559 |  | 0.152 | 0.147 | 0.129 | 0.129 | 0.177 | 0.262 | 0.133 | yes |
-| `find . -name 'Makefile'` | 10.65 |  | 1.271 | 2.822 | 1.136 | 1.289 | 2.052 | 2.292 | 1.060 | yes |
-| `cat doc/src/sgml/html/bug-reporting.html` | 2.478 |  | 0.003 | 0.002 | 0.001 | 0.001 | 0.001 | 0.003 | 0.002 | yes |
-| `cat -n doc/src/sgml/html/bug-reporting.html` | 2.487 |  | 0.027 | 0.030 | 0.025 | 0.028 | 0.028 | 0.059 | 0.043 | yes |
-| `head -n 20 doc/src/sgml/html/bug-reporting.html` | 2.700 |  | 0.014 | 0.004 | 0.003 | 0.003 | 0.003 | 0.003 | 0.004 | yes |
-| `tail -n 20 doc/src/sgml/html/bug-reporting.html` | 2.737 |  | 0.021 | 0.004 | 0.003 | 0.002 | 0.003 | 0.002 | 0.003 | yes |
-| `tail -n +100 doc/src/sgml/html/bug-reporting.html` | 2.580 |  | 0.021 | 0.006 | 0.009 | 0.006 | 0.006 | 0.006 | 0.008 | yes |
-| `wc doc/src/sgml/html/bug-reporting.html` | 2.807 |  | 0.035 | 0.034 | 0.029 | 0.025 | 0.023 | 0.023 | 0.023 | yes |
-| `wc -l doc/src/sgml/html/*.html` | 21.47 |  | 30.97 | 39.35 | 23.41 | 27.80 | 27.94 | 25.82 | 1.197 | yes |
-| `cat doc/src/sgml/html/*.html \| wc -l` | 33.08 |  | 35.75 | 25.09 | 29.57 | 31.04 | 30.00 | 27.92 | 26.55 | yes |
-| `cat doc/src/sgml/html/bug-reporting.html \| head -n 50 \| tail -n 10` | 3.798 |  | 0.029 | 0.014 | 0.010 | 0.016 | 0.010 | 0.010 | 0.009 | yes |
-| `grep -c not doc/src/sgml/html/bug-reporting.html` | 2.962 |  | 0.230 | 0.193 | 0.005 | 0.007 | 0.004 | 0.005 | 0.007 | yes |
-| `grep -n not doc/src/sgml/html/bug-reporting.html` | 2.695 |  | 0.225 | 0.226 | 0.007 | 0.011 | 0.006 | 0.007 | 0.007 | yes |
-| `sed 's/not/XX/g' doc/src/sgml/html/bug-reporting.html` | 2.371 |  | 0.299 | 0.266 | 0.234 | 0.413 | 0.205 | 0.234 | 0.224 | yes |
-| `sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' doc/src/sgml/html/bug-reporting.html` | 3.338 |  | 0.491 | 0.656 | 0.485 | 0.929 | 0.445 | 0.422 | 0.525 | yes |
-| `cat doc/src/sgml/html/bug-reporting.html \| sed 's/^/> /' \| wc -c` | 3.269 |  | 0.086 | 0.109 | 0.077 | 0.079 | 0.078 | 0.073 | 0.080 | yes |
-| `grep -rn qdbzzabsentterm .` | 153.5 | 74.01 | 2179.8 | 2014.7 | 24.53 | 23.80 | 0.014 | 0.022 | 0.019 | yes |
-| `grep -rl qdbzzabsentterm .` | 104.0 | 67.96 | 1991.3 | 2239.2 | 23.84 | 23.17 | 0.015 | 0.020 | 0.019 | yes |
-| `grep -rn abcdefghijklabcdefgh .` | 155.1 | 72.40 | 2113.7 | 2376.2 | 23.63 | 21.30 | 0.051 | 0.073 | 0.030 | yes |
-| `grep -rl abcdefghijklabcdefgh .` | 85.70 | 66.20 | 2229.1 | 2274.5 | 21.98 | 24.34 | 0.038 | 0.048 | 0.037 | yes |
-| `grep -rn btvarstrequalimage .` | 164.8 | 73.74 | 2248.9 | 2281.9 | 23.54 | 22.78 | 1.605 | 1.662 | 0.247 | yes |
-| `grep -rl btvarstrequalimage .` | 109.5 | 67.71 | 2222.5 | 2018.0 | 22.82 | 21.89 | 1.672 | 1.133 | 0.124 | yes |
-| `grep -rn undesirable .` | 190.9 | 77.56 | 2014.0 | 2167.2 | 24.38 | 22.74 | 2.512 | 1.829 | 1.532 | yes |
-| `grep -rl undesirable .` | 151.9 | 69.11 | 2284.4 | 2056.6 | 23.35 | 21.96 | 1.837 | 1.825 | 1.165 | yes |
-| `grep -rn passed .` | 189.6 | 84.98 | 2138.0 | 2294.0 | 26.53 | 27.48 | 21.08 | 15.95 | 15.89 | yes |
-| `grep -rl passed .` | 99.81 | 64.05 | 1557.0 | 1569.2 | 17.29 | 17.25 | 10.66 | 8.428 | 3.558 | yes |
-| `grep -rn not .` | 344.5 | 133.7 | 2318.7 | 2155.5 | 40.43 | 40.89 | 35.22 | 40.68 | 37.36 | yes |
-| `grep -rl not .` | 75.81 | 76.21 | 314.7 | 381.4 | 4.460 | 3.100 | 3.506 | 4.766 | 2.961 | yes |
-| `grep -rc undesirable .` | 146.1 | 68.82 | 2066.5 | 2304.3 | 24.24 | 22.44 | 3.520 | 3.865 | 1.427 | yes |
-| `grep -rin BTVARSTREQUALIMAGE .` | 178.9 | 91.66 | 2297.0 | 2111.8 | 31.59 | 25.56 | 1.457 | 1.141 | 0.381 | yes |
-| `grep -ri undesirable .` | 147.6 | 82.25 | 2281.0 | 2218.5 | 26.83 | 29.04 | 3.253 | 2.891 | 1.552 | yes |
-| `grep -rn undesirable src/backend` | 63.45 | 21.81 | 824.4 | 790.0 | 6.626 | 9.305 | 1.529 | 1.537 | 0.707 | yes |
-| `grep -rl passed src/backend` | 28.08 | 16.38 | 388.8 | 496.3 | 2.703 | 2.000 | 1.544 | 1.550 | 1.399 | yes |
-| `grep -rF 'undesirable' .` | 135.6 | 69.07 | 245.0 | 238.6 | 23.62 | 26.15 | 1.579 | 1.509 | 1.284 | yes |
-| `grep -rE 'size_[a-z]+\(' .` | 105.8 | 71.60 | 2152.1 | 2400.4 | 23.40 | 23.56 | 8.872 | 8.740 | 8.769 | yes |
-| `grep -rE 'btvarstrequalimage\|abcdefghijklabcdefgh' .` | 209.7 | 76.29 | 3054.1 | 3024.7 | 32.38 | 31.18 | 1.877 | 2.732 | 0.475 | yes |
-| `grep -rE 'passed\|undesirable' .` | 285.0 | 80.30 | 2612.7 | 3216.1 | 32.24 | 31.31 | 19.57 | 19.63 | 17.15 | yes |
-| `grep -rE '[0-9]{4,}' .` | 294.5 | 359.3 | 2192.2 | 2054.3 | 151.6 | 186.8 | 176.6 | 202.3 | 197.5 | yes |
-| `grep -rn '^#include' .` | 191.8 | 95.35 | 1673.7 | 1990.0 | 25.30 | 27.63 | 11.65 | 11.38 | 9.421 | yes |
-| `grep -rE '^(import\|from) ' .` | 177.8 | 103.1 | 2040.8 | 2116.2 | 37.76 | 38.14 | 43.93 | 36.40 | 39.02 | yes |
-| `grep -rin 'return [a-z_]*;$' src/backend` | 103.3 | 39.93 | 956.9 | 843.6 | 17.26 | 18.77 | 16.54 | 16.45 | 15.48 | yes |
-| `grep -rv e src/include/access` | 5.241 | 7.152 | 7.669 | 3.327 | 0.490 | 0.439 | 0.482 | 0.464 | 0.488 | yes |
-| `grep -r '\(undesirable\).*\1' .` | 122.8 |  | 3929.1 | 3988.6 | 23.34 | 26.49 | 2.322 | 2.472 | 1.411 | yes |
-| `grep -n btvarstrequalimage doc/src/sgml/html/*.html` | 22.72 |  | | | | | | 0.691 | 0.707 | yes |
-| `grep -l undesirable doc/src/sgml/html/*.html` | 19.76 |  | | | | | | 1.224 | 0.780 | yes |
-| `grep -c qdbzzabsentterm doc/src/sgml/html/*.html` | 20.86 |  | | | | | | 0.608 | 0.607 | yes |
-| `grep -rl passed . \| wc -l` | 109.0 |  | 1450.1 | 1465.5 | 18.28 | 20.56 | 5.880 | 7.251 | 6.061 | yes |
-| `grep -rc not . \| grep -v ':0$' \| wc -l` | 251.1 |  | 2196.3 | 2213.1 | 31.56 | 33.97 | 32.83 | 32.51 | 28.08 | yes |
-| `find . -name '*.html' \| wc -l` | 12.92 |  | 1.709 | 1.848 | 1.851 | 1.779 | 1.615 | 1.327 | 1.038 | yes |
-| `find . -type f \| grep -c html` | 11.72 |  | 4.903 | 6.074 | 1.905 | 1.615 | 1.328 | 3.127 | 1.122 | yes |
-| `grep -rn not . \| head -n 5` | 4.258 |  | 2280.0 | 0.467 | 0.008 | 0.012 | 0.008 | 0.008 | 0.006 | order differs |
-| `grep -rn passed . \| head -n 1` | 21.61 |  | 2205.4 | 1.723 | 0.012 | 0.021 | 0.012 | 0.012 | 0.017 | order differs |
-| `find . -type f \| head -n 3` | 4.857 |  | 2.421 | 0.044 | 0.050 | 0.045 | 0.046 | 0.034 | 0.077 | order differs |
-| `cat doc/src/sgml/html/*.html \| head -n 2` | 5.626 |  | 15.07 | 0.539 | 0.315 | 0.253 | 0.318 | 0.341 | 0.468 | yes |
-| `mkdir -p bench_out/a/b` | 4.435 |  | 0.025 | 0.022 | 0.011 | 0.011 | 0.010 | 0.021 | 0.349 | yes |
-| `touch bench_out/empty.txt` | 3.342 |  | 0.018 | 0.019 | 0.007 | 0.013 | 0.012 | 0.013 | 0.336 | yes |
-| `echo 'hello world' > bench_out/hello.txt` | 2.730 |  | 0.018 | 0.018 | 0.022 | 0.016 | 0.019 | 0.024 | 0.315 | yes |
-| `echo 'another line' >> bench_out/hello.txt` | 2.438 |  | 0.030 | 0.013 | 0.011 | 0.013 | 0.018 | 0.023 | 0.287 | yes |
-| `cp doc/src/sgml/html/bug-reporting.html bench_out/copy.txt` | 3.914 |  | 0.041 | 0.034 | 0.026 | 0.026 | 0.316 | 0.252 | 1.320 | yes |
-| `cp -r src/backend bench_out/dir_copy` | 435.5 |  | 29.83 | 51.93 | 35.82 | 42.23 | 372.3 | 308.3 | 483.8 | yes |
-| `cp -r doc/src/sgml/html bench_out/work` | 355.2 |  | 12.97 | 15.61 | 12.29 | 13.43 | 101.0 | 105.8 | 144.2 | yes |
-| `sed -i 's/not/QDBBENCHONE/g' bench_out/copy.txt` | 4.295 |  | 0.758 | 0.386 | 0.312 | 0.295 | 0.538 | 0.559 | 1.265 | yes |
-| `sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt` | 3.452 |  | 0.701 | 0.343 | 0.284 | 0.253 | 0.492 | 0.509 | 1.133 | yes |
-| `sed -i 's/not/QDBBENCHMANY/g' bench_out/work/*.html` | 447.3 |  | 320.7 | 336.1 | 190.7 | 231.0 | 296.5 | 301.9 | 285.9 | yes |
-| `sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.html` | 798.9 |  | | | | | | 1.845 | 1.579 | yes |
-| `sed -i 's/btvarstrequalimage/QDBBENCHFEW/g' bench_out/work/*.html` | 808.8 |  | | | | | | 1.940 | 3.078 | yes |
-| `cp doc/src/sgml/html/bug-reporting.html bench_out/same.txt` | 4.238 |  | | | | | | 0.030 | 0.030 | yes |
-| `cp doc/src/sgml/html/bug-reporting.html bench_out/same.txt` | 3.358 |  | | | | | | 0.030 | 0.030 | yes |
-| `cat doc/src/sgml/html/bug-reporting.html > bench_out/same.txt` | 5.588 |  | | | | | | 0.030 | 0.033 | yes |
-| `grep -rc QDBBENCHMANY bench_out` | 29.10 |  | 1111.1 | 1046.2 | 12.00 | 12.17 | 4.294 | 3.427 | 5.891 | yes |
-| `grep -rl QDBBENCHMANY .` | 85.63 |  | 3145.5 | 3030.1 | 33.71 | 32.67 | 1.838 | 1.794 | 1.952 | yes |
-| `grep -rl QDBBENCHONE .` | 109.8 |  | 3329.2 | 3342.9 | 35.44 | 35.46 | 0.384 | 0.546 | 0.348 | yes |
-| `mv bench_out/dir_copy bench_out/dir_moved` | 3.594 |  | 0.035 | 0.041 | 0.031 | 0.021 | 0.024 | 0.024 | 0.521 | yes |
-| `mv bench_out/hello.txt bench_out/a/b` | 3.527 |  | 0.031 | 0.039 | 0.019 | 0.027 | 0.022 | 0.030 | 0.901 | yes |
-| `ls -R bench_out/a` | 3.057 |  | 0.022 | 0.022 | 0.014 | 0.014 | 0.012 | 0.025 | 0.015 | yes |
-| `rm bench_out/a/b/hello.txt` | 3.146 |  | 0.023 | 0.027 | 0.012 | 0.013 | 0.008 | 0.015 | 0.532 | yes |
-| `rmdir bench_out/a/b` | 2.931 |  | 0.019 | 0.028 | 0.010 | 0.011 | 0.010 | 0.010 | 0.373 | yes |
-| `rm -r bench_out/dir_moved` | 28.91 |  | 1.733 | 1.902 | 0.920 | 0.748 | 12.58 | 10.94 | 41.64 | yes |
-| `rm -rf bench_out` | 147.1 |  | 2.232 | 1.934 | 0.869 | 0.609 | 19.33 | 23.70 | 29.42 | yes |
+| Command | GNU | rg | Stage 2, in memory | Stage 3, in memory | On disk, settled | On disk, after the writes | Agree |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `ls` | 3.451 |  | 0.001 | 0.001 | 0.001 | 0.002 | yes |
+| `ls -a` | 3.458 |  | 0.002 | 0.002 | 0.002 | 0.003 | yes |
+| `ls -R` | 10.99 |  | 0.563 | 0.408 | 0.288 | 0.391 | yes |
+| `ls -aR src/backend` | 4.545 |  | 0.059 | 0.056 | 0.055 | 0.058 | yes |
+| `ls -p src/backend` | 2.845 |  | 0.002 | 0.002 | 0.002 | 0.003 | yes |
+| `find .` | 14.46 |  | 1.298 | 1.121 | 0.767 | 0.757 | yes |
+| `find . -name '*.html'` | 10.91 |  | 1.444 | 1.093 | 0.953 | 0.959 | yes |
+| `find . -name '*.c'` | 13.22 |  | 1.706 | 1.131 | 1.780 | 1.029 | yes |
+| `find . -type d` | 8.916 |  | 1.403 | 0.891 | 0.718 | 0.775 | yes |
+| `find . -type f` | 10.67 |  | 1.397 | 1.540 | 1.182 | 0.802 | yes |
+| `find . -maxdepth 2 -type f` | 3.310 |  | 0.015 | 0.014 | 0.015 | 0.011 | yes |
+| `find src/backend -name '*.html' -type f` | 4.182 |  | 0.177 | 0.114 | 0.189 | 0.119 | yes |
+| `find . -name 'Makefile'` | 9.555 |  | 2.052 | 0.853 | 1.344 | 0.804 | yes |
+| `cat doc/src/sgml/html/bug-reporting.html` | 2.653 |  | 0.001 | 0.001 | 0.002 | 0.001 | yes |
+| `cat -n doc/src/sgml/html/bug-reporting.html` | 2.618 |  | 0.028 | 0.027 | 0.048 | 0.041 | yes |
+| `head -n 20 doc/src/sgml/html/bug-reporting.html` | 2.931 |  | 0.003 | 0.004 | 0.003 | 0.004 | yes |
+| `tail -n 20 doc/src/sgml/html/bug-reporting.html` | 2.646 |  | 0.003 | 0.003 | 0.002 | 0.004 | yes |
+| `tail -n +100 doc/src/sgml/html/bug-reporting.html` | 2.807 |  | 0.006 | 0.006 | 0.005 | 0.009 | yes |
+| `wc doc/src/sgml/html/bug-reporting.html` | 3.621 |  | 0.023 | 0.021 | 0.020 | 0.021 | yes |
+| `wc -l doc/src/sgml/html/*.html` | 17.86 |  | 27.94 | 0.822 | 0.901 | 0.956 | yes |
+| `cat doc/src/sgml/html/*.html \| wc -l` | 39.82 |  | 30.00 | 28.92 | 30.51 | 31.12 | yes |
+| `cat doc/src/sgml/html/bug-reporting.html \| head -n 50 \| tail -n 10` | 4.476 |  | 0.010 | 0.010 | 0.010 | 0.015 | yes |
+| `grep -c not doc/src/sgml/html/bug-reporting.html` | 3.720 |  | 0.004 | 0.009 | 0.005 | 0.007 | yes |
+| `grep -n not doc/src/sgml/html/bug-reporting.html` | 3.011 |  | 0.006 | 0.007 | 0.007 | 0.009 | yes |
+| `sed 's/not/XX/g' doc/src/sgml/html/bug-reporting.html` | 3.803 |  | 0.205 | 0.183 | 0.233 | 0.221 | yes |
+| `sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' doc/src/sgml/html/bug-reporting.html` | 3.682 |  | 0.445 | 0.515 | 0.590 | 0.564 | yes |
+| `cat doc/src/sgml/html/bug-reporting.html \| sed 's/^/> /' \| wc -c` | 4.112 |  | 0.078 | 0.079 | 0.083 | 0.092 | yes |
+| `grep -rn qdbzzabsentterm .` | 169.9 | 84.14 | 0.014 | 0.013 | 0.021 | 0.018 | yes |
+| `grep -rl qdbzzabsentterm .` | 108.9 | 72.13 | 0.015 | 0.021 | 0.024 | 0.019 | yes |
+| `grep -rn abcdefghijklabcdefgh .` | 137.6 | 74.61 | 0.051 | 0.026 | 0.027 | 0.047 | yes |
+| `grep -rl abcdefghijklabcdefgh .` | 96.30 | 74.37 | 0.038 | 0.020 | 0.027 | 0.037 | yes |
+| `grep -rn btvarstrequalimage .` | 158.9 | 78.61 | 1.605 | 0.104 | 0.183 | 0.114 | yes |
+| `grep -rl btvarstrequalimage .` | 102.5 | 73.97 | 1.672 | 0.089 | 0.085 | 0.093 | yes |
+| `grep -rn undesirable .` | 187.2 | 90.06 | 2.512 | 0.797 | 1.028 | 0.900 | yes |
+| `grep -rl undesirable .` | 137.5 | 79.81 | 1.837 | 0.503 | 0.535 | 0.763 | yes |
+| `grep -rn passed .` | 200.0 | 85.23 | 21.08 | 13.36 | 15.87 | 12.91 | yes |
+| `grep -rl passed .` | 125.0 | 64.92 | 10.66 | 6.376 | 2.978 | 2.805 | yes |
+| `grep -rn not .` | 311.0 | 175.9 | 35.22 | 38.07 | 36.87 | 41.52 | yes |
+| `grep -rl not .` | 78.51 | 66.81 | 3.506 | 4.208 | 2.882 | 2.658 | yes |
+| `grep -rc undesirable .` | 143.6 | 69.06 | 3.520 | 1.188 | 1.431 | 0.881 | yes |
+| `grep -rin BTVARSTREQUALIMAGE .` | 174.2 | 96.27 | 1.457 | 0.123 | 0.106 | 0.132 | yes |
+| `grep -ri undesirable .` | 146.0 | 98.47 | 3.253 | 0.677 | 0.632 | 0.875 | yes |
+| `grep -rn undesirable src/backend` | 71.65 | 30.82 | 1.529 | 0.388 | 0.418 | 0.565 | yes |
+| `grep -rl passed src/backend` | 34.81 | 19.14 | 1.544 | 1.404 | 1.218 | 1.192 | yes |
+| `grep -rF 'undesirable' .` | 145.0 | 71.90 | 1.579 | 0.586 | 0.744 | 0.706 | yes |
+| `grep -rE 'size_[a-z]+\(' .` | 110.8 | 82.19 | 8.872 | 3.157 | 6.092 | 3.183 | yes |
+| `grep -rE 'btvarstrequalimage\|abcdefghijklabcdefgh' .` | 216.5 | 84.71 | 1.877 | 0.231 | 0.263 | 0.254 | yes |
+| `grep -rE 'passed\|undesirable' .` | 250.4 | 95.39 | 19.57 | 19.68 | 20.71 | 14.96 | yes |
+| `grep -rE '[0-9]{4,}' .` | 322.6 | 416.8 | 176.6 | 174.3 | 185.0 | 198.5 | yes |
+| `grep -rn '^#include' .` | 195.6 | 86.56 | 11.65 | 9.960 | 9.657 | 8.264 | yes |
+| `grep -rE '^(import\|from) ' .` | 170.9 | 83.11 | 43.93 | 33.92 | 36.34 | 37.31 | yes |
+| `grep -rin 'return [a-z_]*;$' src/backend` | 103.7 | 47.10 | 16.54 | 15.11 | 16.58 | 15.36 | yes |
+| `grep -rv e src/include/access` | 5.201 | 6.393 | 0.482 | 0.584 | 0.757 | 0.476 | yes |
+| `grep -r '\(undesirable\).*\1' .` | 148.2 |  | 2.322 | 1.288 | 1.364 | 0.858 | yes |
+| `grep -n btvarstrequalimage doc/src/sgml/html/*.html` | 19.08 |  | | 0.630 | 0.675 | 0.679 | yes |
+| `grep -l undesirable doc/src/sgml/html/*.html` | 20.21 |  | | 0.694 | 1.091 | 1.236 | yes |
+| `grep -c qdbzzabsentterm doc/src/sgml/html/*.html` | 17.60 |  | | 0.454 | 0.607 | 0.549 | yes |
+| `grep -rl passed . \| wc -l` | 113.0 |  | 5.880 | 8.441 | 7.873 | 4.563 | yes |
+| `grep -rc not . \| grep -v ':0$' \| wc -l` | 239.9 |  | 32.83 | 27.42 | 30.56 | 29.11 | yes |
+| `find . -name '*.html' \| wc -l` | 10.97 |  | 1.615 | 1.200 | 1.048 | 1.142 | yes |
+| `find . -type f \| grep -c html` | 11.71 |  | 1.328 | 1.334 | 1.278 | 0.993 | yes |
+| `grep -rn not . \| head -n 5` | 4.354 |  | 0.008 | 0.010 | 0.008 | 0.010 | order differs |
+| `grep -rn passed . \| head -n 1` | 21.75 |  | 0.012 | 0.012 | 0.022 | 0.022 | order differs |
+| `find . -type f \| head -n 3` | 4.482 |  | 0.046 | 0.038 | 0.039 | 0.055 | order differs |
+| `cat doc/src/sgml/html/*.html \| head -n 2` | 5.694 |  | 0.318 | 0.282 | 0.500 | 0.573 | yes |
 
 ## Peak memory per command
 
-| Command | Output | Stage 1 | Part 2 | Part 3, no index | Part 4, index off | Part 4, index on | Stage 3 part 1 | s3p2 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `ls` | 144 B | 1121 B | 961 B | 961 B | 961 B | 961 B | 961 B | 961 B |
-| `ls -a` | 307 B | 1945 B | 1785 B | 1785 B | 1785 B | 1785 B | 1785 B | 1785 B |
-| `ls -R` | 151.8 KB | 271.4 KB | 73.0 KB | 73.0 KB | 73.0 KB | 73.0 KB | 73.0 KB | 73.0 KB |
-| `ls -aR src/backend` | 23.1 KB | 49.1 KB | 29.2 KB | 29.2 KB | 29.2 KB | 29.2 KB | 29.2 KB | 29.2 KB |
-| `ls -p src/backend` | 279 B | 2235 B | 2075 B | 2075 B | 2075 B | 2075 B | 2075 B | 2075 B |
-| `find .` | 347.5 KB | 443.4 KB | 28.5 KB | 28.5 KB | 28.5 KB | 28.5 KB | 28.5 KB | 28.5 KB |
-| `find . -name '*.html'` | 49.6 KB | 69.1 KB | 18.3 KB | 18.3 KB | 18.3 KB | 18.3 KB | 18.3 KB | 18.3 KB |
-| `find . -name '*.c'` | 54.0 KB | 65.0 KB | 33.0 KB | 33.0 KB | 33.0 KB | 33.0 KB | 33.0 KB | 33.0 KB |
-| `find . -type d` | 16.8 KB | 34.0 KB | 17.5 KB | 17.5 KB | 17.5 KB | 17.5 KB | 17.5 KB | 17.5 KB |
-| `find . -type f` | 330.7 KB | 410.9 KB | 26.7 KB | 26.7 KB | 26.7 KB | 26.7 KB | 26.7 KB | 26.7 KB |
-| `find . -maxdepth 2 -type f` | 992 B | 2980 B | 2820 B | 2820 B | 2820 B | 2820 B | 2820 B | 2820 B |
-| `find src/backend -name '*.html' -type f` | 0 B | 1876 B | 1952 B | 1952 B | 1952 B | 1952 B | 1952 B | 1952 B |
-| `find . -name 'Makefile'` | 9792 B | 11.8 KB | 11.6 KB | 11.6 KB | 11.6 KB | 11.6 KB | 11.6 KB | 11.6 KB |
-| `cat doc/src/sgml/html/bug-reporting.html` | 20.0 KB | 20.8 KB | 1068 B | 1068 B | 1068 B | 1068 B | 1068 B | 1068 B |
-| `cat -n doc/src/sgml/html/bug-reporting.html` | 21.7 KB | 33.2 KB | 33.0 KB | 33.0 KB | 33.0 KB | 33.0 KB | 33.0 KB | 33.0 KB |
-| `head -n 20 doc/src/sgml/html/bug-reporting.html` | 3143 B | 4235 B | 4075 B | 4075 B | 4075 B | 4075 B | 4075 B | 4075 B |
-| `tail -n 20 doc/src/sgml/html/bug-reporting.html` | 2038 B | 3130 B | 2970 B | 2970 B | 2970 B | 2970 B | 2970 B | 2970 B |
-| `tail -n +100 doc/src/sgml/html/bug-reporting.html` | 11.5 KB | 12.6 KB | 12.5 KB | 12.5 KB | 12.5 KB | 12.5 KB | 12.5 KB | 12.5 KB |
-| `wc doc/src/sgml/html/bug-reporting.html` | 55 B | 992 B | 1076 B | 1076 B | 1076 B | 1076 B | 1076 B | 1076 B |
-| `wc -l doc/src/sgml/html/*.html` | 57.8 KB | 268.9 KB | 268.9 KB | 268.9 KB | 268.9 KB | 268.9 KB | 268.9 KB | 268.9 KB |
-| `cat doc/src/sgml/html/*.html \| wc -l` | 7 B | 22.2 MB | 269.1 KB | 269.1 KB | 269.1 KB | 269.1 KB | 269.1 KB | 269.1 KB |
-| `cat doc/src/sgml/html/bug-reporting.html \| head -n 50 \| tail -n 10` | 565 B | 27.1 KB | 10.3 KB | 10.3 KB | 10.3 KB | 10.3 KB | 10.3 KB | 10.3 KB |
-| `grep -c not doc/src/sgml/html/bug-reporting.html` | 3 B | 3631 B | 3415 B | 5856 B | 5856 B | 5856 B | 5856 B | 5856 B |
-| `grep -n not doc/src/sgml/html/bug-reporting.html` | 3886 B | 9263 B | 9047 B | 6933 B | 6933 B | 6933 B | 6933 B | 6933 B |
-| `sed 's/not/XX/g' doc/src/sgml/html/bug-reporting.html` | 19.9 KB | 35.9 KB | 35.7 KB | 35.9 KB | 35.9 KB | 35.9 KB | 35.9 KB | 35.9 KB |
-| `sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' doc/src/sgml/html/bug-reporting.html` | 20.0 KB | 37.2 KB | 37.1 KB | 37.1 KB | 37.1 KB | 37.1 KB | 37.1 KB | 37.1 KB |
-| `cat doc/src/sgml/html/bug-reporting.html \| sed 's/^/> /' \| wc -c` | 6 B | 55.5 KB | 36.4 KB | 36.7 KB | 36.7 KB | 36.7 KB | 36.7 KB | 36.7 KB |
-| `grep -rn qdbzzabsentterm .` | 0 B | 11.3 KB | 11.1 KB | 19.6 KB | 20.3 KB | 20.3 KB | 20.3 KB | 20.3 KB |
-| `grep -rl qdbzzabsentterm .` | 0 B | 11.3 KB | 11.1 KB | 19.6 KB | 20.3 KB | 20.3 KB | 20.3 KB | 20.3 KB |
-| `grep -rn abcdefghijklabcdefgh .` | 170 B | 15.3 KB | 15.1 KB | 26.1 KB | 26.8 KB | 26.8 KB | 26.8 KB | 26.8 KB |
-| `grep -rl abcdefghijklabcdefgh .` | 41 B | 15.1 KB | 14.9 KB | 26.1 KB | 26.8 KB | 26.8 KB | 26.8 KB | 26.8 KB |
-| `grep -rn btvarstrequalimage .` | 1660 B | 17.1 KB | 14.4 KB | 24.0 KB | 24.6 KB | 24.6 KB | 24.6 KB | 24.6 KB |
-| `grep -rl btvarstrequalimage .` | 316 B | 14.4 KB | 13.8 KB | 24.0 KB | 24.6 KB | 24.6 KB | 24.6 KB | 24.6 KB |
-| `grep -rn undesirable .` | 11.2 KB | 22.7 KB | 9295 B | 15.3 KB | 16.0 KB | 29.2 KB | 29.2 KB | 29.1 KB |
-| `grep -rl undesirable .` | 2982 B | 12.3 KB | 8971 B | 15.3 KB | 16.0 KB | 29.2 KB | 29.2 KB | 29.1 KB |
-| `grep -rn passed .` | 225.8 KB | 362.1 KB | 11.2 KB | 9290 B | 9418 B | 15.3 KB | 15.3 KB | 25.9 KB |
-| `grep -rl passed .` | 30.4 KB | 42.7 KB | 5658 B | 9290 B | 9418 B | 9696 B | 9696 B | 25.6 KB |
-| `grep -rn not .` | 13.4 MB | 26.2 MB | 29.3 KB | 31.1 KB | 31.1 KB | 31.1 KB | 31.1 KB | 31.1 KB |
-| `grep -rl not .` | 189.7 KB | 208.7 KB | 3771 B | 5758 B | 5758 B | 5758 B | 5758 B | 5758 B |
-| `grep -rc undesirable .` | 347.5 KB | 418.6 KB | 34.5 KB | 30.1 KB | 30.6 KB | 44.4 KB | 44.4 KB | 44.1 KB |
-| `grep -rin BTVARSTREQUALIMAGE .` | 1730 B | 17.1 KB | 14.4 KB | 24.1 KB | 24.6 KB | 24.6 KB | 24.6 KB | 24.6 KB |
-| `grep -ri undesirable .` | 10.8 KB | 22.1 KB | 9279 B | 15.3 KB | 16.0 KB | 29.2 KB | 29.2 KB | 29.0 KB |
-| `grep -rn undesirable src/backend` | 3398 B | 13.7 KB | 9144 B | 15.3 KB | 16.0 KB | 16.0 KB | 16.0 KB | 16.0 KB |
-| `grep -rl passed src/backend` | 10.7 KB | 21.1 KB | 5631 B | 9315 B | 9443 B | 9717 B | 9717 B | 25.7 KB |
-| `grep -rF 'undesirable' .` | 10.8 KB | 14.5 KB | 1661 B | 1830 B | 2342 B | 29.2 KB | 29.2 KB | 29.1 KB |
-| `grep -rE 'size_[a-z]+\(' .` | 20.4 KB | 44.7 KB | 9118 B | 15.1 KB | 15.1 KB | 117.2 KB | 117.2 KB | 124.5 KB |
-| `grep -rE 'btvarstrequalimage\|abcdefghijklabcdefgh' .` | 1754 B | 30.4 KB | 27.8 KB | 48.5 KB | 49.6 KB | 49.6 KB | 49.6 KB | 49.6 KB |
-| `grep -rE 'passed\|undesirable' .` | 228.0 KB | 349.3 KB | 18.4 KB | 23.2 KB | 24.0 KB | 24.0 KB | 24.0 KB | 27.2 KB |
-| `grep -rE '[0-9]{4,}' .` | 39.4 MB | 52.4 MB | 29.5 KB | 23.1 KB | 23.1 KB | 23.1 KB | 23.1 KB | 23.1 KB |
-| `grep -rn '^#include' .` | 1219.8 KB | 1383.7 KB | 17.9 KB | 17.3 KB | 17.5 KB | 33.9 KB | 33.9 KB | 55.2 KB |
-| `grep -rE '^(import\|from) ' .` | 61.8 KB | 83.0 KB | 18.3 KB | 23.3 KB | 23.9 KB | 23.9 KB | 23.9 KB | 23.9 KB |
-| `grep -rin 'return [a-z_]*;$' src/backend` | 902.7 KB | 991.2 KB | 38.6 KB | 33.8 KB | 34.0 KB | 50.4 KB | 50.4 KB | 66.9 KB |
-| `grep -rv e src/include/access` | 232.5 KB | 428.4 KB | 28.8 KB | 27.5 KB | 27.5 KB | 27.5 KB | 27.5 KB | 27.5 KB |
-| `grep -r '\(undesirable\).*\1' .` | 0 B | 5754 B | 5538 B | 9822 B | 10.3 KB | 33.0 KB | 33.0 KB | 32.9 KB |
-| `grep -n btvarstrequalimage doc/src/sgml/html/*.html` | 125 B | | | | | | 269.2 KB | 269.2 KB |
-| `grep -l undesirable doc/src/sgml/html/*.html` | 976 B | | | | | | 269.2 KB | 269.2 KB |
-| `grep -c qdbzzabsentterm doc/src/sgml/html/*.html` | 49.6 KB | | | | | | 269.2 KB | 269.2 KB |
-| `grep -rl passed . \| wc -l` | 4 B | 43.2 KB | 6419 B | 10.1 KB | 10.2 KB | 10.5 KB | 10.5 KB | 26.4 KB |
-| `grep -rc not . \| grep -v ':0$' \| wc -l` | 5 B | 634.8 KB | 10.3 KB | 10.9 KB | 10.9 KB | 10.9 KB | 10.9 KB | 10.9 KB |
-| `find . -name '*.html' \| wc -l` | 5 B | 69.7 KB | 19.0 KB | 19.0 KB | 19.0 KB | 19.0 KB | 19.0 KB | 19.0 KB |
-| `find . -type f \| grep -c html` | 5 B | 414.3 KB | 30.7 KB | 34.2 KB | 34.3 KB | 34.3 KB | 34.3 KB | 34.3 KB |
-| `grep -rn not . \| head -n 5` | 386 B | 26.2 MB | 5922 B | 6624 B | 6624 B | 6624 B | 6624 B | 6624 B |
-| `grep -rn passed . \| head -n 1` | 88 B | 362.8 KB | 6289 B | 10.2 KB | 10.3 KB | 10.3 KB | 10.3 KB | 10.3 KB |
-| `find . -type f \| head -n 3` | 61 B | 411.6 KB | 27.5 KB | 27.5 KB | 27.5 KB | 27.5 KB | 27.5 KB | 27.5 KB |
-| `cat doc/src/sgml/html/*.html \| head -n 2` | 1555 B | 22.2 MB | 269.2 KB | 269.2 KB | 269.2 KB | 269.2 KB | 269.2 KB | 269.2 KB |
-| `mkdir -p bench_out/a/b` | 0 B | 1987 B | 1827 B | 1827 B | 1827 B | 1827 B | 1827 B | 2115 B |
-| `touch bench_out/empty.txt` | 0 B | 883 B | 979 B | 979 B | 979 B | 979 B | 979 B | 979 B |
-| `echo 'hello world' > bench_out/hello.txt` | 0 B | 1207 B | 1242 B | 1242 B | 1242 B | 1242 B | 1242 B | 1244 B |
-| `echo 'another line' >> bench_out/hello.txt` | 0 B | 1150 B | 1246 B | 1246 B | 1246 B | 1246 B | 1246 B | 1246 B |
-| `cp doc/src/sgml/html/bug-reporting.html bench_out/copy.txt` | 0 B | 21.1 KB | 20.9 KB | 20.9 KB | 20.9 KB | 24.1 KB | 24.1 KB | 283.3 KB |
-| `cp -r src/backend bench_out/dir_copy` | 0 B | 65.1 MB | 65.1 MB | 65.1 MB | 65.1 MB | 68.8 MB | 68.8 MB | 9457.6 KB |
-| `cp -r doc/src/sgml/html bench_out/work` | 0 B | 16.8 MB | 16.8 MB | 16.8 MB | 16.8 MB | 19.2 MB | 19.2 MB | 5258.7 KB |
-| `sed -i 's/not/QDBBENCHONE/g' bench_out/copy.txt` | 0 B | 36.0 KB | 35.9 KB | 36.0 KB | 36.0 KB | 39.7 KB | 40.0 KB | 56.2 KB |
-| `sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt` | 0 B | 35.3 KB | 35.1 KB | 35.2 KB | 35.2 KB | 38.3 KB | 41.0 KB | 57.8 KB |
-| `sed -i 's/not/QDBBENCHMANY/g' bench_out/work/*.html` | 0 B | 7758.3 KB | 7758.2 KB | 7758.3 KB | 7758.3 KB | 10.3 MB | 9358.9 KB | 2490.7 KB |
-| `sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.html` | 0 B | | | | | | 263.0 KB | 263.0 KB |
-| `sed -i 's/btvarstrequalimage/QDBBENCHFEW/g' bench_out/work/*.html` | 0 B | | | | | | 265.5 KB | 265.5 KB |
-| `cp doc/src/sgml/html/bug-reporting.html bench_out/same.txt` | 0 B | | | | | | 20.9 KB | 20.9 KB |
-| `cp doc/src/sgml/html/bug-reporting.html bench_out/same.txt` | 0 B | | | | | | 20.9 KB | 20.9 KB |
-| `cat doc/src/sgml/html/bug-reporting.html > bench_out/same.txt` | 0 B | | | | | | 21.2 KB | 21.1 KB |
-| `grep -rc QDBBENCHMANY bench_out` | 110.1 KB | 156.9 KB | 27.9 KB | 28.7 KB | 29.2 KB | 33.3 KB | 33.3 KB | 494.3 KB |
-| `grep -rl QDBBENCHMANY .` | 36.1 KB | 64.9 KB | 9532 B | 16.4 KB | 17.1 KB | 97.6 KB | 97.6 KB | 529.2 KB |
-| `grep -rl QDBBENCHONE .` | 21 B | 9209 B | 8993 B | 15.3 KB | 16.0 KB | 16.0 KB | 16.0 KB | 16.0 KB |
-| `mv bench_out/dir_copy bench_out/dir_moved` | 0 B | 1095 B | 1191 B | 1191 B | 1191 B | 1191 B | 1191 B | 1191 B |
-| `mv bench_out/hello.txt bench_out/a/b` | 0 B | 1448 B | 1288 B | 1288 B | 1288 B | 1288 B | 1288 B | 1288 B |
-| `ls -R bench_out/a` | 41 B | 1213 B | 1089 B | 1089 B | 1089 B | 1089 B | 1089 B | 1089 B |
-| `rm bench_out/a/b/hello.txt` | 0 B | 901 B | 997 B | 997 B | 997 B | 997 B | 997 B | 997 B |
-| `rmdir bench_out/a/b` | 0 B | 849 B | 945 B | 945 B | 945 B | 945 B | 945 B | 945 B |
-| `rm -r bench_out/dir_moved` | 0 B | 1179 B | 1129 B | 1129 B | 1129 B | 1129 B | 1129 B | 1129 B |
-| `rm -rf bench_out` | 0 B | 9514 B | 9354 B | 9354 B | 9354 B | 9354 B | 9354 B | 9162 B |
+| Command | Output | Stage 2, in memory | Stage 3, in memory | On disk, settled | On disk, after the writes |
+|---|---:|---:|---:|---:|---:|
+| `ls` | 144 B | 961 B | 961 B | 961 B | 961 B |
+| `ls -a` | 307 B | 1785 B | 1785 B | 1785 B | 1785 B |
+| `ls -R` | 151.8 KB | 73.0 KB | 73.0 KB | 73.0 KB | 73.0 KB |
+| `ls -aR src/backend` | 23.1 KB | 29.2 KB | 29.2 KB | 29.2 KB | 29.2 KB |
+| `ls -p src/backend` | 279 B | 2075 B | 2075 B | 2075 B | 2075 B |
+| `find .` | 347.5 KB | 28.5 KB | 28.5 KB | 28.5 KB | 28.5 KB |
+| `find . -name '*.html'` | 49.6 KB | 18.3 KB | 18.3 KB | 18.3 KB | 18.3 KB |
+| `find . -name '*.c'` | 54.0 KB | 33.0 KB | 33.0 KB | 33.0 KB | 33.0 KB |
+| `find . -type d` | 16.8 KB | 17.5 KB | 17.5 KB | 17.5 KB | 17.5 KB |
+| `find . -type f` | 330.7 KB | 26.7 KB | 26.7 KB | 26.7 KB | 26.7 KB |
+| `find . -maxdepth 2 -type f` | 992 B | 2820 B | 2820 B | 2820 B | 2820 B |
+| `find src/backend -name '*.html' -type f` | 0 B | 1952 B | 1952 B | 1952 B | 1952 B |
+| `find . -name 'Makefile'` | 9792 B | 11.6 KB | 11.6 KB | 11.6 KB | 11.6 KB |
+| `cat doc/src/sgml/html/bug-reporting.html` | 20.0 KB | 1068 B | 1068 B | 1068 B | 1068 B |
+| `cat -n doc/src/sgml/html/bug-reporting.html` | 21.7 KB | 33.0 KB | 33.0 KB | 33.0 KB | 33.0 KB |
+| `head -n 20 doc/src/sgml/html/bug-reporting.html` | 3143 B | 4075 B | 4075 B | 4075 B | 4075 B |
+| `tail -n 20 doc/src/sgml/html/bug-reporting.html` | 2038 B | 2970 B | 2970 B | 2970 B | 2970 B |
+| `tail -n +100 doc/src/sgml/html/bug-reporting.html` | 11.5 KB | 12.5 KB | 12.5 KB | 12.5 KB | 12.5 KB |
+| `wc doc/src/sgml/html/bug-reporting.html` | 55 B | 1076 B | 1076 B | 1076 B | 1076 B |
+| `wc -l doc/src/sgml/html/*.html` | 57.8 KB | 268.9 KB | 268.9 KB | 268.9 KB | 268.9 KB |
+| `cat doc/src/sgml/html/*.html \| wc -l` | 7 B | 269.1 KB | 269.1 KB | 269.1 KB | 269.1 KB |
+| `cat doc/src/sgml/html/bug-reporting.html \| head -n 50 \| tail -n 10` | 565 B | 10.3 KB | 10.5 KB | 10.5 KB | 10.5 KB |
+| `grep -c not doc/src/sgml/html/bug-reporting.html` | 3 B | 5856 B | 5856 B | 5856 B | 5856 B |
+| `grep -n not doc/src/sgml/html/bug-reporting.html` | 3886 B | 6933 B | 6933 B | 6933 B | 6933 B |
+| `sed 's/not/XX/g' doc/src/sgml/html/bug-reporting.html` | 19.9 KB | 35.9 KB | 35.9 KB | 35.9 KB | 35.9 KB |
+| `sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' doc/src/sgml/html/bug-reporting.html` | 20.0 KB | 37.1 KB | 37.1 KB | 37.1 KB | 37.1 KB |
+| `cat doc/src/sgml/html/bug-reporting.html \| sed 's/^/> /' \| wc -c` | 6 B | 36.7 KB | 36.9 KB | 36.9 KB | 36.9 KB |
+| `grep -rn qdbzzabsentterm .` | 0 B | 20.3 KB | 20.3 KB | 20.3 KB | 20.3 KB |
+| `grep -rl qdbzzabsentterm .` | 0 B | 20.3 KB | 20.3 KB | 20.3 KB | 20.3 KB |
+| `grep -rn abcdefghijklabcdefgh .` | 170 B | 26.8 KB | 26.8 KB | 26.8 KB | 26.8 KB |
+| `grep -rl abcdefghijklabcdefgh .` | 41 B | 26.8 KB | 26.8 KB | 26.8 KB | 26.8 KB |
+| `grep -rn btvarstrequalimage .` | 1660 B | 24.6 KB | 24.6 KB | 24.6 KB | 24.6 KB |
+| `grep -rl btvarstrequalimage .` | 316 B | 24.6 KB | 24.6 KB | 24.6 KB | 24.6 KB |
+| `grep -rn undesirable .` | 11.2 KB | 29.2 KB | 29.1 KB | 29.1 KB | 29.1 KB |
+| `grep -rl undesirable .` | 2982 B | 29.2 KB | 29.1 KB | 29.1 KB | 29.1 KB |
+| `grep -rn passed .` | 225.8 KB | 15.3 KB | 25.9 KB | 25.9 KB | 26.9 KB |
+| `grep -rl passed .` | 30.4 KB | 9696 B | 25.6 KB | 25.6 KB | 26.5 KB |
+| `grep -rn not .` | 13.4 MB | 31.1 KB | 31.1 KB | 31.1 KB | 31.1 KB |
+| `grep -rl not .` | 189.7 KB | 5758 B | 5758 B | 5758 B | 5758 B |
+| `grep -rc undesirable .` | 347.5 KB | 44.4 KB | 44.9 KB | 44.9 KB | 44.9 KB |
+| `grep -rin BTVARSTREQUALIMAGE .` | 1730 B | 24.6 KB | 24.6 KB | 24.6 KB | 24.6 KB |
+| `grep -ri undesirable .` | 10.8 KB | 29.2 KB | 29.0 KB | 29.0 KB | 29.1 KB |
+| `grep -rn undesirable src/backend` | 3398 B | 16.0 KB | 16.0 KB | 16.0 KB | 16.0 KB |
+| `grep -rl passed src/backend` | 10.7 KB | 9717 B | 25.7 KB | 25.7 KB | 26.6 KB |
+| `grep -rF 'undesirable' .` | 10.8 KB | 29.2 KB | 29.1 KB | 29.1 KB | 29.1 KB |
+| `grep -rE 'size_[a-z]+\(' .` | 20.4 KB | 117.2 KB | 124.6 KB | 124.5 KB | 125.1 KB |
+| `grep -rE 'btvarstrequalimage\|abcdefghijklabcdefgh' .` | 1754 B | 49.6 KB | 49.6 KB | 49.6 KB | 49.6 KB |
+| `grep -rE 'passed\|undesirable' .` | 228.0 KB | 24.0 KB | 27.2 KB | 27.2 KB | 28.1 KB |
+| `grep -rE '[0-9]{4,}' .` | 39.4 MB | 23.1 KB | 23.1 KB | 23.1 KB | 23.1 KB |
+| `grep -rn '^#include' .` | 1219.8 KB | 33.9 KB | 54.0 KB | 55.2 KB | 55.2 KB |
+| `grep -rE '^(import\|from) ' .` | 61.8 KB | 23.9 KB | 23.9 KB | 23.9 KB | 23.9 KB |
+| `grep -rin 'return [a-z_]*;$' src/backend` | 902.7 KB | 50.4 KB | 63.7 KB | 66.9 KB | 66.9 KB |
+| `grep -rv e src/include/access` | 232.5 KB | 27.5 KB | 27.5 KB | 27.5 KB | 27.5 KB |
+| `grep -r '\(undesirable\).*\1' .` | 0 B | 33.0 KB | 32.9 KB | 32.9 KB | 32.9 KB |
+| `grep -n btvarstrequalimage doc/src/sgml/html/*.html` | 125 B | | 269.2 KB | 269.2 KB | 269.2 KB |
+| `grep -l undesirable doc/src/sgml/html/*.html` | 976 B | | 269.2 KB | 269.2 KB | 269.2 KB |
+| `grep -c qdbzzabsentterm doc/src/sgml/html/*.html` | 49.6 KB | | 269.2 KB | 269.2 KB | 269.2 KB |
+| `grep -rl passed . \| wc -l` | 4 B | 10.5 KB | 26.5 KB | 26.5 KB | 27.4 KB |
+| `grep -rc not . \| grep -v ':0$' \| wc -l` | 5 B | 10.9 KB | 11.1 KB | 11.1 KB | 11.1 KB |
+| `find . -name '*.html' \| wc -l` | 5 B | 19.0 KB | 19.1 KB | 19.1 KB | 19.1 KB |
+| `find . -type f \| grep -c html` | 5 B | 34.3 KB | 34.5 KB | 34.5 KB | 34.5 KB |
+| `grep -rn not . \| head -n 5` | 386 B | 6624 B | 6736 B | 6736 B | 6736 B |
+| `grep -rn passed . \| head -n 1` | 88 B | 10.3 KB | 10.4 KB | 10.4 KB | 10.4 KB |
+| `find . -type f \| head -n 3` | 61 B | 27.5 KB | 27.6 KB | 27.6 KB | 27.6 KB |
+| `cat doc/src/sgml/html/*.html \| head -n 2` | 1555 B | 269.2 KB | 269.2 KB | 269.2 KB | 269.2 KB |
 
 ## Search terms and paths
 

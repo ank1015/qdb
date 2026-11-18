@@ -1338,6 +1338,8 @@ const LABELS: &[(&str, &str)] = &[
     ("s3-disk", "On disk, settled"),
     ("s3-disk-after", "On disk, after the writes"),
     ("s3-disk-cold", "On disk, cold"),
+    ("s3-disk-cap512", "On disk, 512 MB limit"),
+    ("s3-disk-cap512-after", "On disk, 512 MB limit, after the writes"),
 ];
 
 struct Stored {

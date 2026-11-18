@@ -1,0 +1,13 @@
+size_bytes=1073741892
+index=true
+store=disk
+sync=batch
+piece=65536
+cap_mb=512
+create_ms=7628.0
+settle_ms=25.6
+peak_heap_bytes=47381799
+own_resident_kb=31448
+own_reserved_kb=98380
+disk_total=3342668636
+agree=true

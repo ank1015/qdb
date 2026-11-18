@@ -1,32 +1,44 @@
-seed 1 sync always: 10000 power cuts over 8344 command lines, every one recovered to the tree after a whole number of command lines and passed every check
-    of them: 4152 while a command line was running, 888 while an index file was being written, 1584 while the tree was being saved, 1533 during recovery itself; 105 times the run went on from a crash image, 38 of those after the disk failed
-    recovery cut an unfinished tail off the log 2792 times and built an index again 5951 times; 0 command lines that had returned were lost in all (none may be); 1080 recovered databases were written to, checked, closed and reopened
-    the run also closed and reopened the database 76 times and compacted it 68 times, with power cuts during those too
-seed 1 sync batch (8 lines): 10001 power cuts over 9226 command lines, every one recovered to the tree after a whole number of command lines and passed every check
-    of them: 3244 while a command line was running, 1112 while an index file was being written, 1811 while the tree was being saved, 1602 during recovery itself; 119 times the run went on from a crash image, 44 of those after the disk failed
-    recovery cut an unfinished tail off the log 3543 times and built an index again 4623 times; 8118 command lines that had returned were lost in all (at most 7 per power cut may be); 1131 recovered databases were written to, checked, closed and reopened
-    the run also closed and reopened the database 89 times and compacted it 75 times, with power cuts during those too
-seed 2 sync always: 10001 power cuts over 8333 command lines, every one recovered to the tree after a whole number of command lines and passed every check
-    of them: 4196 while a command line was running, 956 while an index file was being written, 1584 while the tree was being saved, 1502 during recovery itself; 97 times the run went on from a crash image, 36 of those after the disk failed
-    recovery cut an unfinished tail off the log 2800 times and built an index again 5920 times; 0 command lines that had returned were lost in all (none may be); 1056 recovered databases were written to, checked, closed and reopened
-    the run also closed and reopened the database 76 times and compacted it 67 times, with power cuts during those too
-seed 2 sync batch (8 lines): 10000 power cuts over 9489 command lines, every one recovered to the tree after a whole number of command lines and passed every check
-    of them: 3402 while a command line was running, 1008 while an index file was being written, 1837 while the tree was being saved, 1653 during recovery itself; 110 times the run went on from a crash image, 41 of those after the disk failed
-    recovery cut an unfinished tail off the log 3667 times and built an index again 4915 times; 8862 command lines that had returned were lost in all (at most 7 per power cut may be); 1069 recovered databases were written to, checked, closed and reopened
-    the run also closed and reopened the database 89 times and compacted it 76 times, with power cuts during those too
-seed 3 sync always: 10001 power cuts over 8222 command lines, every one recovered to the tree after a whole number of command lines and passed every check
-    of them: 4206 while a command line was running, 968 while an index file was being written, 1584 while the tree was being saved, 1406 during recovery itself; 96 times the run went on from a crash image, 35 of those after the disk failed
-    recovery cut an unfinished tail off the log 2790 times and built an index again 5872 times; 0 command lines that had returned were lost in all (none may be); 1106 recovered databases were written to, checked, closed and reopened
-    the run also closed and reopened the database 69 times and compacted it 70 times, with power cuts during those too
-seed 3 sync batch (8 lines): 10000 power cuts over 9159 command lines, every one recovered to the tree after a whole number of command lines and passed every check
-    of them: 3480 while a command line was running, 1188 while an index file was being written, 1694 while the tree was being saved, 1619 during recovery itself; 104 times the run went on from a crash image, 36 of those after the disk failed
-    recovery cut an unfinished tail off the log 3471 times and built an index again 4802 times; 8118 command lines that had returned were lost in all (at most 7 per power cut may be); 1058 recovered databases were written to, checked, closed and reopened
-    the run also closed and reopened the database 73 times and compacted it 77 times, with power cuts during those too
-seed 4 sync always, index off: 10000 power cuts over 8962 command lines, every one recovered to the tree after a whole number of command lines and passed every check
-    of them: 4735 while a command line was running, 0 while an index file was being written, 1711 while the tree was being saved, 1473 during recovery itself; 117 times the run went on from a crash image, 41 of those after the disk failed
-    recovery cut an unfinished tail off the log 3358 times and built an index again 0 times; 0 command lines that had returned were lost in all (none may be); 991 recovered databases were written to, checked, closed and reopened
-    the run also closed and reopened the database 78 times and compacted it 75 times, with power cuts during those too
-seed 5 sync batch (8 lines), index off: 10001 power cuts over 10935 command lines, every one recovered to the tree after a whole number of command lines and passed every check
-    of them: 4016 while a command line was running, 0 while an index file was being written, 1980 while the tree was being saved, 1644 during recovery itself; 132 times the run went on from a crash image, 42 of those after the disk failed
-    recovery cut an unfinished tail off the log 4397 times and built an index again 0 times; 10159 command lines that had returned were lost in all (at most 7 per power cut may be); 1043 recovered databases were written to, checked, closed and reopened
-    the run also closed and reopened the database 87 times and compacted it 93 times, with power cuts during those too
+seed 1 sync always: 10000 power cuts over 3766 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 5025 while a command line was running, 2258 while an index file was being written, 1696 while the tree was being saved, 1979 during recovery itself; 46 times the run went on from a crash image, 18 of those after the disk failed
+    recovery cut an unfinished tail off the log 3424 times and built an index again 8590 times; 0 command lines that had returned were lost in all (none may be); 1019 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 31 times and compacted it 28 times, with power cuts during those too
+seed 1 sync batch (8 lines): 10000 power cuts over 3766 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 4882 while a command line was running, 2515 while an index file was being written, 1774 while the tree was being saved, 1966 during recovery itself; 46 times the run went on from a crash image, 18 of those after the disk failed
+    recovery cut an unfinished tail off the log 4186 times and built an index again 7855 times; 8057 command lines that had returned were lost in all (at most 7 per power cut may be); 1017 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 31 times and compacted it 28 times, with power cuts during those too
+seed 2 sync always: 10001 power cuts over 4032 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 3867 while a command line was running, 2874 while an index file was being written, 1573 while the tree was being saved, 2040 during recovery itself; 49 times the run went on from a crash image, 14 of those after the disk failed
+    recovery cut an unfinished tail off the log 3508 times and built an index again 7571 times; 0 command lines that had returned were lost in all (none may be); 1052 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 35 times and compacted it 39 times, with power cuts during those too
+seed 2 sync batch (8 lines): 10000 power cuts over 3829 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 4325 while a command line was running, 2688 while an index file was being written, 1797 while the tree was being saved, 2022 during recovery itself; 44 times the run went on from a crash image, 13 of those after the disk failed
+    recovery cut an unfinished tail off the log 4150 times and built an index again 7955 times; 7084 command lines that had returned were lost in all (at most 7 per power cut may be); 1062 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 35 times and compacted it 36 times, with power cuts during those too
+seed 3 sync always: 10000 power cuts over 3445 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 5124 while a command line was running, 3695 while an index file was being written, 1309 while the tree was being saved, 1972 during recovery itself; 49 times the run went on from a crash image, 19 of those after the disk failed
+    recovery cut an unfinished tail off the log 4139 times and built an index again 8473 times; 0 command lines that had returned were lost in all (none may be); 1006 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 25 times and compacted it 27 times, with power cuts during those too
+seed 3 sync batch (8 lines): 10000 power cuts over 4351 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 4733 while a command line was running, 2663 while an index file was being written, 1787 while the tree was being saved, 1989 during recovery itself; 64 times the run went on from a crash image, 22 of those after the disk failed
+    recovery cut an unfinished tail off the log 4051 times and built an index again 7939 times; 7185 command lines that had returned were lost in all (at most 7 per power cut may be); 1001 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 32 times and compacted it 31 times, with power cuts during those too
+seed 4 sync always, index off: 10000 power cuts over 5334 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 5295 while a command line was running, 0 while an index file was being written, 2127 while the tree was being saved, 1950 during recovery itself; 58 times the run went on from a crash image, 19 of those after the disk failed
+    recovery cut an unfinished tail off the log 3427 times and built an index again 0 times; 0 command lines that had returned were lost in all (none may be); 930 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 43 times and compacted it 44 times, with power cuts during those too
+seed 5 sync batch (8 lines), index off: 10000 power cuts over 5796 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 5078 while a command line was running, 0 while an index file was being written, 2321 while the tree was being saved, 1946 during recovery itself; 78 times the run went on from a crash image, 23 of those after the disk failed
+    recovery cut an unfinished tail off the log 4272 times and built an index again 0 times; 9394 command lines that had returned were lost in all (at most 7 per power cut may be); 985 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 55 times and compacted it 46 times, with power cuts during those too
+seed 6 sync batch (8 lines): 10000 power cuts over 3156 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 4804 while a command line was running, 2597 while an index file was being written, 1822 while the tree was being saved, 2049 during recovery itself; 35 times the run went on from a crash image, 9 of those after the disk failed
+    recovery cut an unfinished tail off the log 4103 times and built an index again 7989 times; 8226 command lines that had returned were lost in all (at most 7 per power cut may be); 987 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 29 times and compacted it 32 times, with power cuts during those too
+seed 7 sync batch (8 lines): 10000 power cuts over 3896 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 4725 while a command line was running, 2478 while an index file was being written, 1739 while the tree was being saved, 1979 during recovery itself; 55 times the run went on from a crash image, 25 of those after the disk failed
+    recovery cut an unfinished tail off the log 4198 times and built an index again 7926 times; 8840 command lines that had returned were lost in all (at most 7 per power cut may be); 948 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 34 times and compacted it 31 times, with power cuts during those too
+seed 8 sync always: 10000 power cuts over 3783 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 4781 while a command line was running, 2566 while an index file was being written, 1694 while the tree was being saved, 1929 during recovery itself; 47 times the run went on from a crash image, 12 of those after the disk failed
+    recovery cut an unfinished tail off the log 3487 times and built an index again 8512 times; 0 command lines that had returned were lost in all (none may be); 1044 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 28 times and compacted it 34 times, with power cuts during those too

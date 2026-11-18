@@ -17,6 +17,7 @@ Usage: qdb-stress bigfile [OPTIONS]
        qdb-stress writes --dataset NAME [OPTIONS]
        qdb-stress compare --dataset NAME --db DIR [OPTIONS]
        qdb-stress sync-cost --db DIR [--count N]
+       qdb-stress codec --dataset NAME [--piece BYTES]
 
 bigfile: five commands on one generated file, on the real tools and on
 the engine: append a line, search for a rare term, wc -l, tail -n 5, and
@@ -349,6 +350,11 @@ fn bigfile(opts: &Options) -> Result<bool, String> {
         let before = db.io_stats();
         for _ in 0..reps {
             let (gt, real) = timed_real(&root, command);
+            if *changes {
+                // What the real tool wrote goes to the disk now, so that
+                // a sync by the engine does not wait behind it.
+                unsafe { libc::sync() };
+            }
             let (et, p, code, out) = engine(&mut db, command);
             overall = overall.max(PEAK.load(Relaxed));
             let mut real_out = real.stdout.clone();
@@ -1019,6 +1025,73 @@ fn sync_cost(opts: &Options) -> Result<bool, String> {
     Ok(true)
 }
 
+/// The codec on a dataset: every piece of every file compressed and
+/// unpacked by itself, as the engine does it.
+fn codec(opts: &Options) -> Result<bool, String> {
+    let folder = std::fs::read_to_string("bench/datasets.txt")
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| {
+            let mut p = l.splitn(3, '|').map(|p| p.trim().to_string());
+            Some((p.next()?, p.next()?))
+        })
+        .find(|(n, _)| *n == opts.dataset)
+        .ok_or(format!("unknown dataset {}", opts.dataset))?
+        .1;
+    let mut db = Db::in_memory(Config { index: false, piece: opts.piece, ..Config::default() });
+    store::load_into_db(&mut db, &opts.data.join(&folder)).map_err(|e| e.to_string())?;
+    let (mut raw, mut packed, mut kept, mut pieces, mut smaller) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut pack_time, mut unpack_time) = (Duration::ZERO, Duration::ZERO);
+    let mut stack = vec![db.root()];
+    while let Some(id) = stack.pop() {
+        if db.is_dir(id) {
+            stack.extend(db.children(id).values().copied());
+            continue;
+        }
+        for p in db.pieces(id) {
+            let text = db.text_of(p);
+            let t = Instant::now();
+            let c = lz4_flex::block::compress(&text);
+            pack_time += t.elapsed();
+            let t = Instant::now();
+            let back = lz4_flex::block::decompress(&c, text.len()).map_err(|e| e.to_string())?;
+            unpack_time += t.elapsed();
+            if back[..] != text[..] {
+                return Err("a piece did not come back as it went in".into());
+            }
+            raw += text.len() as u64;
+            packed += c.len() as u64;
+            pieces += 1;
+            // The engine keeps a piece compressed only if that is smaller.
+            if c.len() < text.len() {
+                smaller += 1;
+                kept += c.len() as u64;
+            } else {
+                kept += text.len() as u64;
+            }
+        }
+    }
+    let mb = |n: u64| n as f64 / 1e6;
+    let line = format!(
+        "| {} | {} | {} | {:.1} | {:.1} | {:.3} | {} | {:.0} | {:.0} |",
+        opts.dataset,
+        opts.piece,
+        pieces,
+        mb(raw),
+        mb(kept),
+        kept as f64 / raw.max(1) as f64,
+        pieces - smaller,
+        mb(raw) / pack_time.as_secs_f64(),
+        mb(raw) / unpack_time.as_secs_f64()
+    );
+    let _ = packed;
+    println!("| Dataset | Piece size | Pieces | Text MB | Stored MB | Stored / text | Pieces kept plain | Compress MB/s | Unpack MB/s |");
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!("{}", line);
+    Ok(true)
+}
+
 fn run() -> Result<bool, String> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().unwrap_or_default();
@@ -1073,6 +1146,7 @@ fn run() -> Result<bool, String> {
         "writes" => writes(&opts),
         "compare" => compare(&opts),
         "sync-cost" => sync_cost(&opts),
+        "codec" => codec(&opts),
         _ => {
             println!("{}", USAGE);
             Ok(mode == "--help" || mode == "-h")
