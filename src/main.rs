@@ -1,40 +1,74 @@
-//! The qdb command line: load a tree, run command lines against it.
+//! The qdb command line: open or load a tree, run command lines against it.
 
-use qdb::{execute, store, Db};
+use qdb::disk::Damage;
+use qdb::{execute, store, Config, Db, SyncMode};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-Usage: qdb [--load DIR | --fixture FILE] [--no-index] [--dump DIR] [-c COMMAND]...
+Usage: qdb [--db PATH] [--load DIR | --fixture FILE] [OPTIONS] [-c COMMAND]...
 
-Runs bash command lines against an in-memory tree of text files.
+Runs bash command lines against a tree of text files.
 
+  --db PATH        keep the tree in the database directory PATH, which is
+                   made if it is not there. Without --db the tree is in
+                   memory and is gone when qdb ends.
   --load DIR       start from a copy of the directory DIR; symbolic links
                    and files that are not valid text are skipped and counted;
                    what was loaded and how long it took is reported on
-                   standard error
+                   standard error. With --db the database must be empty.
   --fixture FILE   start from a fixture file (see tests/fixtures)
+  --sync MODE      with --db: `always` (the default) has every command
+                   line's changes on disk before the line returns; `batch`
+                   syncs once per 64 command lines or 4 MB written, so a
+                   power cut can lose up to that many of the last lines
+                   (never an earlier line while keeping a later one)
+  --piece BYTES    cut file content into pieces of at most BYTES (default
+                   65536); applies to what is written from now on
   --no-index       answer every search by scanning, without the search index;
                    output is the same either way, only speed differs
+  --check          check every checksum and every rule the database files
+                   obey, and that the stored index is what a fresh build
+                   would be; exit status 1 if anything is wrong
+  --stats          print what is on disk, in bytes, by what it is
+  --compact        do all outstanding upkeep now: rewrite content so that
+                   no space is wasted, save the index and the tree
   --dump DIR       when done, write the tree into the empty directory DIR
   -c COMMAND       run COMMAND; can be given more than once
 
-With no -c, command lines are read from standard input, one per line.
-The exit status is that of the last command.";
+With no -c (and none of --check, --stats, --compact), command lines are
+read from standard input, one per line. The exit status is that of the
+last command, or 2 if the database cannot be used.";
 
 fn run() -> Result<i32, String> {
     let mut source: Option<(bool, String)> = None;
-    let mut index = true;
+    let mut cfg = Config::default();
+    let mut path: Option<PathBuf> = None;
     let mut commands: Vec<String> = Vec::new();
     let mut dump: Option<PathBuf> = None;
+    let (mut check, mut stats, mut compact) = (false, false, false);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("{} needs a value", name));
         match a.as_str() {
+            "--db" => path = Some(value("--db")?.into()),
             "--load" => source = Some((true, value("--load")?)),
             "--fixture" => source = Some((false, value("--fixture")?)),
-            "--no-index" => index = false,
+            "--sync" => {
+                cfg.sync = match value("--sync")?.as_str() {
+                    "always" => SyncMode::Always,
+                    "batch" => SyncMode::Batch,
+                    other => return Err(format!("--sync: {} is not `always` or `batch`", other)),
+                }
+            }
+            "--piece" => {
+                cfg.piece = value("--piece")?.parse().ok().filter(|n| *n >= 16 && *n <= 16 << 20).ok_or("--piece needs a number of bytes from 16 to 16777216")?
+            }
+            "--no-index" => cfg.index = false,
+            "--check" => check = true,
+            "--stats" => stats = true,
+            "--compact" => compact = true,
             "--dump" => dump = Some(value("--dump")?.into()),
             "-c" => commands.push(value("-c")?),
             "-h" | "--help" => {
@@ -44,10 +78,25 @@ fn run() -> Result<i32, String> {
             other => return Err(format!("unknown argument {}\n{}", other, USAGE)),
         }
     }
-    let mut db = match source {
-        None => Db::new(),
+    let index = cfg.index;
+    let on_disk = path.is_some();
+    let mut db = match &path {
+        None => Db::in_memory(Config { index: source.is_none() && index, ..cfg }),
+        Some(p) => {
+            let (db, report) = Db::open_dir(p, cfg).map_err(|e| format!("{}: {}", p.display(), e))?;
+            for m in report.messages() {
+                eprintln!("qdb: {}: {}", p.display(), m);
+            }
+            db
+        }
+    };
+    if source.is_some() && db.node_count() > 1 {
+        return Err("--load and --fixture need an empty database, and this one holds files already".into());
+    }
+    match source {
+        None => {}
         Some((true, dir)) => {
-            let (db, report) = store::load_dir_with(dir.as_ref(), index).map_err(|e| format!("{}: {}", dir, e))?;
+            let report = store::load_into_db(&mut db, dir.as_ref()).map_err(|e| format!("{}: {}", dir, e))?;
             let seconds = |micros: u64| micros as f64 / 1e6;
             eprintln!(
                 "qdb: {}: loaded {} files ({:.1} MB) in {:.2} s; skipped {} ({} symbolic links, {} not valid text, {} other)",
@@ -60,25 +109,34 @@ fn run() -> Result<i32, String> {
                 report.skipped_not_text,
                 report.skipped_other
             );
-            match (report.index_micros, db.index_stats()) {
-                (Some(micros), Some(stats)) => eprintln!(
-                    "qdb: {}: search index built in {:.2} s ({:.1} MB, {} trigrams)",
+            if on_disk {
+                if index {
+                    eprintln!("qdb: {}: search index built as the files were stored", dir);
+                }
+            } else if index {
+                // In memory the index is built once everything is read.
+                let start = std::time::Instant::now();
+                db.set_index(true);
+                let stats = db.index_details().expect("index on");
+                eprintln!(
+                    "qdb: {}: search index built in {:.2} s ({:.1} MB, {} lists)",
                     dir,
-                    seconds(micros),
+                    start.elapsed().as_secs_f64(),
                     stats.total_bytes() as f64 / 1e6,
                     stats.trigrams
-                ),
-                _ => eprintln!("qdb: {}: search index off", dir),
+                );
             }
-            db
+            if !index {
+                eprintln!("qdb: {}: search index off", dir);
+            }
         }
         Some((false, file)) => {
             let text = std::fs::read(&file).map_err(|e| format!("{}: {}", file, e))?;
-            store::parse_fixture(&text)?
+            store::parse_fixture_into(&mut db, &text)?;
+            if !on_disk && index {
+                db.set_index(true);
+            }
         }
-    };
-    if !index {
-        db.set_index(false);
     }
     let mut code = 0;
     let mut run_line = |db: &mut Db, line: &[u8]| {
@@ -88,30 +146,80 @@ fn run() -> Result<i32, String> {
         std::io::stderr().write_all(&out.stderr).ok();
         code = out.code;
     };
-    if commands.is_empty() {
+    if !commands.is_empty() {
+        for c in &commands {
+            run_line(&mut db, c.as_bytes());
+        }
+    } else if !(check || stats || compact) {
         for line in std::io::stdin().lock().split(b'\n') {
             let line = line.map_err(|e| e.to_string())?;
             run_line(&mut db, &line);
         }
-    } else {
-        for c in &commands {
-            run_line(&mut db, c.as_bytes());
+    }
+    if db.failure().is_some() {
+        // Already reported with the command that met it. The database is
+        // left as it is: the next open recovers.
+        return Ok(2);
+    }
+    if compact {
+        db.compact()?;
+    }
+    if check {
+        match db.check() {
+            Ok(what) => println!("ok: {}", what),
+            Err(what) => {
+                println!("NOT OK: {}", what);
+                code = 1;
+            }
+        }
+    }
+    if stats {
+        let s = db.disk_stats();
+        let line = |name: &str, n: u64| println!("{:<28}{:>16}", name, n);
+        line("text", s.text);
+        line("index lists", s.lists);
+        line("index tables", s.tables);
+        line("tree", s.tree);
+        line("log", s.log);
+        line("record and file headers", s.framing);
+        line("space not yet reclaimed", s.unreclaimed);
+        line("total", s.total());
+        line("data files", s.data_files as u64);
+        line("raw text of all files", s.raw_text);
+        if s.raw_text > 0 {
+            println!("{:<28}{:>16.3}", "total / raw text", s.total() as f64 / s.raw_text as f64);
         }
     }
     if let Some(dir) = dump {
         store::dump_dir(&db, &dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
     }
+    db.close()?;
     Ok(code)
 }
 
 fn main() -> ExitCode {
+    // Damage found while reading is thrown as a panic that carries its
+    // message; it is reported below like any other error.
+    let usual = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if info.payload().downcast_ref::<Damage>().is_none() {
+            usual(info);
+        }
+    }));
     // Deep folder trees and long lines recurse; give the work a large stack.
     let worker = std::thread::Builder::new().stack_size(512 << 20).spawn(run).expect("spawn");
-    match worker.join().expect("worker panicked") {
-        Ok(code) => ExitCode::from(code as u8),
-        Err(msg) => {
+    match worker.join() {
+        Ok(Ok(code)) => ExitCode::from(code as u8),
+        Ok(Err(msg)) => {
             eprintln!("qdb: {}", msg);
             ExitCode::from(2)
         }
+        Err(payload) => match payload.downcast::<Damage>() {
+            Ok(d) => {
+                eprintln!("qdb: {}", d.0);
+                ExitCode::from(2)
+            }
+            Err(other) => std::panic::resume_unwind(other),
+        },
     }
 }

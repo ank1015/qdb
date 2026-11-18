@@ -97,7 +97,7 @@ pub fn touch(args: Vec<Vec<u8>>) -> Result<Runner, String> {
             } else {
                 match db.resolve_parent(path) {
                     Ok((parent, name)) => {
-                        db.create_file(parent, &name, Vec::new());
+                        db.create_file(parent, &name, &[]);
                         Ok(())
                     }
                     Err(e) => Err(format!("touch: cannot touch {}: {}", quote(path), e.msg())),
@@ -279,7 +279,7 @@ impl Copy {
                 false
             }
             Ok(d) => {
-                db.set_content(d, content);
+                db.set_content(d, &content);
                 true
             }
             Err(Errno::NoEnt) => {
@@ -287,7 +287,7 @@ impl Copy {
                     Err(Errno::NotDir)
                 } else {
                     db.resolve_parent(dst).map(|(parent, name)| {
-                        db.create_file(parent, &name, content);
+                        db.create_file(parent, &name, &content);
                     })
                 };
                 if let Err(e) = made {

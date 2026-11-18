@@ -13,9 +13,10 @@
 
 pub mod bytes;
 mod cmd;
+pub mod disk;
 pub mod engine;
 pub mod glob;
-mod index;
+pub mod index;
 pub mod query;
 pub mod regex;
 pub mod scan;
@@ -24,6 +25,7 @@ pub mod store;
 pub mod testing;
 pub mod tree;
 pub mod util;
+pub mod vfs;
 
 pub use engine::{execute, execute_to, Outcome, Sink};
-pub use tree::Db;
+pub use tree::{Config, Db, SyncMode};

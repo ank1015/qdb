@@ -47,7 +47,7 @@ fn big_db(files: usize) -> Db {
     let line = "the quick brown fox jumps over the lazy dog\n".repeat(2000);
     let root = db.resolve(b"d").unwrap();
     for i in 0..files {
-        db.create_file(root, format!("f{:04}.txt", i).as_bytes(), line.clone().into_bytes());
+        db.create_file(root, format!("f{:04}.txt", i).as_bytes(), line.as_bytes());
     }
     db
 }

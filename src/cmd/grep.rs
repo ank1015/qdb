@@ -321,7 +321,7 @@ impl Run {
                     return;
                 }
                 path.extend_from_slice(&file.path);
-                self.search(io, path, db.content(file.id), Some(file.id));
+                self.search(io, path, &db.content(file.id), Some(file.id));
                 path.truncate(base);
             }
         }
@@ -332,7 +332,7 @@ impl Run {
     /// can match once that much reading has cost what the answer costs.
     fn listed(&mut self, db: &Db, io: &mut Io, label: &[u8], id: NodeId) {
         if let Some(budget) = self.list_probe {
-            let cost = db.content(id).len() + 256;
+            let cost = db.size(id) as usize + 256;
             if budget >= cost {
                 self.list_probe = Some(budget - cost);
             } else {
@@ -342,14 +342,14 @@ impl Run {
         }
         let o = self.opts;
         if self.list_only.as_ref().map_or(true, |set| db.passes(set, id)) {
-            self.search(io, label, db.content(id), Some(id));
+            self.search(io, label, &db.content(id), Some(id));
         } else if o.count && !o.list {
             // No line of it matches, and it still gets its count.
             self.search(io, label, b"", Some(id));
         } else if io.out_file == Some(id) && !o.list {
             // Writing into a file that is being searched is an error
             // whatever the file holds.
-            self.search(io, label, db.content(id), Some(id));
+            self.search(io, label, &db.content(id), Some(id));
         }
     }
 
@@ -366,7 +366,7 @@ impl Run {
                 self.only = Some(Only::Passing(set));
                 return;
             }
-            Candidates::Files(files) => files,
+            Candidates::Files(files, _) => files,
         };
         let counting = o.count && !o.list;
         // Writing into a file that is being searched is an error whatever
@@ -405,7 +405,7 @@ impl Run {
             } else {
                 if let Some(budget) = self.probe {
                     // A file costs its bytes, and a little for the visit.
-                    let cost = db.content(*child).len() + 256;
+                    let cost = db.size(*child) as usize + 256;
                     if budget >= cost {
                         self.probe = Some(budget - cost);
                     } else {
@@ -428,14 +428,14 @@ impl Run {
                     Some(Only::Passing(filter)) => db.passes(filter, *child),
                 };
                 if candidate {
-                    self.search(io, path, db.content(*child), Some(*child));
+                    self.search(io, path, &db.content(*child), Some(*child));
                 } else if o.count && !o.list {
                     // No line of it matches, and it still gets its count.
                     self.search(io, path, b"", Some(*child));
                 } else if io.out_file == Some(*child) && !o.list {
                     // Writing into a file that is being searched is an
                     // error whatever the file holds.
-                    self.search(io, path, db.content(*child), Some(*child));
+                    self.search(io, path, &db.content(*child), Some(*child));
                 }
             }
             path.truncate(base);

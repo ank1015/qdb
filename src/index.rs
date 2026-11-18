@@ -1,22 +1,26 @@
-//! The trigram index: for every three-byte sequence, the files whose
-//! content contains it.
+//! The trigram index in memory: for every three-byte sequence, the
+//! pieces of content that contain it.
 //!
 //! This is derived data. It belongs to storage (`tree.rs` keeps it current
 //! on every content change) and nothing else reads it; losing it loses
-//! nothing a rebuild cannot restore.
+//! nothing a rebuild cannot restore. One of these covers the pieces most
+//! recently written to a data file; when the file is closed the lists are
+//! written out end to end (`disk::Packed`) and this structure is dropped.
 //!
 //! # Layout
 //!
-//! Each version of a file's content is a *document* with a number. A
-//! document number is never reused: when content changes, the file gets a
-//! new document and the old one is retired. So a posting list only ever
-//! grows at its end, and a write costs time in proportion to the file
-//! written, however large the database is.
+//! Each stored piece of content is a *document* with a number, one more
+//! than its position in its data file. Numbers only go up, so a posting
+//! list only ever grows at its end, and a write costs time in proportion
+//! to what is written, however large the database is.
 //!
 //! A posting list is the ascending document numbers for one trigram,
 //! stored as the differences between neighbours in a variable-length
-//! code (seven bits per byte, low bits first). Lists of up to eight bytes
-//! live inside the hash table entry; longer ones are on the heap.
+//! code (seven bits per byte, low bits first). A difference of zero
+//! cannot occur, and is used to mean "start counting from zero again":
+//! that lets two lists be joined by putting a zero byte between them.
+//! Lists of up to eight bytes live inside the hash table entry; longer
+//! ones are on the heap.
 //!
 //! Retired documents stay in the lists until a sweep removes them. Stale
 //! entries cost space and a little time; they never change an answer,
@@ -25,16 +29,29 @@
 
 use crate::bytes::fold;
 use crate::query::{Query, Trigram};
-use crate::tree::NodeId;
 
-/// No file: the document has been retired.
-const RETIRED: NodeId = NodeId::MAX;
+/// Set in a document's entry when its content is no longer in any file.
+const RETIRED: u32 = 1 << 31;
 
+/// How many posting lists a document was added to, and `RETIRED`.
 #[derive(Debug, Clone, Copy)]
-struct Doc {
-    file: NodeId,
-    /// How many posting lists this document was added to.
-    postings: u32,
+struct Doc(u32);
+
+impl Doc {
+    fn postings(self) -> u32 {
+        self.0 & !RETIRED
+    }
+
+    fn retired(self) -> bool {
+        self.0 & RETIRED != 0
+    }
+}
+
+/// Posting lists by trigram: what a query is answered from. The index in
+/// memory is one source of them, a packed index file another.
+pub trait Lists {
+    /// The list for a trigram, encoded; empty if there is none.
+    fn list(&self, t: Trigram) -> &[u8];
 }
 
 /// One slot of the trigram table, sixteen bytes.
@@ -66,7 +83,7 @@ impl Entry {
     }
 }
 
-fn put_varint(out: &mut Vec<u8>, mut n: u32) {
+pub fn put_varint(out: &mut Vec<u8>, mut n: u32) {
     while n >= 0x80 {
         out.push(n as u8 | 0x80);
         n >>= 7;
@@ -75,9 +92,15 @@ fn put_varint(out: &mut Vec<u8>, mut n: u32) {
 }
 
 /// Decodes a posting list into ascending document numbers.
-struct Postings<'a> {
+pub struct Postings<'a> {
     bytes: &'a [u8],
     doc: u32,
+}
+
+impl<'a> Postings<'a> {
+    pub fn new(bytes: &'a [u8]) -> Postings<'a> {
+        Postings { bytes, doc: 0 }
+    }
 }
 
 impl Iterator for Postings<'_> {
@@ -85,23 +108,30 @@ impl Iterator for Postings<'_> {
 
     #[inline]
     fn next(&mut self) -> Option<u32> {
-        let (&first, mut rest) = self.bytes.split_first()?;
-        let mut delta = (first & 0x7f) as u32;
-        if first >= 0x80 {
-            let mut shift = 7;
-            loop {
-                let (&b, r) = rest.split_first()?;
-                rest = r;
-                delta |= ((b & 0x7f) as u32) << shift;
-                if b < 0x80 {
-                    break;
+        loop {
+            let (&first, mut rest) = self.bytes.split_first()?;
+            let mut delta = (first & 0x7f) as u32;
+            if first >= 0x80 {
+                let mut shift = 7;
+                loop {
+                    let (&b, r) = rest.split_first()?;
+                    rest = r;
+                    delta |= ((b & 0x7f) as u32) << shift;
+                    if b < 0x80 {
+                        break;
+                    }
+                    shift += 7;
                 }
-                shift += 7;
             }
+            self.bytes = rest;
+            if delta == 0 {
+                // Two lists joined: the second counts from zero again.
+                self.doc = 0;
+                continue;
+            }
+            self.doc += delta;
+            return Some(self.doc);
         }
-        self.bytes = rest;
-        self.doc += delta;
-        Some(self.doc)
     }
 }
 
@@ -123,6 +153,9 @@ pub struct IndexStats {
     pub stale_postings: u64,
     pub live_documents: usize,
     pub documents_ever: usize,
+    /// How many separate indexes these figures are summed over: one per
+    /// data file, and one in memory for what was written last.
+    pub parts: usize,
     /// Memory held: the table, the lists on the heap, the document table.
     pub table_bytes: usize,
     pub list_bytes: usize,
@@ -149,7 +182,18 @@ pub struct IndexWork {
     pub postings_added: u64,
     /// Bytes of posting lists rewritten by sweeps.
     pub bytes_swept: u64,
+    /// Always 0 since stage 3: the index is no longer built again from
+    /// all files.
     pub rebuilds: u64,
+}
+
+impl IndexWork {
+    pub fn add(&mut self, o: &IndexWork) {
+        self.documents_added += o.documents_added;
+        self.documents_retired += o.documents_retired;
+        self.postings_added += o.postings_added;
+        self.bytes_swept += o.bytes_swept;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -158,7 +202,9 @@ pub struct Index {
     used: usize,
     heap: Vec<Vec<u8>>,
     free_heap: Vec<u32>,
-    /// Indexed by document number; number 0 is never used.
+    /// The documents here are numbered from `base + 1`.
+    base: u32,
+    /// Indexed by document number less `base`; entry 0 is never used.
     docs: Vec<Doc>,
     live_docs: usize,
     live_postings: u64,
@@ -198,12 +244,18 @@ impl Clone for Bitmap {
 
 impl Index {
     pub fn new() -> Index {
+        Index::starting_after(0)
+    }
+
+    /// An empty index whose first document will have number `base + 1`.
+    pub fn starting_after(base: u32) -> Index {
         Index {
+            base,
             slots: vec![Entry::default(); 16],
             used: 0,
             heap: Vec::new(),
             free_heap: Vec::new(),
-            docs: vec![Doc { file: RETIRED, postings: 0 }],
+            docs: vec![Doc(RETIRED)],
             live_docs: 0,
             live_postings: 0,
             stale_postings: 0,
@@ -236,10 +288,20 @@ impl Index {
         self.work = work;
     }
 
-    /// True when so many document numbers have been used up that the
-    /// index should be built again from the files.
-    pub fn wants_rebuild(&self) -> bool {
-        self.docs.len() > 8 * self.live_docs + 1024
+    /// The number the next document will get.
+    pub fn next_doc(&self) -> u32 {
+        self.base + self.docs.len() as u32
+    }
+
+    pub fn live_docs(&self) -> usize {
+        self.live_docs
+    }
+
+    /// Every trigram that has a list, ascending.
+    pub fn trigrams(&self) -> Vec<Trigram> {
+        let mut all: Vec<Trigram> = self.slots.iter().filter(|e| e.tag() > 1).map(|e| e.trigram()).collect();
+        all.sort_unstable();
+        all
     }
 
     // ------------------------------------------------------- the table
@@ -279,15 +341,6 @@ impl Index {
         }
     }
 
-    fn postings(&self, t: Trigram) -> Postings<'_> {
-        let e = &self.slots[self.slot_of(t)];
-        Postings { bytes: self.list_bytes(e), doc: 0 }
-    }
-
-    fn list_len(&self, t: Trigram) -> usize {
-        let e = &self.slots[self.slot_of(t)];
-        self.list_bytes(e).len()
-    }
 
     fn append(&mut self, t: Trigram, doc: u32) {
         if (self.used + 1) * 4 > self.slots.len() * 3 {
@@ -462,14 +515,11 @@ impl Index {
         }
     }
 
-    /// Index new content for a file. Returns its document number, or 0 if
-    /// the content has no trigram and needs no document.
-    pub fn add(&mut self, file: NodeId, content: &[u8]) -> u32 {
+    /// Index a new piece of content. Returns its document number, which
+    /// is one more than the last.
+    pub fn add(&mut self, content: &[u8]) -> u32 {
         self.collect(content);
-        if self.found.is_empty() {
-            return 0;
-        }
-        let doc = self.docs.len() as u32;
+        let doc = self.base + self.docs.len() as u32;
         let found = std::mem::take(&mut self.found);
         for (i, &t) in found.iter().enumerate() {
             if let Some(&ahead) = found.get(i + 12) {
@@ -483,7 +533,7 @@ impl Index {
             }
             self.append(t, doc);
         }
-        self.docs.push(Doc { file, postings: found.len() as u32 });
+        self.docs.push(Doc(found.len() as u32));
         self.live_docs += 1;
         self.live_postings += found.len() as u64;
         self.work.documents_added += 1;
@@ -496,13 +546,10 @@ impl Index {
 
     /// The content this document stood for is gone.
     pub fn retire(&mut self, doc: u32) {
-        if doc == 0 {
-            return;
-        }
-        let d = &mut self.docs[doc as usize];
-        debug_assert!(d.file != RETIRED);
-        d.file = RETIRED;
-        let postings = d.postings as u64;
+        let d = &mut self.docs[(doc - self.base) as usize];
+        debug_assert!(!d.retired());
+        d.0 |= RETIRED;
+        let postings = d.postings() as u64;
         self.live_docs -= 1;
         self.live_postings -= postings;
         self.stale_postings += postings;
@@ -552,7 +599,7 @@ impl Index {
             let bytes = self.list_bytes(&e);
             before = bytes.len();
             for doc in (Postings { bytes, doc: 0 }) {
-                if self.docs[doc as usize].file != RETIRED {
+                if !self.docs[(doc - self.base) as usize].retired() {
                     put_varint(&mut out, doc - last);
                     last = doc;
                 }
@@ -587,160 +634,19 @@ impl Index {
         before
     }
 
-    // -------------------------------------------------------- answering
-
-    /// The documents that can satisfy the query, ascending, or None when
-    /// the index cannot narrow it down or it is not worth asking: a query
-    /// that most files satisfy is answered faster by reading the files.
-    /// Retired documents may be among them; they belong to no file.
-    pub fn docs(&self, query: &Query) -> Option<Vec<u32>> {
-        if self.estimate(query) > self.live_docs / 2 {
-            return None;
-        }
-        match self.eval(query) {
-            Docs::All => None,
-            Docs::Some(docs) => Some(docs),
-        }
-    }
-
-    /// Roughly how many bytes of lists `docs` would read for the query, or
-    /// None where `docs` would give None without reading any.
-    pub fn cost(&self, query: &Query) -> Option<usize> {
-        if self.estimate(query) > self.live_docs / 2 {
-            return None;
-        }
-        // This follows what `eval` reads: of the lists of an AND, the
-        // shortest, and then only those not too long to be worth it.
-        fn sum(index: &Index, query: &Query) -> usize {
-            match query {
-                Query::All | Query::Nothing => 0,
-                Query::Has(t) => index.list_len(*t),
-                Query::Or(parts) => parts.iter().map(|p| sum(index, p)).sum(),
-                Query::And(parts) => {
-                    let mut lists: Vec<usize> = Vec::new();
-                    let mut others = 0;
-                    for p in parts {
-                        match p {
-                            Query::Has(t) => lists.push(index.list_len(*t)),
-                            other => others += sum(index, other),
-                        }
-                    }
-                    lists.sort_unstable();
-                    match lists.first() {
-                        None => others,
-                        Some(0) => 0,
-                        Some(&least) => others + lists.iter().take_while(|len| **len <= least * 512 + 64).sum::<usize>(),
-                    }
-                }
-            }
-        }
-        Some(sum(self, query))
-    }
-
-    /// The file a document stands for, unless it has been retired.
-    pub fn file_of(&self, doc: u32) -> Option<NodeId> {
-        Some(self.docs[doc as usize].file).filter(|f| *f != RETIRED)
-    }
-
-    /// Every file the lists say can satisfy the query, ascending, or None
-    /// if the query says nothing. Unlike `docs` this always reads the
-    /// lists; it is here for checking the index against a fresh one.
-    pub fn files(&self, query: &Query) -> Option<Vec<NodeId>> {
-        match self.eval(query) {
-            Docs::All => None,
-            Docs::Some(docs) => {
-                let mut files: Vec<NodeId> = docs.into_iter().filter_map(|d| self.file_of(d)).collect();
-                files.sort_unstable();
-                Some(files)
-            }
-        }
-    }
-
-    /// An upper bound on how many documents satisfy the query, found
-    /// without reading a list: a list has at least a byte per document.
-    fn estimate(&self, query: &Query) -> usize {
-        match query {
-            Query::All => usize::MAX,
-            Query::Nothing => 0,
-            Query::Has(t) => self.list_len(*t),
-            Query::And(parts) => parts.iter().map(|p| self.estimate(p)).min().unwrap_or(usize::MAX),
-            Query::Or(parts) => parts.iter().fold(0usize, |sum, p| sum.saturating_add(self.estimate(p))),
-        }
-    }
-
-    fn eval(&self, query: &Query) -> Docs {
-        match query {
-            Query::All => Docs::All,
-            Query::Nothing => Docs::Some(Vec::new()),
-            Query::Has(t) => Docs::Some(self.postings(*t).collect()),
-            Query::Or(parts) => {
-                let mut all: Vec<u32> = Vec::new();
-                for p in parts {
-                    match self.eval(p) {
-                        Docs::All => return Docs::All,
-                        Docs::Some(docs) => all.extend(docs),
-                    }
-                }
-                all.sort_unstable();
-                all.dedup();
-                Docs::Some(all)
-            }
-            Query::And(parts) => {
-                // Shortest lists first: the set shrinks fastest, and an
-                // absent trigram ends the work at once.
-                let mut lists: Vec<(usize, Trigram)> = Vec::new();
-                let mut others: Vec<&Query> = Vec::new();
-                for p in parts {
-                    match p {
-                        Query::Has(t) => lists.push((self.list_len(*t), *t)),
-                        Query::All => {}
-                        other => others.push(other),
-                    }
-                }
-                lists.sort_unstable();
-                let mut current: Option<Vec<u32>> = None;
-                for (len, t) in lists {
-                    match &mut current {
-                        None => current = Some(self.postings(t).collect()),
-                        Some(cur) => {
-                            if cur.is_empty() {
-                                break;
-                            }
-                            // Reading a long list to rule out a few files
-                            // costs more than scanning those files.
-                            if len > cur.len() * 512 + 64 {
-                                break;
-                            }
-                            intersect(cur, self.postings(t));
-                        }
-                    }
-                }
-                for q in others {
-                    if current.as_ref().is_some_and(|c| c.len() <= 8) {
-                        break;
-                    }
-                    match self.eval(q) {
-                        Docs::All => {}
-                        Docs::Some(docs) => match &mut current {
-                            None => current = Some(docs),
-                            Some(cur) => intersect(cur, docs.into_iter()),
-                        },
-                    }
-                }
-                match current {
-                    None => Docs::All,
-                    Some(docs) => Docs::Some(docs),
-                }
-            }
-        }
-    }
-
     // ---------------------------------------------------------- reports
+
+    /// Bytes of memory held: (table, lists, documents). Reads no list.
+    pub fn sizes(&self) -> (usize, usize, usize) {
+        let lists = self.heap.capacity() * std::mem::size_of::<Vec<u8>>() + self.free_heap.capacity() * 4 + self.heap.iter().map(|b| b.capacity()).sum::<usize>();
+        (self.slots.capacity() * std::mem::size_of::<Entry>(), lists, self.docs.capacity() * std::mem::size_of::<Doc>())
+    }
 
     pub fn stats(&self) -> IndexStats {
         let mut s = IndexStats {
             live_documents: self.live_docs,
             documents_ever: self.docs.len() - 1,
+            parts: 1,
             stale_postings: self.stale_postings,
             table_bytes: self.slots.capacity() * std::mem::size_of::<Entry>(),
             document_bytes: self.docs.capacity() * std::mem::size_of::<Doc>(),
@@ -775,6 +681,136 @@ impl Index {
             s.top_list_bytes[i] = sizes.iter().take(top).sum();
         }
         s
+    }
+}
+
+impl Lists for Index {
+    fn list(&self, t: Trigram) -> &[u8] {
+        let e = &self.slots[self.slot_of(t)];
+        self.list_bytes(e)
+    }
+}
+
+// ------------------------------------------------------------ answering
+
+/// An upper bound on how many documents satisfy the query, found without
+/// reading a list: a list has at least a byte per document.
+pub fn estimate<L: Lists + ?Sized>(lists: &L, query: &Query) -> usize {
+    match query {
+        Query::All => usize::MAX,
+        Query::Nothing => 0,
+        Query::Has(t) => lists.list(*t).len(),
+        Query::And(parts) => parts.iter().map(|p| estimate(lists, p)).min().unwrap_or(usize::MAX),
+        Query::Or(parts) => parts.iter().fold(0usize, |sum, p| sum.saturating_add(estimate(lists, p))),
+    }
+}
+
+/// Roughly how many bytes of lists `eval` would read for the query. This
+/// follows what `eval` reads: of the lists of an AND, the shortest, and
+/// then only those not too long to be worth it.
+pub fn cost<L: Lists + ?Sized>(lists: &L, query: &Query) -> usize {
+    match query {
+        Query::All | Query::Nothing => 0,
+        Query::Has(t) => lists.list(*t).len(),
+        Query::Or(parts) => parts.iter().map(|p| cost(lists, p)).sum(),
+        Query::And(parts) => {
+            let mut lens: Vec<usize> = Vec::new();
+            let mut others = 0;
+            for p in parts {
+                match p {
+                    Query::Has(t) => lens.push(lists.list(*t).len()),
+                    other => others += cost(lists, other),
+                }
+            }
+            lens.sort_unstable();
+            match lens.first() {
+                None => others,
+                Some(0) => 0,
+                Some(&least) => others + lens.iter().take_while(|len| **len <= least * 512 + 64).sum::<usize>(),
+            }
+        }
+    }
+}
+
+/// The documents whose lists satisfy the query, ascending, or None if the
+/// query says nothing. Documents whose content is gone may be among them.
+pub fn eval<L: Lists + ?Sized>(lists: &L, query: &Query) -> Option<Vec<u32>> {
+    match eval_docs(lists, query) {
+        Docs::All => None,
+        Docs::Some(docs) => Some(docs),
+    }
+}
+
+fn eval_docs<L: Lists + ?Sized>(lists: &L, query: &Query) -> Docs {
+    match query {
+        Query::All => Docs::All,
+        Query::Nothing => Docs::Some(Vec::new()),
+        Query::Has(t) => Docs::Some(Postings::new(lists.list(*t)).collect()),
+        Query::Or(parts) => {
+            let mut all: Vec<u32> = Vec::new();
+            for p in parts {
+                match eval_docs(lists, p) {
+                    Docs::All => return Docs::All,
+                    Docs::Some(docs) => all.extend(docs),
+                }
+            }
+            all.sort_unstable();
+            all.dedup();
+            Docs::Some(all)
+        }
+        Query::And(parts) => {
+            // Shortest lists first: the set shrinks fastest, and an
+            // absent trigram ends the work at once.
+            let mut found: Vec<(usize, &[u8])> = Vec::new();
+            let mut others: Vec<&Query> = Vec::new();
+            for p in parts {
+                match p {
+                    Query::Has(t) => {
+                        let list = lists.list(*t);
+                        if list.is_empty() {
+                            return Docs::Some(Vec::new());
+                        }
+                        found.push((list.len(), list));
+                    }
+                    Query::All => {}
+                    other => others.push(other),
+                }
+            }
+            found.sort_unstable_by_key(|f| f.0);
+            let mut current: Option<Vec<u32>> = None;
+            for (len, list) in found {
+                match &mut current {
+                    None => current = Some(Postings::new(list).collect()),
+                    Some(cur) => {
+                        if cur.is_empty() {
+                            break;
+                        }
+                        // Reading a long list to rule out a few files
+                        // costs more than scanning those files.
+                        if len > cur.len() * 512 + 64 {
+                            break;
+                        }
+                        intersect(cur, Postings::new(list));
+                    }
+                }
+            }
+            for q in others {
+                if current.as_ref().is_some_and(|c| c.len() <= 8) {
+                    break;
+                }
+                match eval_docs(lists, q) {
+                    Docs::All => {}
+                    Docs::Some(docs) => match &mut current {
+                        None => current = Some(docs),
+                        Some(cur) => intersect(cur, docs.into_iter()),
+                    },
+                }
+            }
+            match current {
+                None => Docs::All,
+                Some(docs) => Docs::Some(docs),
+            }
+        }
     }
 }
 
@@ -817,56 +853,68 @@ fn push_tight(list: &mut Vec<u8>, bytes: &[u8]) {
 mod tests {
     use super::*;
 
-    fn files(index: &Index, s: &str) -> Vec<NodeId> {
-        let mut f = index.files(&Query::string(s.as_bytes())).unwrap();
-        f.sort_unstable();
-        f
+    fn docs(index: &Index, s: &str) -> Vec<u32> {
+        eval(index, &Query::string(s.as_bytes())).unwrap().into_iter().filter(|d| !index.docs[(*d - index.base) as usize].retired()).collect()
     }
 
     #[test]
     fn add_query_retire() {
-        let mut index = Index::new();
-        let a = index.add(1, b"hello world\n");
-        let b = index.add(2, b"Hello there\nworld\n");
-        assert_eq!(index.add(3, b"hi"), 0);
-        assert_eq!(files(&index, "hello"), vec![1, 2]);
-        assert_eq!(files(&index, "WORLD"), vec![1, 2]);
-        assert_eq!(files(&index, "o w"), vec![1]);
-        assert_eq!(files(&index, "there"), vec![2]);
-        assert_eq!(files(&index, "absent"), Vec::<NodeId>::new());
+        let mut index = Index::starting_after(7);
+        let a = index.add(b"hello world\n");
+        let b = index.add(b"Hello there\nworld\n");
+        let c = index.add(b"hi");
+        assert_eq!((a, b, c), (8, 9, 10));
+        assert_eq!(docs(&index, "hello"), vec![8, 9]);
+        assert_eq!(docs(&index, "WORLD"), vec![8, 9]);
+        assert_eq!(docs(&index, "o w"), vec![8]);
+        assert_eq!(docs(&index, "there"), vec![9]);
+        assert_eq!(docs(&index, "absent"), Vec::<u32>::new());
         // No trigram spans a line break.
-        assert_eq!(index.files(&Query::Has(crate::query::trigram(b'e', b'\n', b'w'))).unwrap(), Vec::<NodeId>::new());
+        assert_eq!(eval(&index, &Query::Has(crate::query::trigram(b'e', b'\n', b'w'))).unwrap(), Vec::<u32>::new());
         index.retire(a);
-        assert_eq!(files(&index, "hello"), vec![2]);
+        assert_eq!(docs(&index, "hello"), vec![9]);
         index.retire(b);
-        assert_eq!(files(&index, "hello"), Vec::<NodeId>::new());
-        assert!(index.files(&Query::All).is_none());
+        assert_eq!(docs(&index, "hello"), Vec::<u32>::new());
+        assert!(eval(&index, &Query::All).is_none());
+    }
+
+    #[test]
+    fn joined_lists_restart() {
+        let mut bytes = Vec::new();
+        for d in [3u32, 2, 200] {
+            put_varint(&mut bytes, d);
+        }
+        bytes.push(0);
+        for d in [300u32, 1] {
+            put_varint(&mut bytes, d);
+        }
+        assert_eq!(Postings::new(&bytes).collect::<Vec<u32>>(), vec![3, 5, 205, 300, 301]);
     }
 
     #[test]
     fn long_lists_and_sweeps() {
         let mut index = Index::new();
-        let mut docs = Vec::new();
+        let mut all = Vec::new();
         for i in 0..5000u64 {
-            docs.push(index.add(i, format!("common text number {} zz{}zz\n", i, i % 7).as_bytes()));
+            all.push(index.add(format!("common text number {} zz{}zz\n", i, i % 7).as_bytes()));
         }
-        assert_eq!(files(&index, "common").len(), 5000);
-        assert_eq!(files(&index, "zz3zz").len(), 5000 / 7 + usize::from(5000 % 7 > 3));
+        assert_eq!(docs(&index, "common").len(), 5000);
+        assert_eq!(docs(&index, "zz3zz").len(), 5000 / 7 + usize::from(5000 % 7 > 3));
         // Retire most: sweeps must run and answers stay right.
         for i in 0..5000usize {
             if i % 10 != 0 {
-                index.retire(docs[i]);
+                index.retire(all[i]);
             }
         }
         assert!(index.work().bytes_swept > 0);
-        let left = files(&index, "common");
+        let left = docs(&index, "common");
         assert_eq!(left.len(), 500);
-        assert!(left.iter().all(|f| f % 10 == 0));
+        assert!(left.iter().all(|d| (d - 1) % 10 == 0));
         let stats = index.stats();
         assert_eq!(stats.live_documents, 500);
         assert!(stats.postings < 5000 * 40, "sweeps did not shrink the lists: {} entries", stats.postings);
         // Appending after a sweep still works.
-        index.add(9999, b"common text again\n");
-        assert_eq!(files(&index, "common").len(), 501);
+        index.add(b"common text again\n");
+        assert_eq!(docs(&index, "common").len(), 501);
     }
 }

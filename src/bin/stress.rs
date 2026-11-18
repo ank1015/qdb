@@ -224,7 +224,7 @@ fn bigfile(opts: &Options) -> Result<bool, String> {
     let mut db = if opts.index { Db::new() } else { Db::without_index() };
     let top = db.root();
     let t = Instant::now();
-    db.create_file(top, b"big.txt", text);
+    db.create_file(top, b"big.txt", &text);
     let create = t.elapsed();
     eprintln!("bigfile: {} bytes, stored in the engine in {} ms", bytes, show_ms(ms(create)));
 

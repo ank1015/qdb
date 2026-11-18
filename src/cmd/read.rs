@@ -3,7 +3,7 @@
 use super::{msg, options, LineBuf};
 use crate::engine::{Filter, Input, Io, Prepared, Runner};
 use std::collections::VecDeque;
-use crate::tree::{Db, Errno};
+use crate::tree::{Db, Errno, NodeId};
 use crate::util::{quote, quote_if_needed};
 
 pub fn echo(args: Vec<Vec<u8>>) -> Result<Runner, String> {
@@ -32,6 +32,8 @@ pub fn echo(args: Vec<Vec<u8>>) -> Result<Runner, String> {
 /// Where a read command gets one input from.
 enum Source<'a> {
     Data(&'a [u8]),
+    /// A file: read it a piece at a time with `Db::pieces`.
+    File(NodeId),
     Missing(Errno),
     Directory,
 }
@@ -43,7 +45,7 @@ fn open<'a>(db: &'a Db, stdin: &'a [u8], name: &[u8]) -> Source<'a> {
     match db.resolve(name) {
         Err(e) => Source::Missing(e),
         Ok(id) if db.is_dir(id) => Source::Directory,
-        Ok(id) => Source::Data(db.content(id)),
+        Ok(id) => Source::File(id),
     }
 }
 
@@ -115,7 +117,7 @@ pub fn cat(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             if f != b"-" {
                 // GNU cat refuses to copy a non-empty file onto itself.
                 if let (Ok(id), Some(o)) = (db.resolve(f), io.out_file) {
-                    if id == o && !db.is_dir(id) && !db.content(id).is_empty() {
+                    if id == o && !db.is_dir(id) && db.size(id) > 0 {
                         io.err_line(format!("cat: {}: input file is output file", quote_if_needed(f)));
                         status = 1;
                         continue;
@@ -124,6 +126,20 @@ pub fn cat(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             }
             let data = match open(db, if f == b"-" { io.take_stdin() } else { b"" }, f) {
                 Source::Data(d) => d,
+                Source::File(id) => {
+                    for p in db.pieces(id) {
+                        if io.stopped() {
+                            break;
+                        }
+                        let text = db.text_of(p);
+                        if number {
+                            numbering.put(&text, io);
+                        } else {
+                            io.put(&text);
+                        }
+                    }
+                    continue;
+                }
                 Source::Missing(e) => {
                     io.err_line(format!("cat: {}: {}", quote_if_needed(f), e.msg()));
                     status = 1;
@@ -183,6 +199,72 @@ fn parse_count(cmd: &'static str, arg: Option<&[u8]>) -> Result<Result<Count, Ru
         io.err_line(format!("{}: invalid number of lines: {}", cmd, quote(&shown)));
         1
     })))
+}
+
+/// `head` or `tail` of a file, a piece at a time: pieces end on line
+/// boundaries and say how many lines they hold, so only the pieces that
+/// hold the edge of what is wanted are looked into.
+fn file_lines(db: &Db, io: &mut Io, id: NodeId, head: bool, sign: Option<u8>, n: usize) {
+    let pieces = db.pieces(id);
+    // A final line counts whether or not it ends with a newline.
+    let open_end = |db: &Db| pieces.last().is_some_and(|p| !db.text_of(p).ends_with(b"\n"));
+    let units = |i: usize, db: &Db| pieces[i].lines as usize + usize::from(i + 1 == pieces.len() && open_end(db));
+    if head {
+        let mut left = match sign {
+            Some(b'-') => (db.line_count(id) as usize + usize::from(open_end(db))).saturating_sub(n),
+            _ => n,
+        };
+        for p in pieces {
+            if left == 0 || io.stopped() {
+                break;
+            }
+            let text = db.text_of(p);
+            if left > p.lines as usize {
+                io.put(&text);
+                left -= p.lines as usize;
+            } else {
+                io.put(&text[..first_lines(&text, left)]);
+                left = 0;
+            }
+        }
+        return;
+    }
+    let (mut start, mut off) = (0, 0);
+    if sign == Some(b'+') {
+        let mut skip = n.saturating_sub(1);
+        while start < pieces.len() && skip > pieces[start].lines as usize {
+            skip -= pieces[start].lines as usize;
+            start += 1;
+        }
+        if start < pieces.len() {
+            off = first_lines(&db.text_of(&pieces[start]), skip);
+        }
+    } else {
+        let mut after = 0usize;
+        start = pieces.len();
+        while start > 0 {
+            if after >= n {
+                break;
+            }
+            start -= 1;
+            let here = units(start, db);
+            if after + here >= n {
+                off = last_lines(&db.text_of(&pieces[start]), n - after);
+                break;
+            }
+            after += here;
+        }
+        if n == 0 {
+            start = pieces.len();
+        }
+    }
+    for (i, p) in pieces.iter().enumerate().skip(start) {
+        if io.stopped() {
+            break;
+        }
+        let text = db.text_of(p);
+        io.put(&text[if i == start { off } else { 0 }..]);
+    }
 }
 
 /// The byte offset just past the first `n` lines.
@@ -366,6 +448,10 @@ fn head_or_tail(cmd: &'static str, args: Vec<Vec<u8>>) -> Result<Prepared, Strin
             }
             let data = match input {
                 Source::Data(d) => d,
+                Source::File(id) => {
+                    file_lines(db, io, id, cmd == "head", count.sign, count.n);
+                    continue;
+                }
                 _ => {
                     io.err_line(format!("{}: error reading {}: Is a directory", cmd, quote(f)));
                     status = 1;
@@ -480,7 +566,7 @@ pub fn wc(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                 match db.resolve(f) {
                     _ if f == b"-" => minimum = 7,
                     Ok(id) if db.is_dir(id) => minimum = 7,
-                    Ok(id) => regular_total += db.content(id).len(),
+                    Ok(id) => regular_total += db.size(id) as usize,
                     Err(_) => {}
                 }
             }
@@ -489,8 +575,21 @@ pub fn wc(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         let mut status = 0;
         let mut totals = [0usize; 3];
         for f in &files {
+            let mut counter = Counter::default();
             let data: &[u8] = match open(db, if f == b"-" { io.take_stdin() } else { b"" }, f) {
                 Source::Data(d) => d,
+                Source::File(id) => {
+                    if show[1] {
+                        for p in db.pieces(id) {
+                            counter.add(&db.text_of(p));
+                        }
+                    } else {
+                        // Lines and bytes are known without reading.
+                        counter.counts[0] = db.line_count(id) as usize;
+                        counter.counts[2] = db.size(id) as usize;
+                    }
+                    b""
+                }
                 Source::Missing(e) => {
                     io.err_line(format!("wc: {}: {}", quote_if_needed(f), e.msg()));
                     status = 1;
@@ -502,7 +601,6 @@ pub fn wc(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                     b""
                 }
             };
-            let mut counter = Counter::default();
             counter.add(data);
             for i in 0..3 {
                 totals[i] += counter.counts[i];

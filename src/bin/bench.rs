@@ -7,7 +7,7 @@
 use qdb::shell;
 use qdb::store;
 use qdb::testing::{check_safe, order_is_unspecified, sorted_lines};
-use qdb::Db;
+use qdb::{Config, Db, SyncMode};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
@@ -29,6 +29,14 @@ Times a list of commands on the real GNU tools and on the engine.
   --label NAME      what to call this run in the results (default dev);
                     one file per label is kept under bench/results/DATASET/
   --no-index        run the engine with the trigram index switched off
+  --db DIR          run the engine on a database directory instead of in
+                    memory: DIR is emptied, the dataset is imported into it,
+                    it is compacted, closed and opened again, and then the
+                    commands run. After the whole list the commands that
+                    only read are timed a second time, on the database as
+                    the writes left it; that run is stored as LABEL-after.
+  --sync MODE       with --db: always (default) or batch
+  --piece BYTES     the engine's piece size (default 65536)
   --paired          instead of the usual run: time each read-only command on
                     the engine alone, with searches using the index and
                     ignoring it by turns in one process
@@ -262,7 +270,7 @@ fn generate(spec: &Spec) -> Db {
         for (i, comp) in comps.iter().enumerate() {
             cur = match db.child(cur, comp.as_bytes()) {
                 Some(c) => c,
-                None if i + 1 == comps.len() => db.create_file(cur, comp.as_bytes(), content.clone()),
+                None if i + 1 == comps.len() => db.create_file(cur, comp.as_bytes(), &content),
                 None => db.create_folder(cur, comp.as_bytes()),
             };
         }
@@ -328,11 +336,74 @@ struct EngineRun {
 /// Load the dataset into the engine, building the search index unless
 /// it is switched off. Returns the time to read the files and the time
 /// to read them and build the index.
-fn engine_load(root: &Path, opts: &Options) -> Result<(Db, store::LoadReport, Duration, Duration), String> {
-    let (db, report) = store::load_dir_with(root, opts.index).map_err(|e| e.to_string())?;
-    let read = Duration::from_micros(report.read_micros);
-    let total = read + Duration::from_micros(report.index_micros.unwrap_or(0));
-    Ok((db, report, read, total))
+///
+/// With `--db` the dataset is imported into a database directory (sync
+/// in batches), compacted, closed and opened again; both times are then
+/// the import, and what opening took is among the facts returned.
+fn engine_load(root: &Path, opts: &Options) -> Result<(Db, store::LoadReport, Duration, Duration, Vec<(String, String)>), String> {
+    let cfg = Config { index: opts.index, piece: opts.piece, sync: opts.sync, ..Config::default() };
+    let mut facts = Vec::new();
+    let Some(dir) = &opts.db else {
+        let mut db = Db::in_memory(Config { index: false, ..cfg });
+        let mut report = store::load_into_db(&mut db, root).map_err(|e| e.to_string())?;
+        if opts.index {
+            let start = Instant::now();
+            db.set_index(true);
+            report.index_micros = Some(start.elapsed().as_micros() as u64);
+        }
+        let read = Duration::from_micros(report.read_micros);
+        let total = read + Duration::from_micros(report.index_micros.unwrap_or(0));
+        return Ok((db, report, read, total, facts));
+    };
+    let _ = std::fs::remove_dir_all(dir);
+    let start = Instant::now();
+    let (mut db, _) = Db::open_dir(dir, Config { sync: SyncMode::Batch, ..cfg.clone() })?;
+    let report = store::load_into_db(&mut db, root).map_err(|e| e.to_string())?;
+    db.sync();
+    let load = start.elapsed();
+    let start = Instant::now();
+    db.compact()?;
+    let compact = start.elapsed();
+    let start = Instant::now();
+    db.close()?;
+    let close = start.elapsed();
+    let start = Instant::now();
+    let (db, opened) = Db::open_dir(dir, cfg)?;
+    let open = start.elapsed();
+    if !opened.messages().is_empty() {
+        return Err(format!("opening after a clean close had work to do: {:?}", opened.messages()));
+    }
+    facts.push(("store".to_string(), format!("on disk, sync {}", if opts.sync == SyncMode::Always { "always" } else { "batch" })));
+    facts.push(("compact_ms".to_string(), format!("{:.1}", millis(compact))));
+    facts.push(("close_ms".to_string(), format!("{:.1}", millis(close))));
+    facts.push(("open_ms".to_string(), format!("{:.2}", millis(open))));
+    facts.extend(disk_facts(&db, "settled"));
+    Ok((db, report, load, load, facts))
+}
+
+/// What is on disk, by what it is.
+fn disk_facts(db: &Db, when: &str) -> Vec<(String, String)> {
+    let s = db.disk_stats();
+    let io = db.io_stats();
+    [
+        ("text", s.text),
+        ("lists", s.lists),
+        ("tables", s.tables),
+        ("tree", s.tree),
+        ("log", s.log),
+        ("framing", s.framing),
+        ("unreclaimed", s.unreclaimed),
+        ("total", s.total()),
+        ("raw_text", s.raw_text),
+        ("data_files", s.data_files as u64),
+        ("written_bytes", io.bytes()),
+        ("syncs", io.syncs),
+        ("commits", io.commits),
+        ("checkpoints", io.checkpoints),
+    ]
+    .iter()
+    .map(|(k, v)| (format!("disk_{}_{}", when, k), v.to_string()))
+    .collect()
 }
 
 /// Facts about the engine's state for the results, as key and value.
@@ -782,6 +853,9 @@ struct Options {
     index: bool,
     paired: bool,
     filter: Option<String>,
+    db: Option<PathBuf>,
+    sync: SyncMode,
+    piece: usize,
 }
 
 /// How many more timed runs a command gets after its first one.
@@ -910,10 +984,11 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
     // Start the helper that runs the real tools while this process is
     // still small.
     run_real(&root, "true");
-    let (mut db, report, load, load_with_index) = engine_load(&root, opts)?;
+    let (mut db, report, load, load_with_index, load_facts) = engine_load(&root, opts)?;
     let heap_after_load = LIVE.load(Relaxed) - live_before;
     // Taken now, before any command has changed the data.
-    let facts = engine_facts(&db);
+    let mut facts = engine_facts(&db);
+    facts.extend(load_facts);
     let rss_after_load = resident_bytes();
     eprintln!("{}: {} files, {} folders, {:.1} MB, loaded in {} ms", name, report.files, report.folders, report.bytes as f64 / 1e6, ms(millis(load_with_index)));
 
@@ -956,16 +1031,32 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         let mut times = Vec::new();
         for (i, text) in texts.into_iter().enumerate() {
             let t = Instant::now();
-            db.create_file(folder, format!("{}.c", i).as_bytes(), text);
+            db.create_file(folder, format!("{}.c", i).as_bytes(), &text);
             times.push(t.elapsed());
         }
         db.remove(folder);
         median(times)
     };
 
-    let mut rows: Vec<Row> = Vec::new();
     let mut all_agree = true;
+    let mut trees_agree = true;
+    let dir = opts.out.join(name);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // On disk there is a second pass: the commands that only read, on the
+    // database as the writes of the first pass left it.
+    let passes = if opts.db.is_some() && opts.filter.is_none() { 2 } else { 1 };
+    for pass in 0..passes {
+    let label = if pass == 0 { opts.label.clone() } else { format!("{}-after", opts.label) };
+    if pass == 1 {
+        eprintln!("{}: the commands that only read, again, after the writes", name);
+        facts.retain(|(k, _)| !k.starts_with("disk_"));
+        facts.extend(disk_facts(&db, "after"));
+    }
+    let mut rows: Vec<Row> = Vec::new();
     for (template, mutating) in &templates {
+        if pass == 1 && *mutating {
+            continue;
+        }
         let command = match terms.fill(template) {
             Some(c) => c,
             None => {
@@ -1057,11 +1148,16 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
     }
 
     // After the whole list, both sides must hold the same tree.
-    let trees_agree = opts.filter.is_some() || store::snapshot_dir(&root).map_err(|e| e.to_string())? == db.snapshot();
-    all_agree &= trees_agree;
-
-    let dir = opts.out.join(name);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    if pass == 0 {
+        trees_agree = opts.filter.is_some() || store::snapshot_dir(&root).map_err(|e| e.to_string())? == db.snapshot();
+        all_agree &= trees_agree;
+        if opts.db.is_some() {
+            if let Err(e) = db.check() {
+                eprintln!("{}: check after the command list: {}", name, e);
+                all_agree = false;
+            }
+        }
+    }
     let mut csv = String::from("command,kind,gnu_ms,rg_ms,engine_ms,output_bytes,peak_bytes,agree,index_work\n");
     for r in &rows {
         let rg = if r.rg_ms < 0.0 { String::new() } else { format!("{:.4}", r.rg_ms) };
@@ -1083,13 +1179,19 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
     let _ = writeln!(meta, "trees_agree={}", trees_agree);
     let _ = writeln!(meta, "all_agree={}", all_agree);
     let _ = writeln!(meta, "tools={}; {}; {}; {}; {}; {}", tool_version("bash"), tool_version("grep"), tool_version("sed"), tool_version("ls"), tool_version("find"), tool_version("rg"));
-    for (k, v) in facts {
+    for (k, v) in &facts {
         let _ = writeln!(meta, "{}={}", k, v);
     }
     if opts.filter.is_none() {
-        std::fs::write(dir.join(format!("{}.csv", opts.label)), csv).map_err(|e| e.to_string())?;
-        std::fs::write(dir.join(format!("{}.meta", opts.label)), meta).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join(format!("{}.csv", label)), csv).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join(format!("{}.meta", label)), meta).map_err(|e| e.to_string())?;
+    }
+    }
+    if opts.filter.is_none() {
         report_dataset(name, opts)?;
+    }
+    if opts.db.is_some() {
+        db.close()?;
     }
     if !trees_agree {
         eprintln!("{}: the trees differ after the command list", name);
@@ -1332,6 +1434,9 @@ fn run() -> Result<bool, String> {
         index: true,
         paired: false,
         filter: None,
+        db: None,
+        sync: SyncMode::Always,
+        piece: Config::default().piece,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -1350,6 +1455,15 @@ fn run() -> Result<bool, String> {
             "--export" => export = Some(value("--export")?.into()),
             "--report" => report_only = true,
             "--paired" => opts.paired = true,
+            "--db" => opts.db = Some(value("--db")?.into()),
+            "--sync" => {
+                opts.sync = match value("--sync")?.as_str() {
+                    "always" => SyncMode::Always,
+                    "batch" => SyncMode::Batch,
+                    other => return Err(format!("--sync: {} is not always or batch", other)),
+                }
+            }
+            "--piece" => opts.piece = value("--piece")?.parse().map_err(|_| "--piece needs a number")?,
             "-h" | "--help" => {
                 println!("{}", USAGE);
                 return Ok(true);

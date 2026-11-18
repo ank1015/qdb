@@ -170,9 +170,34 @@ pub fn execute(db: &mut Db, line: &[u8]) -> Outcome {
 /// size of its output. If `out` returns false the commands that only read
 /// stop early; commands that change data always run to completion.
 pub fn execute_to(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
-    let code = run_line(db, line, out, err);
-    // A file that `>` emptied and nothing wrote to is now empty for good.
-    db.settle_veils();
+    if let Some(e) = db.failure() {
+        err.write(format!("qdb: {}\n", e).as_bytes());
+        return 2;
+    }
+    // Reads cannot return an error, so damage found while reading is
+    // thrown (`disk::Damage`). It ends the command line and the use of
+    // this database: what the line had changed so far is not logged.
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let code = run_line(db, line, out, err);
+        // The line's changes become one record of the log; a file that
+        // `>` emptied and nothing wrote to is now empty for good.
+        db.commit();
+        code
+    }));
+    let code = match ran {
+        Ok(code) => code,
+        Err(payload) => match payload.downcast::<crate::disk::Damage>() {
+            Ok(d) => {
+                db.after_damage(&d);
+                2
+            }
+            Err(other) => std::panic::resume_unwind(other),
+        },
+    };
+    if let Some(e) = db.failure() {
+        err.write(format!("qdb: {}\n", e).as_bytes());
+        return 2;
+    }
     code
 }
 
@@ -357,7 +382,7 @@ fn open_redirect(db: &mut Db, op: RedirOp, path: &[u8], undo: &mut Vec<Undo>) ->
                 return Err(if path.iter().all(|c| *c == b'/') { Errno::NoEnt } else { Errno::IsDir });
             }
             let (parent, name) = db.resolve_parent(path)?;
-            let id = db.create_file(parent, &name, Vec::new());
+            let id = db.create_file(parent, &name, &[]);
             undo.push(Undo::Created(id));
             Ok(id)
         }
@@ -451,9 +476,14 @@ fn commit_redirect(db: &mut Db, target: Target, undo: Vec<Undo>, out: Vec<u8>, m
     // The command may have removed or replaced the file it was writing to;
     // the output then goes nowhere, as it would with an unlinked file.
     if db.exists(id) && !db.is_dir(id) && !out.is_empty() {
-        let mut content = db.content(id).to_vec();
+        if op == RedirOp::Append {
+            // Valid text added to valid text is valid text.
+            db.append(id, &out);
+            return code;
+        }
+        let mut content = db.content(id).into_owned();
         match op {
-            RedirOp::Append => content.extend_from_slice(&out),
+            RedirOp::Append => unreachable!(),
             RedirOp::Write => {
                 // Writing starts at offset 0 of the emptied file.
                 if out.len() >= content.len() {
@@ -464,7 +494,7 @@ fn commit_redirect(db: &mut Db, target: Target, undo: Vec<Undo>, out: Vec<u8>, m
             }
         }
         if is_valid_text(&content) {
-            db.set_content(id, content);
+            db.set_content(id, &content);
         } else {
             stderr.extend_from_slice(
                 format!("qdb: {}: output is not valid UTF-8 text, nothing was written\n", lossy(&path)).as_bytes(),

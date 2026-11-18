@@ -1,8 +1,8 @@
-//! Getting data in and out of the in-memory database: real directories on
-//! disk, and the small text format the tests use for fixtures.
+//! Getting whole trees in and out of a database: real directories, and
+//! the small text format the tests use for fixtures.
 //!
-//! This is not on-disk storage for the engine (that comes in a later
-//! stage); it only imports and exports whole trees.
+//! This is import and export, not the engine's own storage: that is in
+//! `tree.rs` and `disk.rs`.
 
 use crate::tree::{is_valid_text, Db, NodeId};
 use std::fs;
@@ -57,11 +57,7 @@ pub fn load_dir(path: &Path) -> io::Result<(Db, LoadReport)> {
 /// The index is built after the files are read, and timed on its own.
 pub fn load_dir_with(path: &Path, index: bool) -> io::Result<(Db, LoadReport)> {
     let mut db = Db::without_index();
-    let mut report = LoadReport::default();
-    let root = db.root();
-    let start = std::time::Instant::now();
-    load_into(&mut db, root, path, &mut report)?;
-    report.read_micros = start.elapsed().as_micros() as u64;
+    let mut report = load_into_db(&mut db, path)?;
     if index {
         let start = std::time::Instant::now();
         db.set_index(true);
@@ -70,7 +66,24 @@ pub fn load_dir_with(path: &Path, index: bool) -> io::Result<(Db, LoadReport)> {
     Ok((db, report))
 }
 
-fn load_into(db: &mut Db, parent: NodeId, path: &Path, report: &mut LoadReport) -> io::Result<()> {
+/// Import a directory tree into a database that is empty, with whatever
+/// settings it has. The import is logged a few megabytes at a time, so a
+/// crash part of the way leaves part of the tree.
+pub fn load_into_db(db: &mut Db, path: &Path) -> io::Result<LoadReport> {
+    let mut report = LoadReport::default();
+    let root = db.root();
+    let start = std::time::Instant::now();
+    let mut pending = 0;
+    load_into(db, root, path, &mut report, &mut pending)?;
+    db.commit();
+    if let Some(e) = db.failure() {
+        return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
+    }
+    report.read_micros = start.elapsed().as_micros() as u64;
+    Ok(report)
+}
+
+fn load_into(db: &mut Db, parent: NodeId, path: &Path, report: &mut LoadReport, pending: &mut usize) -> io::Result<()> {
     // Sorted, so that a load always builds the same database.
     let mut entries: Vec<_> = fs::read_dir(path)?.collect::<Result<_, _>>()?;
     entries.sort_by_key(|e| name_bytes(&e.file_name()));
@@ -83,7 +96,7 @@ fn load_into(db: &mut Db, parent: NodeId, path: &Path, report: &mut LoadReport) 
         } else if kind.is_dir() {
             let id = db.create_folder(parent, &name);
             report.folders += 1;
-            load_into(db, id, &child, report)?;
+            load_into(db, id, &child, report, pending)?;
         } else if kind.is_file() {
             let content = fs::read(&child)?;
             if !is_valid_text(&content) {
@@ -92,12 +105,48 @@ fn load_into(db: &mut Db, parent: NodeId, path: &Path, report: &mut LoadReport) 
             }
             report.files += 1;
             report.bytes += content.len();
-            db.create_file(parent, &name, content);
+            db.create_file(parent, &name, &content);
+            *pending += content.len() + 64;
+            if *pending > 4 << 20 {
+                *pending = 0;
+                db.commit();
+                if let Some(e) = db.failure() {
+                    return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
+                }
+            }
         } else {
             report.skipped_other += 1;
         }
     }
     Ok(())
+}
+
+/// Copy every folder and file of one database into another, which is
+/// empty. Node ids are not kept.
+pub fn copy_into(from: &Db, to: &mut Db) -> Result<(), String> {
+    let mut stack = vec![(from.root(), to.root())];
+    let mut pending = 0;
+    while let Some((src, dst)) = stack.pop() {
+        for (name, child) in from.children(src) {
+            if from.is_dir(*child) {
+                let made = to.create_folder(dst, name);
+                stack.push((*child, made));
+            } else {
+                let content = from.content(*child);
+                to.create_file(dst, name, &content);
+                pending += content.len() + 64;
+                if pending > 4 << 20 {
+                    pending = 0;
+                    to.commit();
+                }
+            }
+        }
+    }
+    to.commit();
+    match to.failure() {
+        Some(e) => Err(e.to_string()),
+        None => Ok(()),
+    }
 }
 
 /// Export the whole tree into an existing, empty directory.
@@ -159,13 +208,19 @@ pub fn snapshot_dir(path: &Path) -> io::Result<Vec<(Vec<u8>, Option<Vec<u8>>)>> 
 /// no newline after it, so it can only be the last line of a file.
 pub fn parse_fixture(text: &[u8]) -> Result<Db, String> {
     let mut db = Db::new();
+    parse_fixture_into(&mut db, text)?;
+    Ok(db)
+}
+
+/// `parse_fixture` into a database that is empty.
+pub fn parse_fixture_into(db: &mut Db, text: &[u8]) -> Result<(), String> {
     let mut current: Option<(NodeId, Vec<u8>)> = None;
     fn flush(db: &mut Db, current: &mut Option<(NodeId, Vec<u8>)>) -> Result<(), String> {
         if let Some((id, content)) = current.take() {
             if !is_valid_text(&content) {
                 return Err("fixture file content is not valid UTF-8 text".into());
             }
-            db.set_content(id, content);
+            db.set_content(id, &content);
         }
         Ok(())
     }
@@ -176,7 +231,7 @@ pub fn parse_fixture(text: &[u8]) -> Result<Db, String> {
             let last = i + 1 == comps.len();
             cur = match db.child(cur, comp) {
                 Some(c) => c,
-                None if last && file => db.create_file(cur, comp, Vec::new()),
+                None if last && file => db.create_file(cur, comp, &[]),
                 None => db.create_folder(cur, comp),
             };
         }
@@ -187,12 +242,12 @@ pub fn parse_fixture(text: &[u8]) -> Result<Db, String> {
         match line.first() {
             None | Some(b'#') => {}
             Some(b'D') if line.starts_with(b"D ") => {
-                flush(&mut db, &mut current)?;
-                make(&mut db, &line[2..], false)?;
+                flush(db, &mut current)?;
+                make(db, &line[2..], false)?;
             }
             Some(b'F') if line.starts_with(b"F ") => {
-                flush(&mut db, &mut current)?;
-                let id = make(&mut db, &line[2..], true)?;
+                flush(db, &mut current)?;
+                let id = make(db, &line[2..], true)?;
                 current = Some((id, Vec::new()));
             }
             Some(c @ (b'|' | b':')) => {
@@ -205,6 +260,10 @@ pub fn parse_fixture(text: &[u8]) -> Result<Db, String> {
             _ => return Err(format!("fixture line {}: expected D, F, | or :", n + 1)),
         }
     }
-    flush(&mut db, &mut current)?;
-    Ok(db)
+    flush(db, &mut current)?;
+    db.commit();
+    match db.failure() {
+        Some(e) => Err(e.to_string()),
+        None => Ok(()),
+    }
 }

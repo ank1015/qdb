@@ -6,7 +6,7 @@
 
 use qdb::store;
 use qdb::testing::{check_safe, order_is_unspecified, run_real, same_output, sorted_lines};
-use qdb::{execute, Db};
+use qdb::{execute, Config, Db, Outcome, SyncMode};
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "\
@@ -21,6 +21,15 @@ With no case files, runs every tests/cases/*.case.
   --seed N          seed for --fuzz (default 1)
   --list-failures   print one line per failure instead of full details
   --no-index        run the engine with its search index switched off
+  --store MODE      where the engine keeps its data: memory (default), disk
+                    (a database directory, checked with --check's checks
+                    when each case ends), or reopen (the same, closed and
+                    opened again after every step, and checked each time)
+  --sync MODE       with disk or reopen: always (default) or batch
+  --piece BYTES     cut file content into pieces of at most this many bytes
+                    (default 65536); a small value makes small test files
+                    span many pieces
+  --segment BYTES   start a new data file after this many bytes
   --diff N          instead of the cases: run N generated steps, searches
                     mixed with writes, on two engines, one with the index
                     and one without, and require the same results; then
@@ -206,21 +215,120 @@ fn tree_diff(real: &[(Vec<u8>, Option<Vec<u8>>)], engine: &[(Vec<u8>, Option<Vec
 }
 
 /// Run one case. Returns a description of the first failing step.
-fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch) -> Result<(), String> {
-    let mut db = fixture.clone();
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Mode {
+    Memory,
+    Disk,
+    Reopen,
+}
+
+#[derive(Debug, Clone)]
+struct Setup {
+    mode: Mode,
+    cfg: Config,
+}
+
+impl Setup {
+    fn describe(&self) -> String {
+        let store = match self.mode {
+            Mode::Memory => "in memory".to_string(),
+            Mode::Disk => format!("on disk, sync {}", if self.cfg.sync == SyncMode::Always { "always" } else { "batch" }),
+            Mode::Reopen => format!("on disk, closed and reopened after every step, sync {}", if self.cfg.sync == SyncMode::Always { "always" } else { "batch" }),
+        };
+        format!("{}, pieces of {} bytes, index {}", store, self.cfg.piece, if self.cfg.index { "on" } else { "off" })
+    }
+}
+
+/// The engine under test, in memory or in a database directory.
+struct Engine {
+    db: Option<Db>,
+    dir: Option<PathBuf>,
+    setup: Setup,
+    reopens: usize,
+}
+
+impl Engine {
+    /// A database holding a copy of `start`.
+    fn new(start: &Db, setup: &Setup, scratch: &mut Scratch) -> Result<Engine, String> {
+        let (mut db, dir) = match setup.mode {
+            Mode::Memory => (Db::in_memory(setup.cfg.clone()), None),
+            _ => {
+                scratch.next += 1;
+                let dir = scratch.base.join(format!("db{}", scratch.next));
+                (Db::open_dir(&dir, setup.cfg.clone())?.0, Some(dir))
+            }
+        };
+        store::copy_into(start, &mut db)?;
+        Ok(Engine { db: Some(db), dir, setup: setup.clone(), reopens: 0 })
+    }
+
+    fn db(&self) -> &Db {
+        self.db.as_ref().unwrap()
+    }
+
+    fn execute(&mut self, command: &[u8]) -> Result<Outcome, String> {
+        let out = execute(self.db.as_mut().unwrap(), command);
+        if self.setup.mode == Mode::Reopen {
+            self.reopen()?;
+        }
+        Ok(out)
+    }
+
+    /// Close the database and open it again; it must come back clean and
+    /// pass every check.
+    fn reopen(&mut self) -> Result<(), String> {
+        let dir = self.dir.clone().ok_or("not on disk")?;
+        let before = self.db().snapshot();
+        self.db.take().unwrap().close().map_err(|e| format!("close: {}", e))?;
+        let (db, report) = Db::open_dir(&dir, self.setup.cfg.clone()).map_err(|e| format!("open again: {}", e))?;
+        if report.replayed != 0 || !report.messages().is_empty() {
+            return Err(format!("opening after a clean close had work to do: {:?}", report));
+        }
+        db.check().map_err(|e| format!("check after reopening: {}", e))?;
+        if db.snapshot() != before {
+            return Err("the tree is not the same after closing and opening again".into());
+        }
+        self.db = Some(db);
+        self.reopens += 1;
+        Ok(())
+    }
+
+    /// The checks of `qdb --check`, and for a database on disk a last
+    /// close and reopen.
+    fn finish(mut self) -> Result<(), String> {
+        self.db().check().map_err(|e| format!("check: {}", e))?;
+        if self.dir.is_some() {
+            self.reopen()?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        self.db = None;
+        if let Some(dir) = &self.dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> Result<(), String> {
+    let mut engine = Engine::new(fixture, setup, scratch)?;
+    let db = &mut engine;
     let needs_real = case.steps.iter().any(|s| matches!(s.kind, Kind::Compare { .. }));
     let root = if needs_real { Some(scratch.materialise(fixture)) } else { None };
     let mut unordered_seen = false;
     let result = (|| {
         for step in &case.steps {
             let fail = |what: String| Err(format!("{}:{}: {}\n{}", case.file, step.line, step.command, what));
-            let before = db.snapshot();
+            let before = db.db().snapshot();
             match &step.kind {
                 Kind::Setup => {
-                    execute(&mut db, step.command.as_bytes());
+                    db.execute(step.command.as_bytes())?;
                 }
                 Kind::Rejected(expect) => {
-                    let got = execute(&mut db, step.command.as_bytes());
+                    let got = db.execute(step.command.as_bytes())?;
                     let stderr = String::from_utf8_lossy(&got.stderr).into_owned();
                     if got.code != 2 || !stderr.starts_with("qdb: ") || !stderr.contains(expect.as_str()) || !got.stdout.is_empty() {
                         return fail(format!(
@@ -231,12 +339,12 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch) -> Result<(), Stri
                             show(&got.stderr)
                         ));
                     }
-                    if db.snapshot() != before {
+                    if db.db().snapshot() != before {
                         return fail("    a rejected command changed the tree\n".into());
                     }
                 }
                 Kind::Expect { stdout, stderr, code } => {
-                    let got = execute(&mut db, step.command.as_bytes());
+                    let got = db.execute(step.command.as_bytes())?;
                     if &got.stdout != stdout || &got.stderr != stderr || got.code != *code {
                         return fail(format!(
                             "    expected exit status {}, got {}\n    expected stdout:\n{}    engine stdout:\n{}    expected stderr:\n{}    engine stderr:\n{}",
@@ -256,7 +364,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch) -> Result<(), Stri
                     let engine_command = step.command.replace("{ROOT}", "");
                     check_safe(&real_command, root)?;
                     let real = run_real(root, &real_command);
-                    let got = execute(&mut db, engine_command.as_bytes());
+                    let got = db.execute(engine_command.as_bytes())?;
                     // Once a case has stored unordered output, later steps
                     // that read it back are unordered too.
                     unordered_seen |= order_is_unspecified(&engine_command);
@@ -281,7 +389,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch) -> Result<(), Stri
                         tree.into_iter().map(|(p, c)| (p, c.map(|c| sorted_lines(&c).concat()))).collect()
                     };
                     let real_tree = normalise(store::snapshot_dir(root).map_err(|e| e.to_string())?);
-                    if let Some(d) = tree_diff(&real_tree, &normalise(db.snapshot())) {
+                    if let Some(d) = tree_diff(&real_tree, &normalise(db.db().snapshot())) {
                         what.push_str(&format!("    tree after the command:\n{}", d));
                     }
                     if !what.is_empty() {
@@ -295,7 +403,8 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch) -> Result<(), Stri
     if let Some(root) = root {
         scratch.discard(&root);
     }
-    result
+    result?;
+    engine.finish().map_err(|e| format!("{}:{}: {}\n    {}", case.file, case.steps[0].line, case.steps[0].command, e))
 }
 
 // ------------------------------------------------------------------ fuzzing
@@ -334,7 +443,7 @@ fn fuzz_cases(n: usize, seed: u64) -> (Db, Vec<Case>) {
     content.extend_from_slice(b"abcabc\naXb a.b\n(a) {b} [c] a|b a+b a*b a?b ^a$ a\\b\nAbC abc ABC\n");
     let mut db = Db::new();
     let root = db.root();
-    db.create_file(root, b"f", content);
+    db.create_file(root, b"f", &content);
 
     const BRE: &[&str] = &[
         "a", "b", "c", "A", ".", "*", "\\+", "\\?", "\\|", "\\(", "\\)", "\\{1,2\\}", "\\{2\\}", "\\{0,\\}", "\\{,2\\}", "[ab]", "[^a]",
@@ -447,18 +556,18 @@ fn diff_pattern(rng: &mut Rng, words: &[String]) -> (String, &'static str) {
 
 /// The differential test: the same random steps on an engine with the
 /// index and one without. Returns false at the first difference.
-fn diff_run(steps: usize, seed: u64) -> Result<bool, String> {
+fn diff_run(steps: usize, seed: u64, setup: &Setup, scratch: &mut Scratch) -> Result<bool, String> {
     let mut rng = Rng(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
     let words = diff_words(&mut rng);
-    let mut on = Db::new();
+    let mut on = Engine::new(&Db::new(), setup, scratch)?;
     let mut off = Db::without_index();
-    assert!(on.has_index() && !off.has_index());
+    assert!(on.db().has_index() && !off.has_index());
     let (mut searches, mut writes, mut selected, mut refused) = (0usize, 0usize, 0usize, 0usize);
     let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     let mut next_name = 0usize;
 
     for step in 0..steps {
-        let tree = on.snapshot();
+        let tree = on.db().snapshot();
         let files: Vec<String> = tree.iter().filter(|(_, c)| c.is_some()).map(|(p, _)| String::from_utf8_lossy(p).into_owned()).collect();
         let dirs: Vec<String> = tree.iter().filter(|(_, c)| c.is_none()).map(|(p, _)| String::from_utf8_lossy(p).into_owned()).collect();
         let mut fresh = |rng: &mut Rng| {
@@ -593,11 +702,17 @@ fn diff_run(steps: usize, seed: u64) -> Result<bool, String> {
             all.push(format!("grep -r{}{} '{}' .", ["n", "l", "c", "in"][rng.below(4)], syntax, pattern));
         }
         for (nth, command) in all.iter().enumerate() {
-            let before = on.index_work();
-            let a = execute(&mut on, command.as_bytes());
-            if kind == "same" && matches!(nth, 1..=4 | 6) && on.index_work() != before {
-                println!("FAIL  seed {} step {}: a write that changes nothing reached the index: {}", seed, step + 1, command);
+            let before = (on.db().index_work(), on.db().io_stats().bytes());
+            let a = execute(on.db.as_mut().unwrap(), command.as_bytes());
+            if kind == "same" && matches!(nth, 1..=4 | 6) && (on.db().index_work(), on.db().io_stats().bytes()) != before {
+                println!("FAIL  seed {} step {}: a write that changes nothing reached the index or the disk: {}", seed, step + 1, command);
                 return Ok(false);
+            }
+            if let Some(e) = on.db().failure() {
+                return Err(e.to_string());
+            }
+            if setup.mode == Mode::Reopen {
+                on.reopen().map_err(|e| format!("seed {} step {}: {}: {}", seed, step + 1, command, e))?;
             }
             let b = execute(&mut off, command.as_bytes());
             if a != b {
@@ -617,70 +732,42 @@ fn diff_run(steps: usize, seed: u64) -> Result<bool, String> {
                 }
             }
         }
-        if ((step + 1) % 50 == 0 || step + 1 == steps) && on.snapshot() != off.snapshot() {
+        if ((step + 1) % 50 == 0 || step + 1 == steps) && on.db().snapshot() != off.snapshot() {
             println!("FAIL  seed {} step {}: the trees differ after {:?}", seed, step + 1, all);
             return Ok(false);
         }
         if (step + 1) % 1000 == 0 || step + 1 == steps {
-            if let Some(what) = rebuild_check(&on, &words) {
+            if let Some(what) = rebuild_check(on.db()) {
                 println!("FAIL  seed {} step {}: {}", seed, step + 1, what);
                 return Ok(false);
             }
         }
     }
-    let work = on.index_work().expect("index on");
+    let work = on.db().index_work().expect("index on");
+    let io = on.db().io_stats();
+    let reopens = on.reopens;
+    on.finish().map_err(|e| format!("seed {}: at the end: {}", seed, e))?;
     let kinds: Vec<String> = counts.iter().map(|(k, n)| format!("{} {}", k, n)).collect();
     println!(
-        "seed {}: {} steps ({} searches, {} writes), same results with the index on and off; {} greps selected something, {} commands stopped by the shell layer (a missing folder for a redirection)",
-        seed, steps, searches, writes, selected, refused
+        "seed {}: {} steps ({} searches, {} writes), same results from the engine under test ({}) and one in memory with no index; {} greps selected something, {} commands stopped by the shell layer (a missing folder for a redirection)",
+        seed, steps, searches, writes, setup.describe(), selected, refused
     );
+    if setup.mode != Mode::Memory {
+        println!("    on disk: {} command lines logged, {} syncs, {} saves of the tree, {} bytes written, closed and reopened {} times", io.commits, io.syncs, io.checkpoints, io.bytes(), reopens);
+    }
     println!("    steps by kind: {}", kinds.join(", "));
     println!(
-        "    index work: {} documents added, {} retired, {} bytes of lists rewritten by sweeps, {} rebuilds; maintained index equals a fresh one at every check",
+        "    index work: {} documents added, {} retired, {} bytes of lists rewritten by sweeps, {} rebuilds; at every check the maintained index equals one built afresh, list by list",
         work.documents_added, work.documents_retired, work.bytes_swept, work.rebuilds
     );
     Ok(true)
 }
 
-/// The maintained index must answer every query exactly as an index built
-/// from scratch over the same files.
-fn rebuild_check(db: &Db, words: &[String]) -> Option<String> {
-    use qdb::query::Query;
-    let mut fresh = db.clone();
-    fresh.set_index(false);
-    fresh.set_index(true);
-    let mut queries: Vec<Query> = Vec::new();
-    for w in words {
-        queries.push(Query::string(w.as_bytes()));
-        let b = w.as_bytes();
-        for win in b.windows(3) {
-            queries.push(Query::string(win));
-        }
-    }
-    for pair in words.chunks(2) {
-        queries.push(Query::any_string(pair));
-        queries.push(Query::and(pair.iter().map(|w| Query::string(w.as_bytes())).collect()));
-    }
-    for (path, content) in db.snapshot().iter().take(40) {
-        if let Some(c) = content {
-            for win in c.windows(3).step_by(7).take(30) {
-                queries.push(Query::string(win));
-            }
-            let _ = path;
-        }
-    }
-    for q in &queries {
-        let kept = db.index_answer(q);
-        let built = fresh.index_answer(q);
-        if kept != built {
-            return Some(format!("the maintained index and a fresh one disagree on {:?}:\n    maintained: {:?}\n    fresh: {:?}", q, kept, built));
-        }
-    }
-    let (a, b) = (db.index_stats()?, fresh.index_stats()?);
-    if a.live_documents != b.live_documents {
-        return Some(format!("the maintained index has {} live documents, a fresh one {}", a.live_documents, b.live_documents));
-    }
-    None
+/// The maintained index must say of every piece of every file exactly
+/// what an index built now from that piece's content would say, list by
+/// list. `Db::check` does that, with every other check of `qdb --check`.
+fn rebuild_check(db: &Db) -> Option<String> {
+    db.check().err().map(|e| format!("check: {}", e))
 }
 
 // --------------------------------------------------------------------- main
@@ -695,6 +782,7 @@ fn run() -> Result<bool, String> {
     let mut brief = false;
     let mut index = true;
     let mut diff = 0usize;
+    let mut setup = Setup { mode: Mode::Memory, cfg: Config::default() };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("{} needs a value", name));
@@ -705,6 +793,23 @@ fn run() -> Result<bool, String> {
             "--seed" => seed = value("--seed")?.parse().map_err(|_| "--seed needs a number")?,
             "--list-failures" => brief = true,
             "--no-index" => index = false,
+            "--store" => {
+                setup.mode = match value("--store")?.as_str() {
+                    "memory" => Mode::Memory,
+                    "disk" => Mode::Disk,
+                    "reopen" => Mode::Reopen,
+                    other => return Err(format!("--store: {} is not memory, disk or reopen", other)),
+                }
+            }
+            "--sync" => {
+                setup.cfg.sync = match value("--sync")?.as_str() {
+                    "always" => SyncMode::Always,
+                    "batch" => SyncMode::Batch,
+                    other => return Err(format!("--sync: {} is not always or batch", other)),
+                }
+            }
+            "--piece" => setup.cfg.piece = value("--piece")?.parse().map_err(|_| "--piece needs a number")?,
+            "--segment" => setup.cfg.segment = value("--segment")?.parse().map_err(|_| "--segment needs a number")?,
             "--diff" => diff = value("--diff")?.parse().map_err(|_| "--diff needs a number")?,
             "-v" => verbose = true,
             "-h" | "--help" => {
@@ -715,8 +820,10 @@ fn run() -> Result<bool, String> {
             _ => files.push(a.into()),
         }
     }
+    setup.cfg.index = index;
     if diff > 0 {
-        return diff_run(diff, seed);
+        let mut scratch = Scratch::new();
+        return diff_run(diff, seed, &setup, &mut scratch);
     }
     let default_run = files.is_empty() && fuzz == 0;
     if default_run {
@@ -768,7 +875,7 @@ fn run() -> Result<bool, String> {
                 db.set_index(index);
                 fixtures.insert(case.fixture.clone(), db);
             }
-            let result = run_case(case, &fixtures[&case.fixture], &mut scratch);
+            let result = run_case(case, &fixtures[&case.fixture], &mut scratch, &setup);
             report(case, result);
         }
     }
@@ -776,11 +883,11 @@ fn run() -> Result<bool, String> {
         let (mut db, cases) = fuzz_cases(fuzz, seed);
         db.set_index(index);
         for case in &cases {
-            let result = run_case(case, &db, &mut scratch);
+            let result = run_case(case, &db, &mut scratch, &setup);
             report(case, result);
         }
     }
-    println!("{} cases ({} steps), index {}: {} passed, {} failed", passed + failed, steps, if index { "on" } else { "off" }, passed, failed);
+    println!("{} cases ({} steps), {}: {} passed, {} failed", passed + failed, steps, setup.describe(), passed, failed);
     Ok(failed == 0)
 }
 

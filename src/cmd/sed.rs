@@ -445,7 +445,7 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                     Ok(id) => id,
                 };
                 if let Some(budget) = probe {
-                    let cost = db.content(id).len() + 256;
+                    let cost = db.size(id) as usize + 256;
                     if budget >= cost {
                         probe = Some(budget - cost);
                     } else {
@@ -456,18 +456,18 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                 if only.as_ref().is_some_and(|set| !db.passes(set, id)) {
                     continue;
                 }
-                if let Ok(None) = finder.next_line(db.content(id), 0) {
+                if let Ok(None) = finder.next_line(&db.content(id), 0) {
                     continue;
                 }
                 let mut out = Vec::new();
-                if subst.apply_all(db.content(id), &mut out).is_err() {
+                if subst.apply_all(&db.content(id), &mut out).is_err() {
                     io.err_line(format!("qdb: sed: {}: {}", lossy(f), too_complex));
                     status = status.max(1);
                 } else if !is_valid_text(&out) {
                     io.err_line(format!("qdb: sed: {}: result is not valid UTF-8 text, file left unchanged", lossy(f)));
                     status = status.max(1);
                 } else {
-                    db.set_content(id, out);
+                    db.set_content(id, &out);
                 }
             }
             return status;
@@ -478,6 +478,7 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             if io.stopped() {
                 break;
             }
+            let held;
             let data: &[u8] = if f == b"-" {
                 io.take_stdin()
             } else {
@@ -492,7 +493,10 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                         io.err_line(format!("sed: read error on {}: Is a directory", lossy(f)));
                         return 4;
                     }
-                    Ok(id) => db.content(id),
+                    Ok(id) => {
+                        held = db.content(id);
+                        &held
+                    }
                 }
             };
             for line in lines(data) {

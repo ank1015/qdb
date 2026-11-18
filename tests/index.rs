@@ -24,7 +24,7 @@ fn tree(index: bool) -> Db {
             if n % 10 != 0 {
                 text.push_str("the commonword\n");
             }
-            db.create_file(dir, format!("f{:02}.txt", f).as_bytes(), text.into_bytes());
+            db.create_file(dir, format!("f{:02}.txt", f).as_bytes(), text.as_bytes());
         }
     }
     db
@@ -36,7 +36,7 @@ fn three_kinds_of_answer() {
     let root = db.root();
     // Few files: a list, in the order a walk visits them.
     match db.candidates(root, &Query::string(b"rareword")) {
-        Candidates::Files(files) => {
+        Candidates::Files(files, _) => {
             let paths: Vec<&[u8]> = files.iter().map(|f| f.path.as_slice()).collect();
             assert_eq!(paths, [b"dir03/f17.txt".as_slice(), b"dir15/f01.txt".as_slice()]);
         }
@@ -45,7 +45,7 @@ fn three_kinds_of_answer() {
     // Limited to the folder asked about.
     let dir = db.resolve(b"dir15").unwrap();
     match db.candidates(dir, &Query::string(b"rareword")) {
-        Candidates::Files(files) => assert_eq!(files.len(), 1),
+        Candidates::Files(files, _) => assert_eq!(files.len(), 1),
         other => panic!("expected a list, got {:?}", other),
     }
     // A good share of the files: a set to test each file against.
@@ -63,7 +63,7 @@ fn three_kinds_of_answer() {
     assert_eq!(db.candidates(root, &Query::string(b"commonword")), Candidates::All);
     assert_eq!(db.candidates(root, &Query::string(b"ab")), Candidates::All);
     // No file at all.
-    assert_eq!(db.candidates(root, &Query::string(b"zzzqqq")), Candidates::Files(Vec::new()));
+    assert!(matches!(db.candidates(root, &Query::string(b"zzzqqq")), Candidates::Files(files, _) if files.is_empty()));
     assert_eq!(Db::without_index().candidates(0, &Query::string(b"rareword")), Candidates::All);
 }
 
@@ -113,13 +113,10 @@ fn a_move_is_free_and_writes_are_counted() {
     assert_eq!(db.index_work().unwrap(), before);
     execute(&mut db, b"echo 'three new words' >> renamed.txt");
     let after = db.index_work().unwrap();
-    assert_eq!((after.documents_added - before.documents_added, after.documents_retired - before.documents_retired), (1, 1));
-    // The maintained index answers as one built from scratch.
-    let mut fresh = db.clone();
-    fresh.set_index(false);
-    fresh.set_index(true);
-    for word in ["rareword", "midword", "commonword", "three new words", "line"] {
-        let q = Query::string(word.as_bytes());
-        assert_eq!(db.index_answer(&q), fresh.index_answer(&q), "{}", word);
-    }
+    // What is added is indexed, as a piece of its own or joined with a
+    // small piece at the file's end.
+    assert_eq!(after.documents_added - before.documents_added, 1);
+    assert!(after.documents_retired - before.documents_retired <= 1);
+    // The maintained index is, list by list, what one built now would be.
+    db.check().unwrap();
 }
