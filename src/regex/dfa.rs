@@ -68,6 +68,11 @@ impl Dfa {
         if re.has_backref {
             return None;
         }
+        // What a character is cannot be told from the bytes either side.
+        let unicode = |a: &Assert| matches!(a, Assert::UWordBoundary | Assert::UNotWordBoundary | Assert::UWordStart | Assert::UWordEnd | Assert::UAfterNonWord | Assert::UBeforeNonWord);
+        if re.prog.iter().any(|i| matches!(i, Inst::Assert(a) if unicode(a))) {
+            return None;
+        }
         let prog = re.prog.clone();
         let sets = re.sets.clone();
         // Two bytes are in one class when every set treats them alike and
@@ -154,6 +159,8 @@ impl Dfa {
                             Assert::WordEnd => prev && !next,
                             Assert::AfterNonWord => !prev,
                             Assert::BeforeNonWord => !next,
+                            // Never here: `new` turns such a pattern down.
+                            _ => false,
                         };
                         if holds {
                             self.stack.push(pc + 1);

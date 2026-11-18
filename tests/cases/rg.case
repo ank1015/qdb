@@ -1,0 +1,507 @@
+# Stage 4, part 4: rg.
+@fixture rg
+
+# the walk and its output
+$ rg needle
+$ rg --sort path needle
+$ rg --sort=path needle
+$ rg --sort none needle
+$ rg -n --sort path needle
+$ rg needle README.md
+$ rg -n needle README.md
+$ rg needle README.md main.rs
+$ rg needle src
+$ rg needle src/
+$ rg --sort path needle .
+$ rg --sort path needle ./
+$ rg --sort path needle ./src
+$ rg needle src/deep
+$ rg --sort path needle docs notes
+$ rg --sort path needle notes docs
+$ rg --sort path -l needle src/deep notes src
+$ rg needle nope
+$ rg needle nope README.md
+$ rg needle README.md/x
+$ rg nothinghere
+$ rg nothinghere README.md
+$ rg
+$ rg needle emptydir
+$ rg TODO
+$ rg -j 1 TODO
+$ rg -j4 TODO
+$ rg --threads 2 TODO
+$ rg --threads=2 TODO
+$ rg --no-heading TODO
+$ rg needle -- README.md
+$ rg -- -x README.md
+$ rg '' lib.h
+$ rg '' emptydir
+
+# hidden files and ignore files
+$ rg --hidden --sort path needle
+$ rg --no-ignore --sort path needle
+$ rg -u --sort path needle
+$ rg -uu --sort path needle
+$ rg -uuu --sort path needle
+$ rg -uuuu needle
+$ rg --unrestricted --sort path needle
+$ rg --hidden --no-ignore --sort path needle
+$ rg needle .hidden.txt
+$ rg needle .config
+$ rg needle target
+$ rg needle target/debug/out.txt
+$ rg needle vendor
+$ rg needle scratch
+$ rg needle excluded.txt
+$ rg needle top-only.txt src/top-only.txt
+$ rg needle sub
+$ rg needle nogit
+$ rg --sort path needle src/deep
+$ rg -u needle src/deep
+$ rg needle src/gen
+$ rg needle notes
+$ rg needle docs
+$ rg --files --sort path
+$ rg --files --sort path src
+$ rg --files --hidden --sort path
+$ rg --files -u --sort path
+$ rg --files -uu --sort path
+$ rg --files README.md
+$ rg --files nope
+$ rg --files README.md nope
+$ rg --files emptydir
+$ rg --files -0 src/deep | cat -A
+$ rg --files -tmd --sort path
+$ rg --files -g '*.txt' --sort path
+$ rg --files -g '!*.txt' --sort path
+$ rg --files needle
+$ echo '*.md' > .ignore; rg --sort path needle
+$ echo 'README.md' > .rgignore; rg --files --sort path
+$ echo '!build.log' >> .ignore; rg --sort path needle
+$ echo '!build.log' >> .rgignore; rg --sort path needle
+$ echo '/src' > .ignore; rg --sort path needle
+$ echo 'src/**' > .ignore; rg --sort path needle
+$ echo 'src/**/*.txt' > .ignore; rg --sort path needle
+$ echo '**/deep' > .ignore; rg --sort path needle
+$ echo 'deep/' > .ignore; rg --sort path needle
+$ echo 'src/deep/' > .ignore; rg --sort path needle
+$ echo '*.{js,rs}' > .ignore; rg --sort path needle
+$ echo '[a-m]*.txt' > .ignore; rg --sort path needle
+$ echo 'no?es' > .ignore; rg --sort path needle
+$ echo '\!x' > .ignore; rg --sort path needle
+$ echo '# comment' > .ignore; rg --sort path needle
+$ echo 'README.md  ' > .ignore; rg --sort path needle
+$ echo '*' > .ignore; rg --sort path needle
+$ echo '*' > .ignore; echo '!*.md' >> .ignore; rg --sort path needle
+$ echo '*' > .ignore; echo '!*/' >> .ignore; echo '!*.md' >> .ignore; rg --sort path needle
+$ echo '**' > .ignore; rg --sort path needle
+$ echo 'a/**/b' > .ignore; mkdir -p a/x/b a/b; echo needle > a/x/b/f; echo needle > a/b/f; echo needle > a/f; rg --sort path needle a
+$ echo 'keep.txt' > src/.ignore; rg --sort path needle src
+$ echo '!x.tmp' > src/deep/.ignore; rg --sort path needle src/deep
+$ echo 'x.tmp' > src/deep/.rgignore; echo '!x.tmp' > src/deep/.ignore; rg --sort path needle src/deep
+$ echo '!out.txt' > target/.ignore; rg --sort path needle
+$ rm -r .git; rg --sort path needle
+$ rm -r .git sub/.git; rg --sort path needle
+$ rm .gitignore; rg --sort path needle
+$ rm .ignore .rgignore; rg --sort path needle
+$ mkdir nogit/.git; rg --sort path needle nogit
+$ echo 'seen.txt' > sub/.git/info/exclude; rg needle sub
+$ mkdir sub/.git/info; echo 'seen.txt' > sub/.git/info/exclude; rg needle sub
+$ rg needle sub/ignored-in-sub.txt
+$ rg --hidden needle sub
+$ rg --hidden --sort path HEAD
+
+# -g
+$ rg -g '*.md' --sort path needle
+$ rg -g '*.{md,rs}' --sort path needle
+$ rg -g '!*.md' --sort path needle
+$ rg -g '*.md' -g '*.c' --sort path needle
+$ rg -g '*.md' -g '!README.md' --sort path needle
+$ rg -g '!README.md' -g '*.md' --sort path needle
+$ rg -g 'src' needle
+$ rg -g 'src/**' --sort path needle
+$ rg -g 'src/*' --sort path needle
+$ rg -g '!src' --sort path needle
+$ rg -g '!src/' --sort path needle
+$ rg -g '/README.md' needle
+$ rg -g 'top-only.txt' --sort path needle
+$ rg -g '/top-only.txt' --sort path needle
+$ rg -g '*.log' --sort path needle
+$ rg -g '*.txt' --sort path needle
+$ rg -g '.hidden.txt' needle
+$ rg -g '.*' --sort path needle
+$ rg -g 'target/**' needle
+$ rg -g '*.txt' -u --sort path needle
+$ rg -g 'deep/*' --sort path needle
+$ rg -g '**/deep/*' --sort path needle
+$ rg -g '*.py' needle src
+$ rg -g 'a.py' needle src
+$ rg -g 'src/a.py' needle src
+$ rg -g '*.md' needle README.md main.rs
+$ rg -g '[' needle
+$ rg -g '{a' needle
+$ rg -g 'a}' needle
+$ rg -g
+$ rg --glob '*.md' --sort path needle
+$ rg --glob='*.c' needle
+$ rg -g'*.h' needle
+$ rg -g '[lm]*.[ch]' --sort path needle
+$ rg -g '[!l]*.c' needle
+$ rg -g 'l?b.c' needle
+$ rg -g 'doc*/**/*.md' --sort path needle
+$ rg -g '**/*.md' --sort path needle
+$ rg -g '**' --sort path needle
+
+# -t, -T
+$ rg -tc --sort path needle
+$ rg -t c --sort path needle
+$ rg --type c --sort path needle
+$ rg --type=md --sort path needle
+$ rg -tcpp --sort path needle
+$ rg -tcss needle
+$ rg -tgo needle
+$ rg -thtml needle
+$ rg -tjs --sort path needle
+$ rg -tjson needle
+$ rg -tmd --sort path needle
+$ rg -tpy needle
+$ rg -trust --sort path needle
+$ rg -tsh needle
+$ rg -ttoml --sort path needle
+$ rg -tts needle
+$ rg -ttxt --sort path needle
+$ rg -tyaml needle
+$ rg -Tc --sort path needle
+$ rg -Ttxt --sort path needle
+$ rg --type-not md --sort path needle
+$ rg -tc -tmd --sort path needle
+$ rg -tmd -Tmd needle
+$ rg -Tmd -tmd --sort path needle
+$ rg -tc -Ttxt --sort path needle
+$ rg -ttxt -u --sort path needle
+$ rg -ttoml --hidden --sort path needle
+$ rg -tjs -g '!app.js' needle
+$ rg -tjs -g '*.c' needle
+$ rg -tc needle README.md
+$ rg -t nope needle
+$ rg -t
+$ rg -T nope needle
+! rg -t all needle ## rg -t all
+! rg -tjava needle ## rg -t java
+
+# case, words, lines, fixed strings, invert
+$ rg -i NEEDLE README.md
+$ rg --ignore-case NEEDLE README.md
+$ rg -S needle README.md
+$ rg -S Needle README.md
+$ rg --smart-case NEEDLE README.md
+$ rg -s NEEDLE README.md
+$ rg --case-sensitive Needle README.md
+$ rg -i -s NEEDLE README.md
+$ rg -s -i NEEDLE README.md
+$ rg -S -s NEEDLE README.md
+$ rg -i -S Needle README.md
+$ rg -S '\Wneedle' README.md
+$ rg -S 'needle\S' docs/unicode.txt
+$ rg -S '[A-Z]eedle' README.md
+$ rg -S '[a-z]eedle' README.md
+$ rg -i 'CAFÉ' docs/unicode.txt
+$ rg -i 'STRASSE' docs/unicode.txt
+$ rg -i 'ünïcödé' docs/unicode.txt
+$ rg -S 'ünïcödé' docs/unicode.txt
+$ rg -S 'Ünïcödé' docs/unicode.txt
+$ rg -w needle docs/unicode.txt
+$ rg --word-regexp needle docs/unicode.txt
+$ rg -w need README.md
+$ rg -w 'a' README.md
+$ rg -w 'needle' --sort path
+$ rg -w -c needle --sort path
+$ rg -wi needle README.md
+$ rg -w 'caf' docs/unicode.txt
+$ rg -w 'café' docs/unicode.txt
+$ rg -w '日本語' docs/unicode.txt
+$ rg -w '' lib.h
+$ rg -x 'int needle\(void\);' --sort path
+$ rg --line-regexp 'needle: yes'
+$ rg -x needle
+$ rg -x '' README.md
+$ rg -xn '' README.md
+$ rg -x -w 'plain ascii line' docs
+$ rg -F 'needle(void)' --sort path
+$ rg --fixed-strings '.needle {'
+$ rg -F '(' lib.h
+$ rg -F -i 'NEEDLE(VOID)' --sort path
+$ rg -F -w 'need' README.md
+$ rg -F -x '<p>needle</p>'
+$ rg -F '\d' README.md
+$ rg -F '*' .gitignore
+$ rg -F '' lib.h
+$ rg -v needle README.md
+$ rg --invert-match needle README.md
+$ rg -v needle --sort path src
+$ rg -vc needle --sort path
+$ rg -v -n needle notes/public.txt
+$ rg -v '' README.md
+$ rg -vi needle README.md
+$ rg -vw needle docs/unicode.txt
+$ rg -vx '' README.md
+$ rg -l -v needle --sort path
+
+# counts, lists, numbers, null
+$ rg -c needle --sort path
+$ rg --count needle --sort path
+$ rg -c needle README.md
+$ rg -c needle README.md main.rs
+$ rg -c nothinghere README.md
+$ rg -c nothinghere
+$ rg -l needle --sort path
+$ rg --files-with-matches needle --sort path
+$ rg -l needle README.md
+$ rg -l nothinghere
+$ rg -l -c needle --sort path
+$ rg -c -l needle --sort path
+$ rg -l -n needle src
+$ rg -n needle --sort path src
+$ rg --line-number needle lib.c
+$ rg -N -n needle lib.c
+$ rg -n -N needle lib.c
+$ rg --no-line-number needle lib.c
+$ rg -n -c needle lib.c
+$ rg -0 needle src/deep | cat -A
+$ rg --null needle lib.c | cat -A
+$ rg -l -0 needle src/deep | cat -A
+$ rg -c -0 needle src/deep | cat -A
+$ rg -n -0 needle src/deep | cat -A
+$ rg -0 needle lib.c lib.h | cat -A
+
+# context
+$ rg -A1 needle notes/public.txt
+$ rg -A 1 needle notes/public.txt
+$ rg --after-context 1 needle notes/public.txt
+$ rg --after-context=2 needle notes/public.txt
+$ rg -B1 needle notes/public.txt
+$ rg --before-context 2 needle notes/public.txt
+$ rg -C1 needle notes/public.txt
+$ rg --context 1 needle notes/public.txt
+$ rg -C0 needle notes/public.txt
+$ rg -A0 needle notes/public.txt
+$ rg -n -A1 needle notes/public.txt
+$ rg -n -B1 needle notes/public.txt
+$ rg -n -C1 needle notes/public.txt
+$ rg -n -C2 needle notes/public.txt
+$ rg -n -C10 needle notes/public.txt
+$ rg -C1 -A0 needle notes/public.txt
+$ rg -A3 -C1 needle notes/public.txt
+$ rg -B2 -A1 another notes/public.txt
+$ rg -C1 needle notes/public.txt docs/final.md
+$ rg -n -C1 needle notes docs/final.md
+$ rg -C1 --sort path needle docs
+$ rg -A1 --sort path needle src/deep
+$ rg -c -C1 needle notes/public.txt
+$ rg -l -C1 needle notes/public.txt
+$ rg -v -C1 line notes/public.txt
+$ rg -v -n -A1 line notes/public.txt
+$ rg -n -A1 'last needle' notes/public.txt
+$ rg -n -B1 '^needle public' notes/public.txt
+$ rg -A1 nothinghere notes/public.txt
+$ rg -A x needle
+$ rg -A '' needle
+$ rg -A
+$ rg -B
+$ rg -C x needle
+$ rg -0 -A1 another notes/public.txt | cat -A
+$ rg -0 -n -A1 another notes | cat -A
+$ cat notes/public.txt | rg -C1 another
+$ cat notes/public.txt | rg -n -C1 another
+
+# -m
+$ rg -m1 needle notes/public.txt
+$ rg -m 2 needle notes/public.txt
+$ rg --max-count 1 needle --sort path
+$ rg --max-count=1 -c needle --sort path
+$ rg -m0 needle notes/public.txt
+$ rg -m1 -A2 needle notes/public.txt
+$ rg -m2 -n -A1 needle notes/public.txt
+$ rg -m1 -n -B1 another notes/public.txt
+$ rg -m1 -v needle notes/public.txt
+$ rg -m2 -c -v needle notes/public.txt
+$ rg -m1 -l needle --sort path
+$ rg -m x needle
+$ rg -m -1 needle
+$ rg -m
+$ rg -m 99999999999999999999 needle README.md
+
+# standard input
+$ echo needle | rg needle
+$ echo needle | rg -c needle
+$ echo needle | rg -l needle
+$ echo needle | rg -n needle
+$ echo needle | rg -0 needle | cat -A
+$ echo hay | rg needle
+$ echo needle | rg needle - README.md
+$ echo needle | rg needle README.md
+$ echo needle | rg -l needle - README.md
+$ rg needle < README.md
+$ rg -c needle < README.md
+$ rg -n needle - < README.md
+$ printf '' | rg needle
+$ printf 'a\nneedle' | rg needle
+$ printf 'a\nneedle' | rg -v needle
+$ cat README.md | rg -i needle | rg -v NEEDLE
+$ rg needle --sort path src | rg -c py
+$ rg --files --sort path | rg '\.md$'
+$ rg -l needle --sort path | head -n 3
+$ echo needle | rg --files --sort path src/deep
+
+# the pattern language
+$ rg '(' README.md
+$ rg 'needle(' README.md
+$ rg 'a{2' README.md
+$ rg '[a' README.md
+$ rg '\' README.md
+$ rg '*' README.md
+$ rg 'a**' README.md
+$ rg '\p{Foo}' README.md
+$ rg '(?z)a' README.md
+$ rg 'a\nb' README.md
+$ rg '\n' README.md
+$ rg '[\n]' README.md
+$ rg -F 'a⏎b' README.md
+$ rg 'ne+dle' README.md
+$ rg 'ne{2}dle' README.md
+$ rg 'ne{2,}dle' README.md
+$ rg 'ne{1,3}dle' README.md
+$ rg 'n.*e' lib.h
+$ rg 'n.*?e' lib.h
+$ rg 'needle|haystack' README.md
+$ rg '(needle|TODO): ' README.md
+$ rg '(?:needle|TODO): ' README.md
+$ rg '(?P<x>TODO)' README.md
+$ rg '(?i)NEEDLE' README.md
+$ rg '(?i:NEED)le' README.md
+$ rg 'N(?i)EEDLE' README.md
+$ rg '(?-u)\w+' lib.h
+$ rg '(?x) need le  # comment' README.md
+$ rg '(?s)a.b' README.md
+$ rg '(?m)^A' README.md
+$ rg '^A' README.md
+$ rg 'it\.$' README.md
+$ rg '^$' README.md
+$ rg -c '^' README.md
+$ rg -c '$' README.md
+$ rg '\Afn' main.rs
+$ rg '\}\z' main.rs
+$ rg '\bneedle\b' docs/unicode.txt
+$ rg '\Bneedle' docs/unicode.txt
+$ rg 'needle\B' docs/unicode.txt
+$ rg '\b{start}needle' docs/unicode.txt
+$ rg 'needle\b{end}' docs/unicode.txt
+$ rg '\b{start-half}needle\b{end-half}' docs/unicode.txt
+$ rg '\<needle\>' docs/unicode.txt
+$ rg '(?-u:\b)needle(?-u:\b)' docs/unicode.txt
+$ rg '(?-u:\B)needle' docs/unicode.txt
+$ rg '\d+' lib.c
+$ rg '\D+' -c lib.c
+$ rg '\s\w+\s' lib.h
+$ rg '\S+' -c lib.h
+$ rg '\w+é' docs/unicode.txt
+$ rg 'é\w+' docs/unicode.txt
+$ rg '\W' -c docs/unicode.txt
+$ rg '[[:alpha:]]+\(' lib.c
+$ rg '[[:^alpha:]]{3}' lib.c
+$ rg '[[:upper:]]{2,}' README.md
+$ rg '[[:digit:][:punct:]]{3}' lib.c
+$ rg '[a-c&&[^b]]{2}' README.md
+$ rg '[a-z--[n]]eedle' README.md
+$ rg '[\w&&[^n]]eedle' README.md
+$ rg '[^a-z ]{2,}' README.md
+$ rg '\p{L}+' -c docs/unicode.txt
+$ rg '\p{Lu}\p{Ll}+' docs/unicode.txt
+$ rg '\p{Greek}' docs/unicode.txt
+$ rg '\p{Han}+' docs/unicode.txt
+$ rg '\p{Katakana}+' docs/unicode.txt
+$ rg '\P{ASCII}' -c docs/unicode.txt
+$ rg '\pL\pN' README.md
+$ rg '[\p{Han}\p{Katakana}]+ needle' docs/unicode.txt
+$ rg '\x6eeedle' README.md
+$ rg '\x{6e}eedle' README.md
+$ rg '\u00e9' docs/unicode.txt
+$ rg '\u{e9}cole' docs/unicode.txt
+$ rg '\U000000e9' docs/unicode.txt
+$ rg 'caf.' docs/unicode.txt
+$ rg 'caf.$' docs/unicode.txt
+$ rg 'na.ve' docs/unicode.txt
+$ rg 'na..ve' docs/unicode.txt
+$ rg '(?-u)na..ve' docs/unicode.txt
+$ rg '(?-u:.)' -c docs/unicode.txt
+$ rg '.{20}' docs/unicode.txt
+$ rg '^.{5}$' docs/unicode.txt
+$ rg 'stra(ß|ss)e' docs/unicode.txt
+$ rg '[ß-ü]+' docs/unicode.txt
+$ rg '[^\x00-\x7f]+' -c docs/unicode.txt
+$ rg '\t' README.md
+$ rg '\.' -c README.md
+$ rg '\$' README.md
+$ rg 'a?' -c README.md
+$ rg '(a|)' -c README.md
+$ rg '()' -c README.md
+$ rg 'x*' -c README.md
+$ rg '(needle){2}' README.md
+$ rg '(ne+)+dle' README.md
+$ rg '\(void\)' --sort path
+$ rg '"[^"]*"' --sort path
+$ rg 'needle.*needle' --sort path
+$ rg '(\w+) \1' README.md
+$ rg 'a(?=b)' README.md
+$ rg '(?<!a)b' README.md
+
+# refused
+! rg -U needle ## rg -U
+! rg -P needle ## rg -P
+! rg -e needle ## rg -e
+! rg -o needle ## rg -o
+! rg -q needle ## rg -q
+! rg -H needle ## rg -H
+! rg -I needle ## rg -I
+! rg -z needle ## rg -z
+! rg -r x needle ## rg -r
+! rg -f pats ## rg -f
+! rg -L needle ## rg -L
+! rg -a needle ## rg -a
+! rg -E utf8 needle ## rg -E
+! rg -M 10 needle ## rg -M
+! rg -p needle ## rg -p
+! rg -b needle ## rg -b
+! rg -d 1 needle ## rg -d
+! rg --multiline needle ## rg --multiline
+! rg --pcre2 needle ## rg --pcre2
+! rg --heading needle ## rg --heading
+! rg --json needle ## rg --json
+! rg --column needle ## rg --column
+! rg --only-matching needle ## rg --only-matching
+! rg --replace x needle ## rg --replace
+! rg --count-matches needle ## rg --count-matches
+! rg --files-without-match needle ## rg --files-without-match
+! rg --no-filename needle ## rg --no-filename
+! rg --with-filename needle ## rg --with-filename
+! rg --sortr path needle ## rg --sortr
+! rg --sort modified needle ## rg --sort modified
+! rg --max-depth 1 needle ## rg --max-depth
+! rg --type-list ## rg --type-list
+! rg --type-add 'x:*.x' needle ## rg --type-add
+! rg --iglob '*.MD' needle ## rg --iglob
+! rg --no-ignore-vcs needle ## rg --no-ignore-vcs
+! rg --ignore-file x needle ## rg --ignore-file
+! rg --follow needle ## rg --follow
+! rg --text needle ## rg --text
+! rg --binary needle ## rg --binary
+! rg --passthru needle ## rg --passthru
+! rg --trim needle ## rg --trim
+! rg --vimgrep needle ## rg --vimgrep
+! rg --stats needle ## rg --stats
+! rg --color always needle ## rg --color
+! rg --crlf needle ## rg --crlf
+! rg --null-data needle ## rg --null-data
+! rg --help ## rg --help
+! rg --version ## rg --version
+! rg --debug needle ## rg --debug

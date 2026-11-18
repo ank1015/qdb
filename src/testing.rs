@@ -88,9 +88,25 @@ pub fn check_safe(command: &str, root: &Path) -> Result<(), String> {
         let explicit = is_sed && c.words.iter().any(|w| w.text().starts_with(b"-e") || (w.text().starts_with(b"-") && !w.text().starts_with(b"--") && w.text().ends_with(b"e")));
         let mut script_next = false;
         let mut seen_script = explicit;
+        // An rg glob is not a path either.
+        let is_rg = c.words.first().is_some_and(|w| w.text() == b"rg");
+        let mut glob_next = false;
         for w in words.chain(targets).flat_map(shell::brace_expand).map(|w| w.text()) {
             if w == b"/dev/null" {
                 continue;
+            }
+            if is_rg {
+                if glob_next {
+                    glob_next = false;
+                    continue;
+                }
+                if w == b"-g" || w == b"--glob" {
+                    glob_next = true;
+                    continue;
+                }
+                if (w.starts_with(b"-g") && !w.starts_with(b"--")) || w.starts_with(b"--glob=") {
+                    continue;
+                }
             }
             if is_sed {
                 let is_script = if script_next {

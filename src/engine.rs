@@ -151,6 +151,7 @@ pub struct Io<'a> {
     /// merged output and errors appear in the order they were written.
     exact: bool,
     stdin_size: Option<u64>,
+    piped: bool,
 }
 
 impl<'a> Io<'a> {
@@ -167,6 +168,12 @@ impl<'a> Io<'a> {
     /// The size of the file standard input was redirected from, if it was.
     pub fn stdin_size(&self) -> Option<u64> {
         self.stdin_size
+    }
+
+    /// Whether standard input is a pipe or a file. rg searches it then,
+    /// and the tree when it is neither.
+    pub fn has_stdin(&self) -> bool {
+        self.piped
     }
 
     /// Read standard input. It is a stream: the first reader gets all of
@@ -697,6 +704,8 @@ struct Stage {
     to_err: Vec<u8>,
     /// The size of the file standard input comes from, once it is open.
     stdin_size: Option<u64>,
+    /// Standard input is a pipe or a file.
+    piped: bool,
 }
 
 enum State {
@@ -730,13 +739,13 @@ impl Stage {
             Input::Unused => State::Closed(None),
         };
         let spools = redirs.iter().map(|_| Spool::new(scratch.clone())).collect();
-        Stage { run: Some(prepared.run), state, stream, redirs, plan, spools, buf: Vec::new(), err: Vec::new(), to_err: Vec::new(), stdin_size: None }
+        Stage { run: Some(prepared.run), state, stream, redirs, plan, spools, buf: Vec::new(), err: Vec::new(), to_err: Vec::new(), stdin_size: None, piped: false }
     }
 
     /// Give `f` the streams of this command. Returns what `f` returned and
     /// whether the reader of the output wants no more.
     fn with_io<R>(&mut self, stdin: &[u8], down: &mut dyn Sink, out_file: Option<NodeId>, f: impl FnOnce(&mut Io) -> R) -> (R, bool) {
-        let Stage { plan, spools, buf, err, to_err, stdin_size, .. } = self;
+        let Stage { plan, spools, buf, err, to_err, stdin_size, piped, .. } = self;
         let mut nowhere = Nowhere;
         let out: &mut dyn Sink = match plan.d1 {
             Dest::Down => down,
@@ -744,7 +753,7 @@ impl Stage {
             Dest::File(i) => &mut spools[i],
             Dest::Null => &mut nowhere,
         };
-        let mut io = Io { stdin, out, buf, stopped: false, err, out_file, merged: plan.d1 == plan.d2, exact: true, stdin_size: *stdin_size };
+        let mut io = Io { stdin, out, buf, stopped: false, err, out_file, merged: plan.d1 == plan.d2, exact: true, stdin_size: *stdin_size, piped: *piped };
         let r = f(&mut io);
         io.flush();
         (r, io.stopped)
@@ -795,6 +804,7 @@ impl Stage {
             if let Some(Stdin::File(id)) = &stdin {
                 self.stdin_size = Some(db.size(*id));
             }
+            self.piped = stdin.is_some() || matches!(state, State::Gathering(_));
             code = match (state, stdin) {
                 (State::Streaming(f), _) | (State::Closed(Some(f)), _) => self.with_io(&[], down, None, |io| f.finish_db(db, io)).0,
                 (State::Gathering(all), None) => self.with_io(&all, down, out_file, |io| run.unwrap()(db, io)).0,

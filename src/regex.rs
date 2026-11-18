@@ -19,6 +19,7 @@ use std::cell::RefCell;
 
 mod dfa;
 mod trigram;
+pub mod hir;
 pub use dfa::Dfa;
 
 pub const DUP_MAX: u32 = 32767;
@@ -53,6 +54,13 @@ pub enum Assert {
     AfterNonWord,
     /// The byte after is not a word byte, or there is none.
     BeforeNonWord,
+    /// The same six for characters and Unicode's idea of a word (rg).
+    UWordBoundary,
+    UNotWordBoundary,
+    UWordStart,
+    UWordEnd,
+    UAfterNonWord,
+    UBeforeNonWord,
 }
 
 #[derive(Debug, Clone)]
@@ -129,7 +137,38 @@ fn is_word(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
 
+/// Whether the character that ends at `pos` (`before`) or starts there
+/// is a word character to Unicode. False where there is none.
+fn word_char(hay: &[u8], pos: usize, before: bool) -> bool {
+    let c = if before {
+        let mut start = pos;
+        while start > 0 && pos - start < 4 && (start == pos || hay[start] & 0xc0 == 0x80) {
+            start -= 1;
+        }
+        std::str::from_utf8(&hay[start..pos]).ok().and_then(|s| s.chars().next_back())
+    } else {
+        let end = (pos + 4).min(hay.len());
+        match std::str::from_utf8(&hay[pos..end]) {
+            Ok(s) => s.chars().next(),
+            Err(e) => std::str::from_utf8(&hay[pos..pos + e.valid_up_to()]).ok().and_then(|s| s.chars().next()),
+        }
+    };
+    c.is_some_and(|c| regex_syntax::try_is_word_character(c).unwrap_or(false))
+}
+
 fn check_assert(a: Assert, hay: &[u8], pos: usize) -> bool {
+    if matches!(a, Assert::UWordBoundary | Assert::UNotWordBoundary | Assert::UWordStart | Assert::UWordEnd | Assert::UAfterNonWord | Assert::UBeforeNonWord) {
+        let prev = word_char(hay, pos, true);
+        let next = word_char(hay, pos, false);
+        return match a {
+            Assert::UWordBoundary => prev != next,
+            Assert::UNotWordBoundary => prev == next,
+            Assert::UWordStart => !prev && next,
+            Assert::UWordEnd => prev && !next,
+            Assert::UAfterNonWord => !prev,
+            _ => !next,
+        };
+    }
     let prev = pos > 0 && is_word(hay[pos - 1]);
     let next = pos < hay.len() && is_word(hay[pos]);
     match a {
@@ -141,6 +180,7 @@ fn check_assert(a: Assert, hay: &[u8], pos: usize) -> bool {
         Assert::WordEnd => prev && !next,
         Assert::AfterNonWord => !prev,
         Assert::BeforeNonWord => !next,
+        _ => unreachable!(),
     }
 }
 

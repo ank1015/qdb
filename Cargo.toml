@@ -32,6 +32,9 @@ memchr = "2"
 libc = "0.2"
 crc32fast = "1"
 # The one compression codec: LZ4 blocks, one piece at a time, with --compress.
+# rg's pattern syntax and Unicode tables. Only the parser and its
+# translation to byte classes are used; the matching is the engine's own.
+regex-syntax = "0.8"
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 
 [profile.release]

@@ -12,6 +12,7 @@ mod find;
 mod grep;
 mod ls;
 mod read;
+mod rg;
 mod sed;
 mod small;
 
@@ -29,6 +30,7 @@ pub fn prepare(name: &[u8], args: &[Vec<u8>]) -> Result<Prepared, String> {
         b"find" => find::find(args),
         b"grep" => return grep::grep(args),
         b"sed" => return sed::sed(args),
+        b"rg" => return rg::rg(args),
         b"mkdir" => files::mkdir(args),
         b"touch" => files::touch(args),
         b"cp" => files::cp(args),
@@ -59,7 +61,7 @@ pub fn known(name: &[u8]) -> bool {
 /// command before it runs.
 pub const NAMES: &[&str] = &[
     "echo", "cat", "head", "tail", "wc", "ls", "find", "grep", "sed", "mkdir", "touch", "cp", "mv", "rm", "rmdir", "printf", "test", "[", "true", ":", "false",
-    "sleep", "ln", "basename", "dirname", "seq",
+    "sleep", "ln", "basename", "dirname", "seq", "rg",
 ];
 
 /// Gathers input into whole lines for a command that reads its standard
