@@ -8,7 +8,7 @@
 use crate::cmd;
 use crate::glob;
 use crate::shell::{self, ParseError, RedirOp, Word};
-use crate::tree::{is_valid_text, Db, Errno, NodeId, Scratch};
+use crate::tree::{is_valid_text, Db, Errno, NodeId, Scratch, TextCheck};
 use crate::vfs::VFile;
 use crate::util::lossy;
 
@@ -48,9 +48,7 @@ pub struct Spool {
     mem: Vec<u8>,
     file: Option<(String, Box<dyn VFile>)>,
     len: u64,
-    valid: bool,
-    /// The start of a character whose other bytes have not arrived.
-    carry: Vec<u8>,
+    check: TextCheck,
     error: Option<std::io::Error>,
 }
 
@@ -61,44 +59,11 @@ static SPOOLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::
 
 impl Spool {
     pub fn new(scratch: Scratch) -> Spool {
-        Spool { scratch, mem: Vec::new(), file: None, len: 0, valid: true, carry: Vec::new(), error: None }
+        Spool { scratch, mem: Vec::new(), file: None, len: 0, check: TextCheck::default(), error: None }
     }
 
     fn nowhere() -> Spool {
         Spool::new(Scratch { vfs: None, limit: 0 })
-    }
-
-    /// Check the next bytes: no NUL, and UTF-8 across the joins.
-    fn check(&mut self, mut data: &[u8]) {
-        if memchr::memchr(0, data).is_some() {
-            self.valid = false;
-            return;
-        }
-        if !self.carry.is_empty() {
-            let whole = match self.carry[0] {
-                0xC2..=0xDF => 2,
-                0xE0..=0xEF => 3,
-                _ => 4,
-            };
-            let take = (whole - self.carry.len()).min(data.len());
-            self.carry.extend_from_slice(&data[..take]);
-            data = &data[take..];
-            match std::str::from_utf8(&self.carry) {
-                Ok(_) => self.carry.clear(),
-                Err(e) if e.error_len().is_none() => return,
-                Err(_) => {
-                    self.valid = false;
-                    return;
-                }
-            }
-        }
-        if let Err(e) = std::str::from_utf8(data) {
-            if e.error_len().is_none() {
-                self.carry.extend_from_slice(&data[e.valid_up_to()..]);
-            } else {
-                self.valid = false;
-            }
-        }
     }
 
     fn to_file(&mut self) {
@@ -125,7 +90,7 @@ impl Spool {
         if self.file.is_some() && !self.mem.is_empty() && self.error.is_none() {
             self.to_file();
         }
-        self.valid && self.carry.is_empty()
+        self.check.finish()
     }
 
     /// Up to `max` bytes of the output from offset `at`. After `end`.
@@ -141,10 +106,7 @@ impl Spool {
 
 impl Sink for Spool {
     fn write(&mut self, data: &[u8]) -> bool {
-        if self.valid {
-            self.check(data);
-        }
-        if !self.valid || self.error.is_some() {
+        if !self.check.feed(data) || self.error.is_some() {
             // Nothing will be stored; the command runs on as it would.
             self.mem = Vec::new();
             return true;

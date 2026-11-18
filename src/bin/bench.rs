@@ -6,7 +6,7 @@
 
 use qdb::shell;
 use qdb::store;
-use qdb::testing::{check_safe, order_is_unspecified, sorted_lines};
+use qdb::testing::{check_safe, lines_digest, order_is_unspecified, sorted_lines, timed_real_to, Mapped};
 use qdb::{Config, Db, SyncMode};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -329,8 +329,45 @@ struct EngineRun {
     peak: usize,
     code: i32,
     out_bytes: usize,
-    stdout: Vec<u8>,
+    stdout: Bytes,
     stderr: Vec<u8>,
+}
+
+/// Output held in memory, or under `--cap` left in a file and read
+/// through a mapping, so that holding it is not memory of the engine.
+enum Bytes {
+    Mem(Vec<u8>),
+    Map(Mapped),
+}
+
+impl std::ops::Deref for Bytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Bytes::Mem(v) => v,
+            Bytes::Map(m) => m,
+        }
+    }
+}
+
+static CAPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn read_output(path: &Path) -> Bytes {
+    let out = if CAPPED.load(Relaxed) { Bytes::Map(Mapped::open(path).expect("reading output back")) } else { Bytes::Mem(std::fs::read(path).expect("reading output back")) };
+    let _ = std::fs::remove_file(path);
+    out
+}
+
+/// Run a command on the real tools. Under `--cap` its output goes to a
+/// file.
+fn real_run(root: &Path, command: &str) -> (Duration, i32, Bytes, Vec<u8>) {
+    if !CAPPED.load(Relaxed) {
+        let (t, real) = run_real(root, command);
+        return (t, real.code, Bytes::Mem(real.stdout), real.stderr);
+    }
+    let path = std::env::temp_dir().join(format!("qdb-bench-real-{}", std::process::id()));
+    let (t, real) = timed_real_to(root, command, Some(&path));
+    (t, real.code, read_output(&path), real.stderr)
 }
 
 /// Load the dataset into the engine, building the search index unless
@@ -485,7 +522,7 @@ fn engine_run(db: &mut Db, command: &str, keep_output: bool) -> EngineRun {
         let code = qdb::execute_to(db, command.as_bytes(), &mut out, &mut stderr);
         let time = t.elapsed();
         let peak = PEAK.load(Relaxed) - base;
-        return EngineRun { time, peak, code, out_bytes: out.bytes, stdout: Vec::new(), stderr };
+        return EngineRun { time, peak, code, out_bytes: out.bytes, stdout: Bytes::Mem(Vec::new()), stderr };
     }
     let path = std::env::temp_dir().join(format!("qdb-bench-out-{}", std::process::id()));
     let mut out = ToFile { file: std::io::BufWriter::new(std::fs::File::create(&path).expect("creating a file for engine output")), bytes: 0 };
@@ -497,8 +534,7 @@ fn engine_run(db: &mut Db, command: &str, keep_output: bool) -> EngineRun {
     let peak = PEAK.load(Relaxed) - base;
     let bytes = out.bytes;
     drop(out);
-    let stdout = std::fs::read(&path).expect("reading engine output back");
-    let _ = std::fs::remove_file(&path);
+    let stdout = read_output(&path);
     EngineRun { time, peak, code, out_bytes: bytes, stdout, stderr }
 }
 
@@ -802,6 +838,16 @@ fn pick_terms(db: &Db, root: &Path) -> Terms {
     terms
 }
 
+/// The same lines, in any order.
+fn same_lines(a: &[u8], b: &[u8]) -> bool {
+    if CAPPED.load(Relaxed) {
+        // Sorting would take memory in step with the output.
+        lines_digest(a) == lines_digest(b)
+    } else {
+        sorted_lines(a) == sorted_lines(b)
+    }
+}
+
 // ------------------------------------------------------------ measuring
 
 fn median(mut v: Vec<Duration>) -> Duration {
@@ -856,6 +902,7 @@ struct Options {
     db: Option<PathBuf>,
     sync: SyncMode,
     piece: usize,
+    cap_mb: Option<usize>,
 }
 
 /// How many more timed runs a command gets after its first one.
@@ -984,6 +1031,15 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
     // Start the helper that runs the real tools while this process is
     // still small.
     run_real(&root, "true");
+    if let Some(mb) = opts.cap_mb {
+        CAPPED.store(true, Relaxed);
+        // From here on the engine's own memory (everything that is not a
+        // file) is limited: asking for more ends the run.
+        let lim = libc::rlimit { rlim_cur: (mb as u64) << 20, rlim_max: (mb as u64) << 20 };
+        if unsafe { libc::setrlimit(libc::RLIMIT_DATA, &lim) } != 0 {
+            return Err(format!("setting the memory limit: {}", std::io::Error::last_os_error()));
+        }
+    }
     let (mut db, report, load, load_with_index, load_facts) = engine_load(&root, opts)?;
     let heap_after_load = LIVE.load(Relaxed) - live_before;
     // Taken now, before any command has changed the data.
@@ -1071,20 +1127,20 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         let unordered = order_is_unspecified(&command);
 
         // The real tools.
-        let (first, real) = run_real(&root, &command);
+        let (first, real_code, real_stdout, real_stderr) = real_run(&root, &command);
         let mut real_times = vec![first];
         if !mutating {
             for _ in 0..more_reps(first, opts.reps) {
-                real_times.push(run_real(&root, &command).0);
+                real_times.push(real_run(&root, &command).0);
             }
         }
         let rg_ms = match rg_equivalent(&command).filter(|_| !mutating && have_rg()) {
             None => -1.0,
             Some(rg) => {
-                let first = run_real(&root, &rg).0;
+                let first = real_run(&root, &rg).0;
                 let mut times = vec![first];
                 for _ in 0..more_reps(first, opts.reps) {
-                    times.push(run_real(&root, &rg).0);
+                    times.push(real_run(&root, &rg).0);
                 }
                 millis(median(times))
             }
@@ -1114,19 +1170,18 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
             }
         }
 
-        let real_code = real.code;
         let agree = if real_code != first.code {
             format!("NO: exit status, real {}, engine {}", real_code, first.code)
         } else if order_dependent(&command) {
             let lines = |b: &[u8]| b.iter().filter(|c| **c == b'\n').count();
-            if lines(&real.stdout) == lines(&first.stdout) {
+            if lines(&real_stdout) == lines(&first.stdout) {
                 "order differs".to_string()
             } else {
                 "NO: number of lines differs".to_string()
             }
-        } else if (unordered && sorted_lines(&real.stdout) != sorted_lines(&first.stdout)) || (!unordered && real.stdout != first.stdout) {
+        } else if (unordered && !same_lines(&real_stdout, &first.stdout)) || (!unordered && real_stdout[..] != first.stdout[..]) {
             "NO: standard output differs".to_string()
-        } else if real.stderr != first.stderr {
+        } else if real_stderr != first.stderr {
             "NO: standard error differs".to_string()
         } else {
             "yes".to_string()
@@ -1149,7 +1204,14 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
 
     // After the whole list, both sides must hold the same tree.
     if pass == 0 {
-        trees_agree = opts.filter.is_some() || store::snapshot_dir(&root).map_err(|e| e.to_string())? == db.snapshot();
+        trees_agree = opts.filter.is_some()
+            || match store::same_as_dir(&db, &root).map_err(|e| e.to_string())? {
+                Ok(()) => true,
+                Err(what) => {
+                    eprintln!("{}: {}", name, what);
+                    false
+                }
+            };
         all_agree &= trees_agree;
         if opts.db.is_some() {
             if let Err(e) = db.check() {
@@ -1437,6 +1499,7 @@ fn run() -> Result<bool, String> {
         db: None,
         sync: SyncMode::Always,
         piece: Config::default().piece,
+        cap_mb: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -1464,6 +1527,7 @@ fn run() -> Result<bool, String> {
                 }
             }
             "--piece" => opts.piece = value("--piece")?.parse().map_err(|_| "--piece needs a number")?,
+            "--cap" => opts.cap_mb = Some(value("--cap")?.parse().map_err(|_| "--cap needs a number of MB")?),
             "-h" | "--help" => {
                 println!("{}", USAGE);
                 return Ok(true);
@@ -1525,7 +1589,7 @@ fn run() -> Result<bool, String> {
 }
 
 fn main() -> std::process::ExitCode {
-    let worker = std::thread::Builder::new().stack_size(512 << 20).spawn(run).expect("spawn");
+    let worker = std::thread::Builder::new().stack_size(64 << 20).spawn(run).expect("spawn");
     match worker.join().expect("benchmark panicked") {
         Ok(true) => std::process::ExitCode::SUCCESS,
         Ok(false) => std::process::ExitCode::from(1),

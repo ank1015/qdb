@@ -31,6 +31,8 @@ With no case files, runs every tests/cases/*.case.
                     (default 65536); a small value makes small test files
                     span many pieces
   --segment BYTES   start a new data file after this many bytes
+  --compress        store content compressed
+  --index-later     index content in bulk some time after it is written
   --diff N          instead of the cases: run N generated steps, searches
                     mixed with writes, on two engines, one with the index
                     and one without, and require the same results; then
@@ -245,7 +247,14 @@ impl Setup {
             Mode::Disk => format!("on disk, sync {}", if self.cfg.sync == SyncMode::Always { "always" } else { "batch" }),
             Mode::Reopen => format!("on disk, closed and reopened after every step, sync {}", if self.cfg.sync == SyncMode::Always { "always" } else { "batch" }),
         };
-        format!("{}, pieces of {} bytes, index {}", store, self.cfg.piece, if self.cfg.index { "on" } else { "off" })
+        format!(
+            "{}, pieces of {} bytes, index {}{}{}",
+            store,
+            self.cfg.piece,
+            if self.cfg.index { "on" } else { "off" },
+            if self.cfg.index_later { " (built later)" } else { "" },
+            if self.cfg.compress { ", compressed" } else { "" }
+        )
     }
 }
 
@@ -968,10 +977,10 @@ fn crash_point(image: MemFs, cfg: &Config, history: &History, rng: &mut Rng, cou
 /// and thresholds make merges, new data files and tree saves frequent.
 /// Every few hundred command lines the run itself goes on from a crash
 /// image, or from a disk that failed.
-fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool) -> Result<bool, String> {
+fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bool, index_later: bool) -> Result<bool, String> {
     use std::cell::RefCell;
     use std::rc::Rc;
-    let cfg = Config { piece: 512, segment: 96 << 10, sync, batch_lines: 8, batch_bytes: 24 << 10, index, checkpoint: 12 << 10, spool: 300 };
+    let cfg = Config { piece: 512, segment: 96 << 10, sync, batch_lines: 8, batch_bytes: 24 << 10, index, checkpoint: 12 << 10, spool: 300, upkeep: true, compress, index_later };
     let mut gen = Gen::new(seed);
     let mut rng = Rng(seed.wrapping_mul(0xD1B54A32D192ED03) | 1);
     let counts: Rc<RefCell<CrashCounts>> = Default::default();
@@ -1353,6 +1362,8 @@ fn run() -> Result<bool, String> {
                 }
             }
             "--segment" => setup.cfg.segment = value("--segment")?.parse().map_err(|_| "--segment needs a number")?,
+            "--compress" => setup.cfg.compress = true,
+            "--index-later" => setup.cfg.index_later = true,
             "--diff" => diff = value("--diff")?.parse().map_err(|_| "--diff needs a number")?,
             "--crash" => crash = value("--crash")?.parse().map_err(|_| "--crash needs a number")?,
             "--kill" => kill = value("--kill")?.parse().map_err(|_| "--kill needs a number")?,
@@ -1367,7 +1378,7 @@ fn run() -> Result<bool, String> {
     }
     setup.cfg.index = index;
     if crash > 0 {
-        return crash_run(crash, seed, setup.cfg.sync, index);
+        return crash_run(crash, seed, setup.cfg.sync, index, setup.cfg.compress, setup.cfg.index_later);
     }
     if kill > 0 {
         let mut scratch = Scratch::new();
@@ -1444,7 +1455,7 @@ fn run() -> Result<bool, String> {
 }
 
 fn main() -> std::process::ExitCode {
-    let worker = std::thread::Builder::new().stack_size(512 << 20).spawn(run).expect("spawn");
+    let worker = std::thread::Builder::new().stack_size(64 << 20).spawn(run).expect("spawn");
     match worker.join().expect("harness panicked") {
         Ok(true) => std::process::ExitCode::SUCCESS,
         Ok(false) => std::process::ExitCode::from(1),

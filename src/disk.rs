@@ -46,6 +46,8 @@ pub const TABLE_ENTRY: u64 = 20;
 
 /// How a piece's bytes are stored.
 pub const ENC_PLAIN: u8 = 0;
+/// An LZ4 block that unpacks to the piece's `len` bytes of text.
+pub const ENC_LZ4: u8 = 1;
 
 pub const DEAD: NodeId = NodeId::MAX;
 

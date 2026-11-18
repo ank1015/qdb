@@ -141,6 +141,12 @@ pub struct RealOutput {
 /// real tools; it also leaves this process's memory marked to be copied
 /// on the next write, which would be charged to the engine.
 pub fn timed_real(root: &Path, command: &str) -> (Duration, RealOutput) {
+    timed_real_to(root, command, None)
+}
+
+/// As `timed_real`, with standard output sent to a file instead of being
+/// handed back, for output too large to hold.
+pub fn timed_real_to(root: &Path, command: &str, stdout_to: Option<&Path>) -> (Duration, RealOutput) {
     use std::io::{Read, Write};
     static HELPER: std::sync::Mutex<Option<(std::process::ChildStdin, std::process::ChildStdout)>> = std::sync::Mutex::new(None);
     let mut helper = HELPER.lock().unwrap();
@@ -152,7 +158,8 @@ pub fn timed_real(root: &Path, command: &str) -> (Duration, RealOutput) {
     let (to, from) = helper.as_mut().unwrap();
     let root = root.to_string_lossy();
     let mut request = Vec::new();
-    for part in [root.as_bytes(), command.as_bytes()] {
+    let to_file = stdout_to.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    for part in [root.as_bytes(), command.as_bytes(), to_file.as_bytes()] {
         request.extend_from_slice(&(part.len() as u64).to_le_bytes());
         request.extend_from_slice(part);
     }
@@ -188,10 +195,11 @@ pub fn helper() {
             input.read_exact(&mut data).ok()?;
             Some(data)
         };
-        let (root, command) = match (field(), field()) {
-            (Some(r), Some(c)) => (String::from_utf8_lossy(&r).into_owned(), String::from_utf8_lossy(&c).into_owned()),
+        let (root, command, to_file) = match (field(), field(), field()) {
+            (Some(r), Some(c), Some(f)) => (String::from_utf8_lossy(&r).into_owned(), String::from_utf8_lossy(&c).into_owned(), String::from_utf8_lossy(&f).into_owned()),
             _ => return,
         };
+        let stdout = if to_file.is_empty() { Stdio::piped() } else { Stdio::from(std::fs::File::create(&to_file).expect("creating the file for output")) };
         let t = Instant::now();
         let out = Command::new("bash")
             .args(["--noprofile", "--norc", "-c", &command])
@@ -200,7 +208,10 @@ pub fn helper() {
             .env("PATH", "/usr/bin:/bin")
             .env("LC_ALL", "C")
             .stdin(Stdio::null())
-            .output()
+            .stdout(stdout)
+            .stderr(Stdio::piped())
+            .spawn()
+            .and_then(|c| c.wait_with_output())
             .expect("cannot run bash");
         let nanos = t.elapsed().as_nanos() as u64;
         let mut reply = Vec::new();
@@ -216,3 +227,63 @@ pub fn helper() {
     }
 }
 
+
+/// A file's bytes, read through a mapping: they are the operating
+/// system's file cache, not memory of this process.
+pub struct Mapped {
+    ptr: *mut libc::c_void,
+    len: usize,
+}
+
+impl Mapped {
+    pub fn open(path: &Path) -> std::io::Result<Mapped> {
+        use std::os::unix::io::AsRawFd;
+        let file = std::fs::File::open(path)?;
+        let len = file.metadata()?.len() as usize;
+        if len == 0 {
+            return Ok(Mapped { ptr: std::ptr::null_mut(), len: 0 });
+        }
+        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, file.as_raw_fd(), 0) };
+        if ptr == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Mapped { ptr, len })
+    }
+}
+
+impl std::ops::Deref for Mapped {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        if self.len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
+        }
+    }
+}
+
+impl Drop for Mapped {
+    fn drop(&mut self) {
+        if self.len > 0 {
+            unsafe { libc::munmap(self.ptr, self.len) };
+        }
+    }
+}
+
+/// The lines of an output as a set with counts, in a form that does not
+/// depend on their order and takes no memory: how many, and the sum of a
+/// hash of each.
+pub fn lines_digest(bytes: &[u8]) -> (u64, u128) {
+    use std::hash::Hasher;
+    let (mut n, mut sum) = (0u64, 0u128);
+    for line in bytes.split_inclusive(|c| *c == b'\n') {
+        let mut a = std::collections::hash_map::DefaultHasher::new();
+        a.write(line);
+        let mut b = std::collections::hash_map::DefaultHasher::new();
+        b.write(b"qdb");
+        b.write(line);
+        n += 1;
+        sum = sum.wrapping_add((a.finish() as u128) << 64 | b.finish() as u128);
+    }
+    (n, sum)
+}

@@ -31,6 +31,8 @@ memchr = "2"
 # layer does not write itself.
 libc = "0.2"
 crc32fast = "1"
+# The one compression codec: LZ4 blocks, one piece at a time, with --compress.
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 
 [profile.release]
 opt-level = 3

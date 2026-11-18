@@ -4,7 +4,7 @@
 //! This is import and export, not the engine's own storage: that is in
 //! `tree.rs` and `disk.rs`.
 
-use crate::tree::{is_valid_text, Db, NodeId};
+use crate::tree::{TextCheck, is_valid_text, Db, NodeId};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -98,15 +98,24 @@ fn load_into(db: &mut Db, parent: NodeId, path: &Path, report: &mut LoadReport, 
             report.folders += 1;
             load_into(db, id, &child, report, pending)?;
         } else if kind.is_file() {
-            let content = fs::read(&child)?;
-            if !is_valid_text(&content) {
-                report.skipped_not_text += 1;
-                continue;
+            let size = entry.metadata()?.len() as usize;
+            if size > LOAD_WHOLE {
+                // A large file is read and stored a stretch at a time.
+                if !load_large(db, parent, &name, &child, report)? {
+                    report.skipped_not_text += 1;
+                }
+                *pending = usize::MAX;
+            } else {
+                let content = fs::read(&child)?;
+                if !is_valid_text(&content) {
+                    report.skipped_not_text += 1;
+                    continue;
+                }
+                report.files += 1;
+                report.bytes += content.len();
+                db.create_file(parent, &name, &content);
+                *pending = pending.saturating_add(content.len() + 64);
             }
-            report.files += 1;
-            report.bytes += content.len();
-            db.create_file(parent, &name, &content);
-            *pending += content.len() + 64;
             if *pending > 4 << 20 {
                 *pending = 0;
                 db.commit();
@@ -119,6 +128,100 @@ fn load_into(db: &mut Db, parent: NodeId, path: &Path, report: &mut LoadReport, 
         }
     }
     Ok(())
+}
+
+/// Files larger than this are loaded a stretch at a time.
+const LOAD_WHOLE: usize = 8 << 20;
+
+/// Load one large file without ever holding all of it. False if it is
+/// not valid text, in which case no file is made.
+fn load_large(db: &mut Db, parent: NodeId, name: &[u8], path: &Path, report: &mut LoadReport) -> io::Result<bool> {
+    use std::io::Read;
+    let mut file = fs::File::open(path)?;
+    let mut buf = vec![0u8; 4 << 20];
+    // Checked first, as a whole: text that is not valid is not stored.
+    let mut check = TextCheck::default();
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        if !check.feed(&buf[..n]) {
+            return Ok(false);
+        }
+    }
+    if !check.finish() {
+        return Ok(false);
+    }
+    use std::io::Seek;
+    file.seek(io::SeekFrom::Start(0))?;
+    let id = db.create_file(parent, name, b"");
+    let mut total = 0;
+    let mut failed = None;
+    db.set_content_stream(id, &mut |_, out| match file.read(&mut buf) {
+        Ok(0) => false,
+        Ok(n) => {
+            out.extend_from_slice(&buf[..n]);
+            total += n;
+            true
+        }
+        Err(e) => {
+            failed = Some(e);
+            false
+        }
+    });
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    report.files += 1;
+    report.bytes += total;
+    Ok(true)
+}
+
+/// True if a database holds exactly the folders and files of a real
+/// directory, with the same content. Nothing is held whole: files are
+/// compared a piece at a time. On a difference, says where.
+pub fn same_as_dir(db: &Db, path: &Path) -> io::Result<Result<(), String>> {
+    fn walk(db: &Db, node: NodeId, path: &Path) -> io::Result<Result<(), String>> {
+        use std::io::Read;
+        let mut entries: Vec<_> = fs::read_dir(path)?.collect::<Result<_, _>>()?;
+        entries.sort_by_key(|e| name_bytes(&e.file_name()));
+        let children = db.children(node);
+        if entries.len() != children.len() {
+            return Ok(Err(format!("{}: {} entries, the database has {}", path.display(), entries.len(), children.len())));
+        }
+        let mut buf = Vec::new();
+        for entry in entries {
+            let child = entry.path();
+            let Some(&id) = children.get(&name_bytes(&entry.file_name())) else {
+                return Ok(Err(format!("{}: not in the database", child.display())));
+            };
+            let is_dir = entry.file_type()?.is_dir();
+            if is_dir != db.is_dir(id) {
+                return Ok(Err(format!("{}: a folder on one side and a file on the other", child.display())));
+            }
+            if is_dir {
+                if let Err(e) = walk(db, id, &child)? {
+                    return Ok(Err(e));
+                }
+                continue;
+            }
+            if entry.metadata()?.len() != db.size(id) {
+                return Ok(Err(format!("{}: {} bytes, the database has {}", child.display(), entry.metadata()?.len(), db.size(id))));
+            }
+            let mut file = fs::File::open(&child)?;
+            for p in db.pieces(id) {
+                let text = db.text_of(p);
+                buf.resize(text.len(), 0);
+                file.read_exact(&mut buf)?;
+                if buf[..] != text[..] {
+                    return Ok(Err(format!("{}: content differs", child.display())));
+                }
+            }
+        }
+        Ok(Ok(()))
+    }
+    walk(db, db.root(), path)
 }
 
 /// Copy every folder and file of one database into another, which is

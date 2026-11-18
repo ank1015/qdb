@@ -5,7 +5,7 @@
 
 use qdb::store;
 use qdb::testing::{helper, timed_real};
-use qdb::Db;
+use qdb::{Config, Db, SyncMode};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -31,7 +31,15 @@ loaded dataset, engine only, recording the time of every write.
   --label NAME      what to call this run in the results (default dev)
   --no-index        run the engine with the search index switched off
   --out DIR         where to write results (default bench/results)
-  --scratch DIR     where the real tools work (default: the system temporary directory)";
+  --scratch DIR     where the real tools work (default: the system temporary directory)
+  --db DIR          keep the engine's data in a database under DIR (made
+                    anew) instead of in memory
+  --sync MODE       with --db: always or batch (default batch)
+  --piece BYTES     piece size (default 65536)
+  --no-upkeep       writes: do not move content to free space as the run
+                    goes (to measure what that costs)
+  --cap MB          limit the engine's own memory to MB: the run dies if
+                    it asks for more";
 
 // ------------------------------------------------------ memory accounting
 
@@ -130,6 +138,11 @@ struct Options {
     dataset: String,
     count: usize,
     seed: u64,
+    db: Option<PathBuf>,
+    sync: SyncMode,
+    piece: usize,
+    cap_mb: Option<usize>,
+    upkeep: bool,
 }
 
 fn ms(d: Duration) -> f64 {
@@ -184,49 +197,117 @@ const RARE: &str = "qdbrareterm";
 const UNIQUE: &str = "QDBUNIQUELINE";
 
 /// The text of the big file: numbered lines of generated words, a rare
-/// term on seven of them, and one line that is like no other.
-fn big_text(bytes: usize) -> Vec<u8> {
+/// term on seven of them, and one line that is like no other. It is
+/// handed over in stretches of whole lines of about 4 MB, so that no one
+/// ever holds all of it.
+fn big_text(bytes: usize, each: &mut dyn FnMut(&[u8])) -> usize {
     let mut rng = Rng(0xB16F11E);
     let vocab = vocabulary(&mut rng, 20_000);
-    let mut text = Vec::with_capacity(bytes + 256);
+    let mut text = Vec::with_capacity((4 << 20) + 256);
+    let mut done = 0usize;
     let mut line = 0usize;
     let rare_at: Vec<usize> = (1..=7).map(|i| bytes / 8 * i).collect();
     let mut next_rare = 0;
     let unique_at = bytes / 5 * 3;
     let mut unique_done = false;
-    while text.len() < bytes {
+    while done + text.len() < bytes {
         line += 1;
+        let at = done + text.len();
         let mut s = format!("{:09} {}", line, sentence(&mut rng, &vocab, 6, 10));
-        if next_rare < rare_at.len() && text.len() >= rare_at[next_rare] {
+        if next_rare < rare_at.len() && at >= rare_at[next_rare] {
             next_rare += 1;
             let _ = write!(s, " {} {}", RARE, next_rare);
         }
-        if !unique_done && text.len() >= unique_at {
+        if !unique_done && at >= unique_at {
             unique_done = true;
             let _ = write!(s, " {} here", UNIQUE);
         }
         text.extend_from_slice(s.as_bytes());
         text.push(b'\n');
+        if text.len() >= 4 << 20 {
+            each(&text);
+            done += text.len();
+            text.clear();
+        }
     }
-    text
+    each(&text);
+    done + text.len()
+}
+
+/// Limit this process's own memory (heap, stacks, everything that is not
+/// a file): an allocation beyond it fails and the run dies.
+fn cap_memory(mb: usize) -> Result<(), String> {
+    let lim = libc::rlimit { rlim_cur: (mb as u64) << 20, rlim_max: (mb as u64) << 20 };
+    if unsafe { libc::setrlimit(libc::RLIMIT_DATA, &lim) } != 0 {
+        return Err(format!("setting the memory limit: {}", std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+/// A line of /proc/self/status, in kB.
+fn status_kb(name: &str) -> u64 {
+    let text = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    text.lines().find(|l| l.starts_with(name)).and_then(|l| l.split_whitespace().nth(1)).and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
+fn open_engine(opts: &Options, name: &str) -> Result<Db, String> {
+    let cfg = Config { index: opts.index, piece: opts.piece, sync: opts.sync, ..Config::default() };
+    match &opts.db {
+        None => Ok(Db::in_memory(cfg)),
+        Some(dir) => {
+            let dir = dir.join(name);
+            let _ = std::fs::remove_dir_all(&dir);
+            Ok(Db::open_dir(&dir, cfg)?.0)
+        }
+    }
 }
 
 fn bigfile(opts: &Options) -> Result<bool, String> {
     let root = opts.scratch.join("qdb-stress-bigfile");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    // Start the helper for the real tools while this process is small.
+    // Start the helper for the real tools before the limit is set: the
+    // limit is for the engine.
     timed_real(&root, "true");
+    if let Some(mb) = opts.cap_mb {
+        cap_memory(mb)?;
+    }
     eprintln!("bigfile: generating {} MB", opts.size_mb);
-    let text = big_text(opts.size_mb << 20);
-    let bytes = text.len();
-    std::fs::write(root.join("big.txt"), &text).map_err(|e| e.to_string())?;
-    let mut db = if opts.index { Db::new() } else { Db::without_index() };
+    let mut db = open_engine(opts, "bigfile")?;
+    db.set_sync(SyncMode::Batch);
     let top = db.root();
+    let id = db.create_file(top, b"big.txt", b"");
+    let mut create = Duration::ZERO;
+    let mut overall = 0usize;
+    let bytes = {
+        use std::io::Write as _;
+        let mut real = std::io::BufWriter::new(std::fs::File::create(root.join("big.txt")).map_err(|e| e.to_string())?);
+        let n = big_text(opts.size_mb << 20, &mut |part| {
+            real.write_all(part).expect("writing the file for the real tools");
+            let t = Instant::now();
+            db.append(id, part);
+            db.commit();
+            create += t.elapsed();
+        });
+        real.flush().map_err(|e| e.to_string())?;
+        n
+    };
     let t = Instant::now();
-    db.create_file(top, b"big.txt", &text);
-    let create = t.elapsed();
-    eprintln!("bigfile: {} bytes, stored in the engine in {} ms", bytes, show_ms(ms(create)));
+    db.sync();
+    if opts.db.is_some() {
+        // Settled, closed and opened again: what a user of the file meets.
+        db.compact()?;
+        db.close()?;
+        let cfg = Config { index: opts.index, piece: opts.piece, sync: opts.sync, ..Config::default() };
+        db = Db::open_dir(&opts.db.as_ref().unwrap().join("bigfile"), cfg)?.0;
+    }
+    db.set_sync(opts.sync);
+    let settle = t.elapsed();
+    overall = overall.max(PEAK.load(Relaxed));
+    if let Some(e) = db.failure() {
+        return Err(e.to_string());
+    }
+    eprintln!("bigfile: {} bytes, stored in the engine in {} ms, settled in {} ms", bytes, show_ms(ms(create)), show_ms(ms(settle)));
 
     // (command, changes data). Reads are timed five times, changes once
     // each; the three appends give a median.
@@ -235,6 +316,7 @@ fn bigfile(opts: &Options) -> Result<bool, String> {
         (format!("grep -c {} big.txt", RARE), false),
         ("wc -l big.txt".into(), false),
         ("tail -n 5 big.txt".into(), false),
+        ("head -n 3 big.txt".into(), false),
         ("echo 'one more line at the end' >> big.txt".into(), true),
         ("echo 'and a second one' >> big.txt".into(), true),
         ("echo 'and a third' >> big.txt".into(), true),
@@ -242,19 +324,26 @@ fn bigfile(opts: &Options) -> Result<bool, String> {
         ("grep -n QDBCHANGEDLINE big.txt".into(), false),
         ("tail -n 4 big.txt".into(), false),
         ("wc big.txt".into(), false),
+        ("cp big.txt copy.txt".into(), true),
+        ("cat big.txt > cat.txt".into(), true),
+        ("grep -c e cat.txt".into(), false),
+        ("tail -n 1 copy.txt".into(), false),
+        ("rm copy.txt cat.txt".into(), true),
     ];
-    let mut rows = String::from("command,kind,gnu_ms,engine_ms,engine_peak_bytes,agree\n");
+    let mut rows = String::from("command,kind,gnu_ms,engine_ms,engine_peak_bytes,disk_bytes_written,syncs,agree\n");
     let mut all_agree = true;
-    println!("{:<52} {:>10} {:>10} {:>12}  result", "command", "GNU ms", "engine ms", "peak heap");
+    println!("{:<50} {:>9} {:>10} {:>11} {:>13} {:>5}  result", "command", "GNU ms", "engine ms", "peak heap", "disk written", "syncs");
     for (command, changes) in &cases {
         let reps = if *changes { 1 } else { 5 };
         let mut gnu = Vec::new();
         let mut eng = Vec::new();
         let mut agree = true;
         let mut peak = 0;
+        let before = db.io_stats();
         for _ in 0..reps {
             let (gt, real) = timed_real(&root, command);
             let (et, p, code, out) = engine(&mut db, command);
+            overall = overall.max(PEAK.load(Relaxed));
             let mut real_out = real.stdout.clone();
             real_out.extend_from_slice(&real.stderr);
             agree &= code == real.code && out == real_out;
@@ -262,26 +351,81 @@ fn bigfile(opts: &Options) -> Result<bool, String> {
             gnu.push(gt);
             eng.push(et);
         }
+        let after = db.io_stats();
+        let (written, syncs) = (after.bytes() - before.bytes(), after.syncs - before.syncs);
         all_agree &= agree;
         let (g, e) = (ms(median(gnu)), ms(median(eng)));
-        println!("{:<52} {:>10} {:>10} {:>12}  {}", command, show_ms(g), show_ms(e), peak, if agree { "same" } else { "DIFFERENT" });
-        let _ = writeln!(rows, "\"{}\",{},{:.4},{:.4},{},{}", command.replace('"', "\"\""), if *changes { "write" } else { "read" }, g, e, peak, agree);
+        println!("{:<50} {:>9} {:>10} {:>11} {:>13} {:>5}  {}", command, show_ms(g), show_ms(e), peak, written, syncs, if agree { "same" } else { "DIFFERENT" });
+        let _ = writeln!(
+            rows,
+            "\"{}\",{},{:.4},{:.4},{},{},{},{}",
+            command.replace('"', "\"\""),
+            if *changes { "write" } else { "read" },
+            g,
+            e,
+            peak,
+            written,
+            syncs,
+            agree
+        );
     }
-    // The whole file, at the end.
-    let real = std::fs::read(root.join("big.txt")).map_err(|e| e.to_string())?;
-    let id = db.resolve(b"big.txt").map_err(|e| e.msg().to_string())?;
-    let same = *db.content(id) == real[..];
+    // The whole file, at the end, piece by piece.
+    let same = {
+        use std::io::Read as _;
+        let mut real = std::io::BufReader::new(std::fs::File::open(root.join("big.txt")).map_err(|e| e.to_string())?);
+        let id = db.resolve(b"big.txt").map_err(|e| e.msg().to_string())?;
+        let mut same = true;
+        let mut buf = Vec::new();
+        for p in db.pieces(id) {
+            let text = db.text_of(p);
+            buf.resize(text.len(), 0);
+            same &= real.read_exact(&mut buf).is_ok() && buf[..] == text[..];
+        }
+        same && real.read(&mut [0u8; 1]).map_err(|e| e.to_string())? == 0
+    };
     println!("content at the end: {}", if same { "same" } else { "DIFFERENT" });
     all_agree &= same;
+    let own_kb = status_kb("RssAnon:");
+    let data_kb = status_kb("VmData:");
+    println!(
+        "most heap held at any moment: {:.1} MB; memory of its own at the end: {:.1} MB resident, {:.1} MB reserved (the limit counts this){}",
+        overall as f64 / 1e6,
+        own_kb as f64 / 1e3,
+        data_kb as f64 / 1e3,
+        opts.cap_mb.map(|mb| format!("; limit {} MB", mb)).unwrap_or_default()
+    );
+    if let Some(e) = db.failure() {
+        return Err(e.to_string());
+    }
+    let disk = db.disk_stats();
+    db.close()?;
     let dir = opts.out.join("bigfile");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join(format!("{}.csv", opts.label)), rows).map_err(|e| e.to_string())?;
     std::fs::write(
         dir.join(format!("{}.meta", opts.label)),
-        format!("size_bytes={}\nindex={}\ncreate_ms={:.1}\nagree={}\n", bytes, opts.index, ms(create), all_agree),
+        format!(
+            "size_bytes={}\nindex={}\nstore={}\nsync={}\npiece={}\ncap_mb={}\ncreate_ms={:.1}\nsettle_ms={:.1}\npeak_heap_bytes={}\nown_resident_kb={}\nown_reserved_kb={}\ndisk_total={}\nagree={}\n",
+            bytes,
+            opts.index,
+            if opts.db.is_some() { "disk" } else { "memory" },
+            if opts.sync == SyncMode::Always { "always" } else { "batch" },
+            opts.piece,
+            opts.cap_mb.unwrap_or(0),
+            ms(create),
+            ms(settle),
+            overall,
+            own_kb,
+            data_kb,
+            disk.total(),
+            all_agree
+        ),
     )
     .map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&root);
+    if let Some(dir) = &opts.db {
+        let _ = std::fs::remove_dir_all(dir.join("bigfile"));
+    }
     Ok(all_agree)
 }
 
@@ -346,7 +490,35 @@ fn writes(opts: &Options) -> Result<bool, String> {
         .find(|(n, _)| *n == opts.dataset)
         .ok_or(format!("unknown dataset {}", opts.dataset))?
         .1;
-    let (mut db, report) = store::load_dir_with(&opts.data.join(&folder), opts.index).map_err(|e| e.to_string())?;
+    let db_dir = opts.db.as_ref().map(|d| d.join(format!("writes-{}", opts.dataset)));
+    let (mut db, report) = match &db_dir {
+        None => store::load_dir_with(&opts.data.join(&folder), opts.index).map_err(|e| e.to_string())?,
+        Some(dir) => {
+            // Imported, settled, closed and opened again.
+            let cfg = Config { index: opts.index, piece: opts.piece, sync: SyncMode::Batch, upkeep: opts.upkeep, ..Config::default() };
+            let _ = std::fs::remove_dir_all(dir);
+            let (mut db, _) = Db::open_dir(dir, cfg.clone())?;
+            let report = store::load_into_db(&mut db, &opts.data.join(&folder)).map_err(|e| e.to_string())?;
+            db.compact()?;
+            db.close()?;
+            (Db::open_dir(dir, Config { sync: opts.sync, ..cfg })?.0, report)
+        }
+    };
+    if let Some(mb) = opts.cap_mb {
+        cap_memory(mb)?;
+    }
+    // What the directory holds, in bytes, as a listing of it would say.
+    let on_disk = |dir: &Path| -> u64 { std::fs::read_dir(dir).map(|d| d.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()).unwrap_or(0) };
+    let io_start = db.io_stats();
+    let raw_start = db.content_bytes() as u64;
+    let disk_start = db_dir.as_ref().map_or(0, |d| on_disk(d));
+    // The moment the directory was largest against the text it held.
+    let mut worst = (0.0f64, 0usize, 0u64, 0u64);
+    let mut disk_samples = String::from("write,disk_bytes,raw_text_bytes,written_bytes,moved_bytes,syncs\n");
+    // How many command lines took 0, 1, 2, 3, 4 or more syncs.
+    let mut syncs_per_line = [0u64; 5];
+    let mut heap_peak = 0usize;
+    PEAK.store(LIVE.load(Relaxed), Relaxed);
     eprintln!("writes: {} loaded, {} files, {:.1} MB", opts.dataset, report.files, report.bytes as f64 / 1e6);
     let files = dataset_files(&db);
     let mut rng = Rng(opts.seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
@@ -428,9 +600,22 @@ fn writes(opts: &Options) -> Result<bool, String> {
             let at = rng.below(copies.len());
             (13, format!("rm -r {}", copies.swap_remove(at)))
         };
+        let syncs_before = db.io_stats().syncs;
         let t = Instant::now();
         let out = qdb::execute(&mut db, command.as_bytes());
         let nanos = t.elapsed().as_nanos() as u64;
+        syncs_per_line[((db.io_stats().syncs - syncs_before) as usize).min(4)] += 1;
+        if let Some(dir) = db_dir.as_ref().filter(|_| (n + 1) % 200 == 0) {
+            let (disk, raw, io) = (on_disk(dir), db.content_bytes() as u64, db.io_stats());
+            let ratio = disk as f64 / raw.max(1) as f64;
+            if ratio > worst.0 {
+                worst = (ratio, n + 1, disk, raw);
+            }
+            if (n + 1) % 1000 == 0 {
+                let _ = writeln!(disk_samples, "{},{},{},{},{},{}", n + 1, disk, raw, io.bytes() - io_start.bytes(), io.moved_bytes - io_start.moved_bytes, io.syncs - io_start.syncs);
+            }
+            heap_peak = heap_peak.max(PEAK.load(Relaxed));
+        }
         if out.code != 0 && kind != 9 {
             return Err(format!("write {} failed: {}\n{}", n + 1, command, String::from_utf8_lossy(&out.stderr)));
         }
@@ -490,6 +675,46 @@ fn writes(opts: &Options) -> Result<bool, String> {
     for (nanos, n, command) in &slowest {
         let _ = writeln!(md, "| {} | {} | `{}` |", show_ms(*nanos as f64 / 1e6), n, command.replace('|', "\\|"));
     }
+    if let Some(dir) = &db_dir {
+        let io = db.io_stats();
+        let d = |f: fn(&qdb::tree::IoStats) -> u64| f(&io) - f(&io_start);
+        let user = d(|i| i.content_bytes) - d(|i| i.moved_bytes) + d(|i| i.log_bytes);
+        let raw_end = db.content_bytes() as u64;
+        let _ = writeln!(md, "\nOn disk, sync {}{}.\n", if opts.sync == SyncMode::Always { "always" } else { "batch" }, if opts.upkeep { "" } else { ", upkeep off" });
+        let _ = writeln!(md, "| Bytes written to disk over the run | |");
+        let _ = writeln!(md, "|---|---:|");
+        let _ = writeln!(md, "| content the commands wrote | {} |", d(|i| i.content_bytes) - d(|i| i.moved_bytes));
+        let _ = writeln!(md, "| log of the command lines | {} |", d(|i| i.log_bytes));
+        let _ = writeln!(md, "| content moved to free space | {} |", d(|i| i.moved_bytes));
+        let _ = writeln!(md, "| index files | {} |", d(|i| i.index_bytes));
+        let _ = writeln!(md, "| saves of the tree ({}) | {} |", d(|i| i.checkpoints), d(|i| i.tree_bytes));
+        let _ = writeln!(md, "| **all** | {} |", d(|i| i.bytes()));
+        let _ = writeln!(md, "| **write amplification**: all, over content and log the commands caused | {:.2} |", d(|i| i.bytes()) as f64 / user.max(1) as f64);
+        let _ = writeln!(md, "\nSyncs: {} over {} command lines that changed something.\n", d(|i| i.syncs), d(|i| i.commits));
+        let _ = writeln!(md, "| Syncs in one command line | 0 | 1 | 2 | 3 | 4 or more |");
+        let _ = writeln!(md, "|---|---:|---:|---:|---:|---:|");
+        let _ = writeln!(md, "| command lines | {} | {} | {} | {} | {} |", syncs_per_line[0], syncs_per_line[1], syncs_per_line[2], syncs_per_line[3], syncs_per_line[4]);
+        let disk_end = on_disk(dir);
+        let _ = writeln!(md, "\n| Disk against the text held | Directory, bytes | Raw text of all files, bytes | Ratio |");
+        let _ = writeln!(md, "|---|---:|---:|---:|");
+        let _ = writeln!(md, "| at the start (settled) | {} | {} | {:.3} |", disk_start, raw_start, disk_start as f64 / raw_start.max(1) as f64);
+        let _ = writeln!(md, "| at its worst (after write {}; looked at every 200 writes) | {} | {} | {:.3} |", worst.1, worst.2, worst.3, worst.0);
+        let _ = writeln!(md, "| at the end | {} | {} | {:.3} |", disk_end, raw_end, disk_end as f64 / raw_end.max(1) as f64);
+        let s = db.disk_stats();
+        let _ = writeln!(md, "\nAt the end, by what it is: text {}, index lists {}, index tables {}, tree {}, log {}, record and file headers {}, space not yet reclaimed {}.", s.text, s.lists, s.tables, s.tree, s.log, s.framing, s.unreclaimed);
+        let _ = writeln!(md, "\nMost heap the engine held during the run: {:.1} MB{}.", heap_peak.max(PEAK.load(Relaxed)) as f64 / 1e6, opts.cap_mb.map(|mb| format!(" (limit {} MB)", mb)).unwrap_or_default());
+        let checked = match db.check() {
+            Ok(what) => format!("ok: {}", what),
+            Err(what) => format!("NOT OK: {}", what),
+        };
+        let _ = writeln!(md, "\nCheck of the database after the run: {}", checked);
+        let t = Instant::now();
+        db.compact()?;
+        let s = db.disk_stats();
+        let _ = writeln!(md, "\nSettled afterwards (`--compact`, {:.1} s): {} bytes, {:.3} of the raw text.", t.elapsed().as_secs_f64(), s.total(), s.total() as f64 / s.raw_text.max(1) as f64);
+        std::fs::create_dir_all(opts.out.join("writes")).map_err(|e| e.to_string())?;
+        std::fs::write(opts.out.join("writes").join(format!("{}-{}.disk.csv", opts.dataset, opts.label)), &disk_samples).map_err(|e| e.to_string())?;
+    }
     if let Some(w) = db.index_work() {
         let _ = writeln!(
             md,
@@ -530,6 +755,11 @@ fn run() -> Result<bool, String> {
         dataset: String::new(),
         count: 100_000,
         seed: 1,
+        db: None,
+        sync: SyncMode::Batch,
+        piece: 64 * 1024,
+        cap_mb: None,
+        upkeep: true,
     };
     while let Some(a) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("{} needs a value", name));
@@ -543,6 +773,17 @@ fn run() -> Result<bool, String> {
             "--no-index" => opts.index = false,
             "--out" => opts.out = value("--out")?.into(),
             "--scratch" => opts.scratch = value("--scratch")?.into(),
+            "--db" => opts.db = Some(value("--db")?.into()),
+            "--sync" => {
+                opts.sync = match value("--sync")?.as_str() {
+                    "always" => SyncMode::Always,
+                    "batch" => SyncMode::Batch,
+                    other => return Err(format!("--sync: {} is not `always` or `batch`", other)),
+                }
+            }
+            "--piece" => opts.piece = value("--piece")?.parse().map_err(|_| "--piece needs a number")?,
+            "--no-upkeep" => opts.upkeep = false,
+            "--cap" => opts.cap_mb = Some(value("--cap")?.parse().map_err(|_| "--cap needs a number of MB")?),
             other => return Err(format!("unknown argument {}\n{}", other, USAGE)),
         }
     }
@@ -557,7 +798,7 @@ fn run() -> Result<bool, String> {
 }
 
 fn main() -> std::process::ExitCode {
-    let worker = std::thread::Builder::new().stack_size(512 << 20).spawn(run).expect("spawn");
+    let worker = std::thread::Builder::new().stack_size(64 << 20).spawn(run).expect("spawn");
     match worker.join().expect("qdb-stress panicked") {
         Ok(true) => std::process::ExitCode::SUCCESS,
         Ok(false) => std::process::ExitCode::from(1),

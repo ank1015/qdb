@@ -3,7 +3,7 @@
 - Data: Linux 6.8 source tree, from the Ubuntu source package linux_6.8.0.orig.tar.gz (sha256 26512115972bdf017a4ac826cc7d3e9b0ba397d4f85cd330e4e4ff54c78061c8). Skipped on import: 64 symbolic links, 6 files that are not valid text, 0 other
 - Size: 83405 files in 5451 folders, 1396.9 MB of text
 - Tools: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); grep (GNU grep) 3.11; sed (GNU sed) 4.9; ls (GNU coreutils) 9.4; find (GNU findutils) 4.9.0; ripgrep 14.1.0
-- GNU and rg times are from the latest run (s3p2), and include starting bash and the tool (1.915 ms for `bash -c 'echo -n'`). Their output is captured through a pipe. rg runs on one thread with `-j 1 --no-ignore --hidden` and is there for timing only.
+- GNU and rg times are from the latest run (s3p4-cap), and include starting bash and the tool (1.650 ms for `bash -c 'echo -n'`). Their output is captured through a pipe. rg runs on one thread with `-j 1 --no-ignore --hidden` and is there for timing only.
 - Engine times are in process, on one thread, and include parsing the command. Read-only commands: median of up to 5 runs, fewer above 0.3 s; from Part 3 on, 16 runs for a command under 50 ms and 51 for one under 2 ms. Commands that change data: one run.
 - Peak memory is the most heap the engine held during the command, above what it held before it.
 
@@ -17,7 +17,7 @@
 | Part 4, index off | off | 1461.7 | 1461.7 | 1418.0 MB | 1426.5 MB | 0.001 | yes |
 | Part 4, index on | on | 1374.6 | 8146.1 | 1568.1 MB | 1578.0 MB | 0.280 | yes |
 | Stage 3 part 1 | on | 24063.9 | 30804.3 | 1568.1 MB | 1578.1 MB | 0.280 | yes |
-| s3p2 | on | 13450.1 | 13450.1 | 21.3 MB | 953.8 MB | 0.473 | yes |
+| s3p4-cap | on | 20764.6 | 20764.6 | 21.7 MB | 967.2 MB | 0.335 | yes |
 
 ## The index (Part 4, index on)
 
@@ -132,11 +132,11 @@ Index work per command that changes data:
 | `rm -r bench_out/dir_moved` | documents +0 -9698; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `rm -rf bench_out` | documents +0 -2633; postings +0; list bytes rewritten 0; rebuilds 0 |
 
-## The index (s3p2)
+## The index (s3p4-cap)
 
 - Built in 0.000 ms while loading.
-- Size: 141.5 MB in memory, 10.1% of the text (10.5 MB table, 129.9 MB lists, 1056.6 KB document table). The posting data itself is 129.9 MB.
-- 183805 distinct trigrams, 0 postings, 93446 documents.
+- Size: 141.5 MB in memory, 10.1% of the text (10.5 MB table, 129.9 MB lists, 1064.6 KB document table). The posting data itself is 129.9 MB.
+- 183791 distinct trigrams, 0 postings, 93472 documents.
 - Share of posting data in the longest lists: top 100 trigrams 0.0%, top 1,000 0.0%, top 10,000 0.0%.
 - These figures are taken straight after loading.
 
@@ -154,12 +154,12 @@ Index work per command that changes data:
 | `cp include/linux/kernfs.h bench_out/copy.txt` | documents +1 -0; postings +2610; list bytes rewritten 8253; rebuilds 0 |
 | `cp -r Documentation bench_out/dir_copy` | documents +9762 -0; postings +9359558; list bytes rewritten 27696; rebuilds 0 |
 | `cp -r include/linux bench_out/work` | documents +2677 -0; postings +2662814; list bytes rewritten 0; rebuilds 0 |
-| `sed -i 's/define/QDBBENCHONE/g' bench_out/copy.txt` | documents +1 -0; postings +2616; list bytes rewritten 0; rebuilds 0 |
+| `sed -i 's/define/QDBBENCHONE/g' bench_out/copy.txt` | documents +1 -1; postings +2616; list bytes rewritten 0; rebuilds 0 |
 | `sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt` | documents +1 -1; postings +2504; list bytes rewritten 0; rebuilds 0 |
-| `sed -i 's/define/QDBBENCHMANY/g' bench_out/work/*.h` | documents +1410 -1408; postings +1600326; list bytes rewritten 1376976; rebuilds 0 |
+| `sed -i 's/define/QDBBENCHMANY/g' bench_out/work/*.h` | documents +1428 -1408; postings +1603987; list bytes rewritten 0; rebuilds 0 |
 | `sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.h` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `sed -i 's/mispredicted/QDBBENCHFEW/g' bench_out/work/*.h` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
-| `cp include/linux/kernfs.h bench_out/same.txt` | documents +1 -0; postings +2610; list bytes rewritten 21077; rebuilds 0 |
+| `cp include/linux/kernfs.h bench_out/same.txt` | documents +1 -0; postings +2610; list bytes rewritten 0; rebuilds 0 |
 | `cp include/linux/kernfs.h bench_out/same.txt` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `cat include/linux/kernfs.h > bench_out/same.txt` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `grep -rc QDBBENCHMANY bench_out` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
@@ -170,107 +170,107 @@ Index work per command that changes data:
 | `ls -R bench_out/a` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `rm bench_out/a/b/hello.txt` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
 | `rmdir bench_out/a/b` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
-| `rm -r bench_out/dir_moved` | documents +0 -595; postings +0; list bytes rewritten 1706869; rebuilds 0 |
-| `rm -rf bench_out` | documents +0 -2681; postings +0; list bytes rewritten 5957096; rebuilds 0 |
+| `rm -r bench_out/dir_moved` | documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0 |
+| `rm -rf bench_out` | documents +0 -1645; postings +0; list bytes rewritten 3352793; rebuilds 0 |
 
 ## Time per command, in milliseconds
 
-| Command | GNU | rg | Stage 1 | Part 2 | Part 3, no index | Part 4, index off | Part 4, index on | Stage 3 part 1 | s3p2 | Agree |
+| Command | GNU | rg | Stage 1 | Part 2 | Part 3, no index | Part 4, index off | Part 4, index on | Stage 3 part 1 | s3p4-cap | Agree |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| `ls` | 2.688 |  | 0.003 | 0.003 | 0.001 | 0.002 | 0.001 | 0.001 | 0.002 | yes |
-| `ls -a` | 2.545 |  | 0.008 | 0.004 | 0.002 | 0.003 | 0.004 | 0.002 | 0.002 | yes |
-| `ls -R` | 81.06 |  | 21.31 | 15.79 | 17.85 | 5.651 | 8.025 | 9.345 | 3.651 | yes |
-| `ls -aR Documentation` | 12.92 |  | 1.501 | 1.091 | 1.367 | 0.939 | 0.747 | 0.772 | 0.592 | yes |
-| `ls -p Documentation` | 2.125 |  | 0.005 | 0.005 | 0.003 | 0.003 | 0.004 | 0.002 | 0.003 | yes |
-| `find .` | 75.74 |  | 20.91 | 21.94 | 20.50 | 17.36 | 20.82 | 17.28 | 11.28 | yes |
-| `find . -name '*.h'` | 79.16 |  | 31.50 | 23.56 | 26.63 | 27.15 | 25.53 | 30.04 | 9.350 | yes |
-| `find . -name '*.c'` | 78.05 |  | 27.93 | 37.57 | 25.61 | 30.65 | 28.25 | 24.21 | 8.126 | yes |
-| `find . -type d` | 60.27 |  | 25.24 | 30.06 | 19.60 | 22.18 | 25.02 | 26.30 | 5.731 | yes |
-| `find . -type f` | 76.84 |  | 26.23 | 23.04 | 26.47 | 25.24 | 23.39 | 20.13 | 6.418 | yes |
-| `find . -maxdepth 2 -type f` | 4.141 |  | 0.144 | 0.201 | 0.139 | 0.120 | 0.114 | 0.108 | 0.107 | yes |
-| `find Documentation -name '*.h' -type f` | 11.23 |  | 1.703 | 1.839 | 2.193 | 1.667 | 1.770 | 2.824 | 1.055 | yes |
-| `find . -name 'Makefile'` | 87.40 |  | 24.61 | 21.08 | 20.22 | 32.01 | 27.58 | 16.92 | 9.482 | yes |
-| `cat include/linux/kernfs.h` | 3.222 |  | 0.002 | 0.001 | 0.001 | 0.001 | 0.001 | 0.001 | 0.001 | yes |
-| `cat -n include/linux/kernfs.h` | 3.530 |  | 0.079 | 0.077 | 0.053 | 0.049 | 0.057 | 0.078 | 0.081 | yes |
-| `head -n 20 include/linux/kernfs.h` | 2.993 |  | 0.011 | 0.002 | 0.002 | 0.002 | 0.002 | 0.002 | 0.003 | yes |
-| `tail -n 20 include/linux/kernfs.h` | 2.641 |  | 0.030 | 0.002 | 0.002 | 0.002 | 0.002 | 0.003 | 0.003 | yes |
-| `tail -n +100 include/linux/kernfs.h` | 2.605 |  | 0.015 | 0.004 | 0.003 | 0.003 | 0.003 | 0.005 | 0.006 | yes |
-| `wc include/linux/kernfs.h` | 3.380 |  | 0.037 | 0.032 | 0.019 | 0.020 | 0.024 | 0.037 | 0.028 | yes |
-| `wc -l include/linux/*.h` | 21.62 |  | 24.16 | 24.60 | 20.12 | 24.55 | 28.62 | 24.18 | 1.315 | yes |
-| `cat include/linux/*.h \| wc -l` | 37.92 |  | 28.57 | 25.07 | 24.20 | 24.73 | 26.33 | 22.00 | 25.11 | yes |
-| `cat include/linux/kernfs.h \| head -n 50 \| tail -n 10` | 3.033 |  | 0.017 | 0.017 | 0.006 | 0.006 | 0.005 | 0.006 | 0.005 | yes |
-| `grep -c define include/linux/kernfs.h` | 2.410 |  | 0.271 | 0.237 | 0.006 | 0.005 | 0.006 | 0.005 | 0.006 | yes |
-| `grep -n define include/linux/kernfs.h` | 2.150 |  | 0.426 | 0.306 | 0.005 | 0.007 | 0.006 | 0.006 | 0.006 | yes |
-| `sed 's/define/XX/g' include/linux/kernfs.h` | 2.354 |  | 0.334 | 0.326 | 0.279 | 0.247 | 0.249 | 0.217 | 0.229 | yes |
-| `sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' include/linux/kernfs.h` | 3.868 |  | 0.740 | 0.664 | 0.637 | 0.492 | 0.588 | 0.537 | 1.060 | yes |
-| `cat include/linux/kernfs.h \| sed 's/^/> /' \| wc -c` | 3.915 |  | 0.168 | 0.145 | 0.124 | 0.106 | 0.152 | 0.104 | 0.206 | yes |
-| `grep -rn qdbzzabsentterm .` | 1252.5 | 638.1 | 17359.5 | 17645.1 | 199.4 | 205.6 | 0.012 | 0.010 | 0.042 | yes |
-| `grep -rl qdbzzabsentterm .` | 741.7 | 574.7 | 17711.1 | 18597.6 | 192.1 | 214.3 | 0.011 | 0.012 | 0.040 | yes |
-| `grep -rn ausgabenspezifisches .` | 1233.3 | 657.0 | 19018.3 | 19501.9 | 210.3 | 208.7 | 0.098 | 0.082 | 0.134 | yes |
-| `grep -rl ausgabenspezifisches .` | 786.7 | 585.0 | 18956.5 | 19324.0 | 195.5 | 204.9 | 0.095 | 0.077 | 0.147 | yes |
-| `grep -rn mispredicted .` | 1328.5 | 644.3 | 17982.9 | 18955.5 | 205.0 | 209.3 | 17.54 | 15.67 | 2.671 | yes |
-| `grep -rl mispredicted .` | 883.5 | 579.6 | 19048.8 | 18957.5 | 195.4 | 208.1 | 17.60 | 13.57 | 2.038 | yes |
-| `grep -rn separately .` | 1111.2 | 651.5 | 18360.5 | 18397.0 | 212.4 | 211.4 | 24.09 | 24.22 | 18.89 | yes |
-| `grep -rl separately .` | 595.5 | 603.0 | 19440.4 | 19427.6 | 213.6 | 210.7 | 18.81 | 19.01 | 15.99 | yes |
-| `grep -rn conditions .` | 1292.7 | 681.9 | 18999.5 | 19519.0 | 229.0 | 227.3 | 129.9 | 141.3 | 115.5 | yes |
-| `grep -rl conditions .` | 754.4 | 538.8 | 12072.4 | 12435.8 | 158.7 | 151.5 | 65.31 | 58.36 | 42.48 | yes |
-| `grep -rn define .` | 3597.6 | 2895.0 | 15389.6 | 15237.7 | 431.2 | 519.4 | 460.7 | 549.6 | 473.1 | yes |
-| `grep -rl define .` | 607.9 | 651.2 | 4161.3 | 3944.5 | 78.19 | 79.67 | 100.9 | 80.38 | 61.53 | yes |
-| `grep -rc separately .` | 682.1 | 560.3 | 18956.0 | 18220.2 | 199.0 | 220.2 | 44.65 | 40.37 | 24.05 | yes |
-| `grep -rin MISPREDICTED .` | 1567.1 | 713.7 | 18850.7 | 18964.1 | 249.3 | 267.2 | 21.12 | 19.79 | 2.515 | yes |
-| `grep -ri separately .` | 847.2 | 680.7 | 19767.8 | 18645.3 | 240.0 | 248.3 | 28.93 | 26.42 | 22.46 | yes |
-| `grep -rn separately Documentation` | 71.29 | 64.00 | 711.5 | 557.6 | 5.069 | 6.690 | 2.473 | 2.482 | 1.710 | yes |
-| `grep -rl conditions Documentation` | 61.86 | 49.04 | 628.8 | 626.2 | 6.650 | 4.002 | 3.711 | 3.973 | 3.013 | yes |
-| `grep -rF 'separately' .` | 626.4 | 620.3 | 2095.5 | 2388.0 | 214.0 | 200.6 | 24.42 | 20.66 | 18.54 | yes |
-| `grep -rE 'atomic_[a-z]+\(' .` | 1304.9 | 653.1 | 18552.0 | 18591.7 | 227.6 | 213.8 | 74.42 | 88.18 | 78.35 | yes |
-| `grep -rE 'mispredicted\|ausgabenspezifisches' .` | 1753.3 | 649.0 | 25700.0 | 27700.5 | 296.1 | 299.4 | 29.62 | 27.21 | 3.352 | yes |
-| `grep -rE 'conditions\|separately' .` | 2220.1 | 702.4 | 26745.7 | 26952.0 | 308.1 | 327.2 | 180.1 | 179.8 | 147.1 | yes |
-| `grep -rE '[0-9]{4,}' .` | 2652.1 | 3568.7 | 18321.8 | 19699.7 | 2009.7 | 2033.3 | 2025.8 | 1676.8 | 1832.5 | yes |
-| `grep -rn '^#include' .` | 1784.6 | 947.9 | 17544.7 | 16706.7 | 236.6 | 263.2 | 244.7 | 237.6 | 233.7 | yes |
-| `grep -rE '^(import\|from) ' .` | 1088.6 | 719.4 | 17091.8 | 18141.6 | 328.9 | 319.1 | 315.7 | 342.1 | 275.5 | yes |
-| `grep -rin 'return [a-z_]*;$' Documentation` | 95.33 | 58.46 | 723.2 | 710.6 | 7.054 | 14.82 | 11.32 | 12.78 | 4.241 | yes |
-| `grep -rv e drivers/usb` | 59.91 | 60.14 | 132.2 | 107.4 | 14.25 | 18.24 | 17.91 | 18.49 | 14.11 | yes |
-| `grep -r '\(separately\).*\1' .` | 667.1 |  | 34553.4 | 35931.9 | 216.6 | 216.4 | 24.81 | 24.74 | 22.19 | yes |
-| `grep -n mispredicted include/linux/*.h` | 15.73 |  | | | | | | 1.407 | 1.200 | yes |
-| `grep -l separately include/linux/*.h` | 10.53 |  | | | | | | 2.152 | 1.260 | yes |
-| `grep -c qdbzzabsentterm include/linux/*.h` | 12.37 |  | | | | | | 0.674 | 0.608 | yes |
-| `grep -rl conditions . \| wc -l` | 716.1 |  | 12392.2 | 11985.0 | 156.1 | 156.0 | 58.03 | 57.75 | 44.69 | yes |
-| `grep -rc define . \| grep -v ':0$' \| wc -l` | 1442.1 |  | 14309.4 | 14923.1 | 342.4 | 364.1 | 342.3 | 352.0 | 297.4 | yes |
-| `find . -name '*.h' \| wc -l` | 78.04 |  | 28.57 | 24.95 | 27.61 | 27.26 | 23.83 | 28.22 | 7.813 | yes |
-| `find . -type f \| grep -c h` | 76.31 |  | 63.40 | 58.08 | 27.30 | 27.73 | 27.69 | 37.65 | 9.736 | yes |
-| `grep -rn define . \| head -n 5` | 4.976 |  | 15337.2 | 3.769 | 0.020 | 0.020 | 0.019 | 0.020 | 0.027 | order differs |
-| `grep -rn conditions . \| head -n 1` | 11.58 |  | 18581.5 | 6.938 | 0.054 | 0.031 | 0.027 | 0.031 | 0.046 | order differs |
-| `find . -type f \| head -n 3` | 3.208 |  | 28.01 | 0.092 | 0.096 | 0.061 | 0.058 | 0.056 | 0.056 | order differs |
-| `cat include/linux/*.h \| head -n 2` | 4.139 |  | 9.193 | 0.347 | 0.338 | 0.267 | 0.346 | 0.342 | 0.261 | yes |
-| `mkdir -p bench_out/a/b` | 2.100 |  | 0.043 | 0.026 | 0.012 | 0.016 | 0.015 | 0.017 | 0.737 | yes |
-| `touch bench_out/empty.txt` | 2.260 |  | 0.028 | 0.019 | 0.012 | 0.013 | 0.009 | 0.013 | 0.595 | yes |
-| `echo 'hello world' > bench_out/hello.txt` | 1.543 |  | 0.030 | 0.025 | 0.016 | 0.017 | 0.017 | 0.018 | 0.346 | yes |
-| `echo 'another line' >> bench_out/hello.txt` | 1.522 |  | 0.021 | 0.023 | 0.012 | 0.008 | 0.018 | 0.062 | 0.410 | yes |
-| `cp include/linux/kernfs.h bench_out/copy.txt` | 2.455 |  | 0.071 | 0.044 | 0.018 | 0.022 | 0.510 | 0.730 | 1.385 | yes |
-| `cp -r Documentation bench_out/dir_copy` | 807.6 |  | 36.54 | 55.14 | 34.99 | 38.25 | 476.3 | 413.4 | 608.8 | yes |
-| `cp -r include/linux bench_out/work` | 119.9 |  | 17.02 | 21.90 | 17.83 | 19.81 | 172.5 | 157.4 | 244.5 | yes |
-| `sed -i 's/define/QDBBENCHONE/g' bench_out/copy.txt` | 3.857 |  | 0.369 | 0.371 | 0.257 | 0.387 | 0.545 | 0.602 | 1.384 | yes |
-| `sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt` | 3.304 |  | 0.608 | 0.397 | 0.267 | 0.328 | 0.478 | 0.500 | 1.473 | yes |
-| `sed -i 's/define/QDBBENCHMANY/g' bench_out/work/*.h` | 221.6 |  | 154.4 | 187.8 | 133.3 | 141.4 | 212.9 | 241.7 | 294.3 | yes |
-| `sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.h` | 434.5 |  | | | | | | 2.724 | 1.785 | yes |
-| `sed -i 's/mispredicted/QDBBENCHFEW/g' bench_out/work/*.h` | 374.1 |  | | | | | | 2.975 | 3.161 | yes |
-| `cp include/linux/kernfs.h bench_out/same.txt` | 3.690 |  | | | | | | 0.027 | 0.045 | yes |
-| `cp include/linux/kernfs.h bench_out/same.txt` | 3.019 |  | | | | | | 0.027 | 0.045 | yes |
-| `cat include/linux/kernfs.h > bench_out/same.txt` | 3.631 |  | | | | | | 0.033 | 0.033 | yes |
-| `grep -rc QDBBENCHMANY bench_out` | 71.73 |  | 907.6 | 911.1 | 14.07 | 17.24 | 7.128 | 11.97 | 6.858 | yes |
-| `grep -rl QDBBENCHMANY .` | 589.9 |  | 18985.7 | 19134.6 | 224.7 | 241.6 | 3.630 | 2.154 | 1.868 | yes |
-| `grep -rl QDBBENCHONE .` | 954.9 |  | 18818.5 | 18986.5 | 231.2 | 239.5 | 0.603 | 0.783 | 0.592 | yes |
-| `mv bench_out/dir_copy bench_out/dir_moved` | 2.798 |  | 0.036 | 0.048 | 0.023 | 0.026 | 0.035 | 0.028 | 1.921 | yes |
-| `mv bench_out/hello.txt bench_out/a/b` | 2.686 |  | 0.046 | 0.046 | 0.020 | 0.020 | 0.015 | 0.018 | 1.142 | yes |
-| `ls -R bench_out/a` | 3.677 |  | 0.026 | 0.035 | 0.014 | 0.016 | 0.019 | 0.021 | 0.013 | yes |
-| `rm bench_out/a/b/hello.txt` | 2.571 |  | 0.030 | 0.035 | 0.008 | 0.013 | 0.011 | 0.012 | 1.130 | yes |
-| `rmdir bench_out/a/b` | 3.016 |  | 0.035 | 0.038 | 0.016 | 0.009 | 0.015 | 0.010 | 0.779 | yes |
-| `rm -r bench_out/dir_moved` | 128.5 |  | 10.95 | 9.650 | 5.616 | 6.801 | 8.592 | 6.623 | 18.06 | yes |
-| `rm -rf bench_out` | 195.4 |  | 3.379 | 2.941 | 1.655 | 2.071 | 3.696 | 4.601 | 41.21 | yes |
+| `ls` | 2.785 |  | 0.003 | 0.003 | 0.001 | 0.002 | 0.001 | 0.001 | 0.001 | yes |
+| `ls -a` | 2.440 |  | 0.008 | 0.004 | 0.002 | 0.003 | 0.004 | 0.002 | 0.002 | yes |
+| `ls -R` | 88.41 |  | 21.31 | 15.79 | 17.85 | 5.651 | 8.025 | 9.345 | 5.154 | yes |
+| `ls -aR Documentation` | 11.98 |  | 1.501 | 1.091 | 1.367 | 0.939 | 0.747 | 0.772 | 0.575 | yes |
+| `ls -p Documentation` | 2.973 |  | 0.005 | 0.005 | 0.003 | 0.003 | 0.004 | 0.002 | 0.002 | yes |
+| `find .` | 66.80 |  | 20.91 | 21.94 | 20.50 | 17.36 | 20.82 | 17.28 | 10.70 | yes |
+| `find . -name '*.h'` | 65.57 |  | 31.50 | 23.56 | 26.63 | 27.15 | 25.53 | 30.04 | 10.55 | yes |
+| `find . -name '*.c'` | 96.27 |  | 27.93 | 37.57 | 25.61 | 30.65 | 28.25 | 24.21 | 11.61 | yes |
+| `find . -type d` | 65.71 |  | 25.24 | 30.06 | 19.60 | 22.18 | 25.02 | 26.30 | 12.00 | yes |
+| `find . -type f` | 68.80 |  | 26.23 | 23.04 | 26.47 | 25.24 | 23.39 | 20.13 | 13.84 | yes |
+| `find . -maxdepth 2 -type f` | 4.861 |  | 0.144 | 0.201 | 0.139 | 0.120 | 0.114 | 0.108 | 0.086 | yes |
+| `find Documentation -name '*.h' -type f` | 12.66 |  | 1.703 | 1.839 | 2.193 | 1.667 | 1.770 | 2.824 | 1.735 | yes |
+| `find . -name 'Makefile'` | 72.52 |  | 24.61 | 21.08 | 20.22 | 32.01 | 27.58 | 16.92 | 11.33 | yes |
+| `cat include/linux/kernfs.h` | 2.536 |  | 0.002 | 0.001 | 0.001 | 0.001 | 0.001 | 0.001 | 0.001 | yes |
+| `cat -n include/linux/kernfs.h` | 2.345 |  | 0.079 | 0.077 | 0.053 | 0.049 | 0.057 | 0.078 | 0.053 | yes |
+| `head -n 20 include/linux/kernfs.h` | 2.504 |  | 0.011 | 0.002 | 0.002 | 0.002 | 0.002 | 0.002 | 0.001 | yes |
+| `tail -n 20 include/linux/kernfs.h` | 2.256 |  | 0.030 | 0.002 | 0.002 | 0.002 | 0.002 | 0.003 | 0.002 | yes |
+| `tail -n +100 include/linux/kernfs.h` | 2.397 |  | 0.015 | 0.004 | 0.003 | 0.003 | 0.003 | 0.005 | 0.006 | yes |
+| `wc include/linux/kernfs.h` | 3.026 |  | 0.037 | 0.032 | 0.019 | 0.020 | 0.024 | 0.037 | 0.027 | yes |
+| `wc -l include/linux/*.h` | 11.55 |  | 24.16 | 24.60 | 20.12 | 24.55 | 28.62 | 24.18 | 0.722 | yes |
+| `cat include/linux/*.h \| wc -l` | 39.88 |  | 28.57 | 25.07 | 24.20 | 24.73 | 26.33 | 22.00 | 25.12 | yes |
+| `cat include/linux/kernfs.h \| head -n 50 \| tail -n 10` | 3.501 |  | 0.017 | 0.017 | 0.006 | 0.006 | 0.005 | 0.006 | 0.006 | yes |
+| `grep -c define include/linux/kernfs.h` | 2.086 |  | 0.271 | 0.237 | 0.006 | 0.005 | 0.006 | 0.005 | 0.013 | yes |
+| `grep -n define include/linux/kernfs.h` | 2.627 |  | 0.426 | 0.306 | 0.005 | 0.007 | 0.006 | 0.006 | 0.014 | yes |
+| `sed 's/define/XX/g' include/linux/kernfs.h` | 3.425 |  | 0.334 | 0.326 | 0.279 | 0.247 | 0.249 | 0.217 | 0.251 | yes |
+| `sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' include/linux/kernfs.h` | 3.431 |  | 0.740 | 0.664 | 0.637 | 0.492 | 0.588 | 0.537 | 0.470 | yes |
+| `cat include/linux/kernfs.h \| sed 's/^/> /' \| wc -c` | 3.658 |  | 0.168 | 0.145 | 0.124 | 0.106 | 0.152 | 0.104 | 0.120 | yes |
+| `grep -rn qdbzzabsentterm .` | 1268.1 | 631.1 | 17359.5 | 17645.1 | 199.4 | 205.6 | 0.012 | 0.010 | 0.064 | yes |
+| `grep -rl qdbzzabsentterm .` | 821.2 | 592.4 | 17711.1 | 18597.6 | 192.1 | 214.3 | 0.011 | 0.012 | 0.063 | yes |
+| `grep -rn ausgabenspezifisches .` | 1227.0 | 679.9 | 19018.3 | 19501.9 | 210.3 | 208.7 | 0.098 | 0.082 | 0.225 | yes |
+| `grep -rl ausgabenspezifisches .` | 822.6 | 662.3 | 18956.5 | 19324.0 | 195.5 | 204.9 | 0.095 | 0.077 | 0.187 | yes |
+| `grep -rn mispredicted .` | 1451.6 | 668.9 | 17982.9 | 18955.5 | 205.0 | 209.3 | 17.54 | 15.67 | 1.682 | yes |
+| `grep -rl mispredicted .` | 998.8 | 590.5 | 19048.8 | 18957.5 | 195.4 | 208.1 | 17.60 | 13.57 | 1.996 | yes |
+| `grep -rn separately .` | 1065.1 | 650.7 | 18360.5 | 18397.0 | 212.4 | 211.4 | 24.09 | 24.22 | 15.17 | yes |
+| `grep -rl separately .` | 668.9 | 633.6 | 19440.4 | 19427.6 | 213.6 | 210.7 | 18.81 | 19.01 | 14.64 | yes |
+| `grep -rn conditions .` | 1388.3 | 736.5 | 18999.5 | 19519.0 | 229.0 | 227.3 | 129.9 | 141.3 | 62.45 | yes |
+| `grep -rl conditions .` | 832.8 | 584.1 | 12072.4 | 12435.8 | 158.7 | 151.5 | 65.31 | 58.36 | 39.35 | yes |
+| `grep -rn define .` | 2702.1 | 2232.0 | 15389.6 | 15237.7 | 431.2 | 519.4 | 460.7 | 549.6 | 520.1 | yes |
+| `grep -rl define .` | 735.6 | 717.3 | 4161.3 | 3944.5 | 78.19 | 79.67 | 100.9 | 80.38 | 56.65 | yes |
+| `grep -rc separately .` | 710.1 | 630.2 | 18956.0 | 18220.2 | 199.0 | 220.2 | 44.65 | 40.37 | 21.20 | yes |
+| `grep -rin MISPREDICTED .` | 1759.8 | 775.0 | 18850.7 | 18964.1 | 249.3 | 267.2 | 21.12 | 19.79 | 1.993 | yes |
+| `grep -ri separately .` | 939.5 | 749.9 | 19767.8 | 18645.3 | 240.0 | 248.3 | 28.93 | 26.42 | 20.27 | yes |
+| `grep -rn separately Documentation` | 84.75 | 68.40 | 711.5 | 557.6 | 5.069 | 6.690 | 2.473 | 2.482 | 1.765 | yes |
+| `grep -rl conditions Documentation` | 71.33 | 56.20 | 628.8 | 626.2 | 6.650 | 4.002 | 3.711 | 3.973 | 4.457 | yes |
+| `grep -rF 'separately' .` | 690.3 | 665.9 | 2095.5 | 2388.0 | 214.0 | 200.6 | 24.42 | 20.66 | 15.01 | yes |
+| `grep -rE 'atomic_[a-z]+\(' .` | 1352.6 | 654.0 | 18552.0 | 18591.7 | 227.6 | 213.8 | 74.42 | 88.18 | 54.31 | yes |
+| `grep -rE 'mispredicted\|ausgabenspezifisches' .` | 1863.7 | 733.3 | 25700.0 | 27700.5 | 296.1 | 299.4 | 29.62 | 27.21 | 2.946 | yes |
+| `grep -rE 'conditions\|separately' .` | 2294.7 | 803.0 | 26745.7 | 26952.0 | 308.1 | 327.2 | 180.1 | 179.8 | 118.0 | yes |
+| `grep -rE '[0-9]{4,}' .` | 2229.0 | 3072.0 | 18321.8 | 19699.7 | 2009.7 | 2033.3 | 2025.8 | 1676.8 | 2045.8 | yes |
+| `grep -rn '^#include' .` | 1809.1 | 942.9 | 17544.7 | 16706.7 | 236.6 | 263.2 | 244.7 | 237.6 | 218.3 | yes |
+| `grep -rE '^(import\|from) ' .` | 1219.0 | 861.7 | 17091.8 | 18141.6 | 328.9 | 319.1 | 315.7 | 342.1 | 273.9 | yes |
+| `grep -rin 'return [a-z_]*;$' Documentation` | 100.8 | 66.82 | 723.2 | 710.6 | 7.054 | 14.82 | 11.32 | 12.78 | 5.660 | yes |
+| `grep -rv e drivers/usb` | 41.03 | 54.19 | 132.2 | 107.4 | 14.25 | 18.24 | 17.91 | 18.49 | 21.17 | yes |
+| `grep -r '\(separately\).*\1' .` | 693.7 |  | 34553.4 | 35931.9 | 216.6 | 216.4 | 24.81 | 24.74 | 17.88 | yes |
+| `grep -n mispredicted include/linux/*.h` | 17.93 |  | | | | | | 1.407 | 0.994 | yes |
+| `grep -l separately include/linux/*.h` | 11.72 |  | | | | | | 2.152 | 1.924 | yes |
+| `grep -c qdbzzabsentterm include/linux/*.h` | 13.54 |  | | | | | | 0.674 | 0.614 | yes |
+| `grep -rl conditions . \| wc -l` | 846.0 |  | 12392.2 | 11985.0 | 156.1 | 156.0 | 58.03 | 57.75 | 38.80 | yes |
+| `grep -rc define . \| grep -v ':0$' \| wc -l` | 1559.5 |  | 14309.4 | 14923.1 | 342.4 | 364.1 | 342.3 | 352.0 | 371.8 | yes |
+| `find . -name '*.h' \| wc -l` | 91.84 |  | 28.57 | 24.95 | 27.61 | 27.26 | 23.83 | 28.22 | 13.47 | yes |
+| `find . -type f \| grep -c h` | 108.5 |  | 63.40 | 58.08 | 27.30 | 27.73 | 27.69 | 37.65 | 19.69 | yes |
+| `grep -rn define . \| head -n 5` | 5.840 |  | 15337.2 | 3.769 | 0.020 | 0.020 | 0.019 | 0.020 | 0.049 | order differs |
+| `grep -rn conditions . \| head -n 1` | 14.66 |  | 18581.5 | 6.938 | 0.054 | 0.031 | 0.027 | 0.031 | 0.093 | order differs |
+| `find . -type f \| head -n 3` | 4.070 |  | 28.01 | 0.092 | 0.096 | 0.061 | 0.058 | 0.056 | 0.074 | order differs |
+| `cat include/linux/*.h \| head -n 2` | 4.585 |  | 9.193 | 0.347 | 0.338 | 0.267 | 0.346 | 0.342 | 0.464 | yes |
+| `mkdir -p bench_out/a/b` | 3.057 |  | 0.043 | 0.026 | 0.012 | 0.016 | 0.015 | 0.017 | 2.112 | yes |
+| `touch bench_out/empty.txt` | 3.041 |  | 0.028 | 0.019 | 0.012 | 0.013 | 0.009 | 0.013 | 0.368 | yes |
+| `echo 'hello world' > bench_out/hello.txt` | 1.747 |  | 0.030 | 0.025 | 0.016 | 0.017 | 0.017 | 0.018 | 0.294 | yes |
+| `echo 'another line' >> bench_out/hello.txt` | 1.482 |  | 0.021 | 0.023 | 0.012 | 0.008 | 0.018 | 0.062 | 0.376 | yes |
+| `cp include/linux/kernfs.h bench_out/copy.txt` | 3.082 |  | 0.071 | 0.044 | 0.018 | 0.022 | 0.510 | 0.730 | 1.284 | yes |
+| `cp -r Documentation bench_out/dir_copy` | 280.7 |  | 36.54 | 55.14 | 34.99 | 38.25 | 476.3 | 413.4 | 800.1 | yes |
+| `cp -r include/linux bench_out/work` | 48.37 |  | 17.02 | 21.90 | 17.83 | 19.81 | 172.5 | 157.4 | 353.8 | yes |
+| `sed -i 's/define/QDBBENCHONE/g' bench_out/copy.txt` | 3.355 |  | 0.369 | 0.371 | 0.257 | 0.387 | 0.545 | 0.602 | 1.369 | yes |
+| `sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt` | 3.093 |  | 0.608 | 0.397 | 0.267 | 0.328 | 0.478 | 0.500 | 1.074 | yes |
+| `sed -i 's/define/QDBBENCHMANY/g' bench_out/work/*.h` | 103.9 |  | 154.4 | 187.8 | 133.3 | 141.4 | 212.9 | 241.7 | 402.8 | yes |
+| `sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.h` | 455.8 |  | | | | | | 2.724 | 5.558 | yes |
+| `sed -i 's/mispredicted/QDBBENCHFEW/g' bench_out/work/*.h` | 405.2 |  | | | | | | 2.975 | 5.212 | yes |
+| `cp include/linux/kernfs.h bench_out/same.txt` | 3.780 |  | | | | | | 0.027 | 0.048 | yes |
+| `cp include/linux/kernfs.h bench_out/same.txt` | 3.729 |  | | | | | | 0.027 | 0.048 | yes |
+| `cat include/linux/kernfs.h > bench_out/same.txt` | 3.186 |  | | | | | | 0.033 | 0.034 | yes |
+| `grep -rc QDBBENCHMANY bench_out` | 81.05 |  | 907.6 | 911.1 | 14.07 | 17.24 | 7.128 | 11.97 | 10.22 | yes |
+| `grep -rl QDBBENCHMANY .` | 649.4 |  | 18985.7 | 19134.6 | 224.7 | 241.6 | 3.630 | 2.154 | 6.574 | yes |
+| `grep -rl QDBBENCHONE .` | 973.2 |  | 18818.5 | 18986.5 | 231.2 | 239.5 | 0.603 | 0.783 | 0.425 | yes |
+| `mv bench_out/dir_copy bench_out/dir_moved` | 2.591 |  | 0.036 | 0.048 | 0.023 | 0.026 | 0.035 | 0.028 | 0.331 | yes |
+| `mv bench_out/hello.txt bench_out/a/b` | 2.671 |  | 0.046 | 0.046 | 0.020 | 0.020 | 0.015 | 0.018 | 0.296 | yes |
+| `ls -R bench_out/a` | 2.399 |  | 0.026 | 0.035 | 0.014 | 0.016 | 0.019 | 0.021 | 0.016 | yes |
+| `rm bench_out/a/b/hello.txt` | 2.136 |  | 0.030 | 0.035 | 0.008 | 0.013 | 0.011 | 0.012 | 0.309 | yes |
+| `rmdir bench_out/a/b` | 2.563 |  | 0.035 | 0.038 | 0.016 | 0.009 | 0.015 | 0.010 | 0.285 | yes |
+| `rm -r bench_out/dir_moved` | 192.3 |  | 10.95 | 9.650 | 5.616 | 6.801 | 8.592 | 6.623 | 13.21 | yes |
+| `rm -rf bench_out` | 239.0 |  | 3.379 | 2.941 | 1.655 | 2.071 | 3.696 | 4.601 | 31.98 | yes |
 
 ## Peak memory per command
 
-| Command | Output | Stage 1 | Part 2 | Part 3, no index | Part 4, index off | Part 4, index on | Stage 3 part 1 | s3p2 |
+| Command | Output | Stage 1 | Part 2 | Part 3, no index | Part 4, index off | Part 4, index on | Stage 3 part 1 | s3p4-cap |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `ls` | 212 B | 1617 B | 1457 B | 1457 B | 1457 B | 1457 B | 1457 B | 1457 B |
 | `ls -a` | 330 B | 2841 B | 2681 B | 2681 B | 2681 B | 2681 B | 2681 B | 2681 B |
@@ -293,12 +293,12 @@ Index work per command that changes data:
 | `wc include/linux/kernfs.h` | 41 B | 946 B | 1002 B | 1002 B | 1002 B | 1002 B | 1002 B | 1002 B |
 | `wc -l include/linux/*.h` | 49.6 KB | 237.0 KB | 237.0 KB | 237.0 KB | 237.0 KB | 237.0 KB | 237.0 KB | 237.0 KB |
 | `cat include/linux/*.h \| wc -l` | 7 B | 12.4 MB | 237.2 KB | 237.2 KB | 237.2 KB | 237.2 KB | 237.2 KB | 237.2 KB |
-| `cat include/linux/kernfs.h \| head -n 50 \| tail -n 10` | 447 B | 23.1 KB | 4720 B | 4720 B | 4720 B | 4720 B | 4720 B | 4720 B |
+| `cat include/linux/kernfs.h \| head -n 50 \| tail -n 10` | 447 B | 23.1 KB | 4720 B | 4720 B | 4720 B | 4720 B | 4720 B | 4944 B |
 | `grep -c define include/linux/kernfs.h` | 2 B | 5500 B | 5284 B | 9342 B | 9470 B | 9470 B | 9470 B | 9470 B |
 | `grep -n define include/linux/kernfs.h` | 374 B | 5916 B | 5700 B | 9342 B | 9470 B | 9470 B | 9470 B | 9470 B |
 | `sed 's/define/XX/g' include/linux/kernfs.h` | 19.9 KB | 27.1 KB | 27.0 KB | 27.0 KB | 27.0 KB | 27.0 KB | 27.0 KB | 27.0 KB |
 | `sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' include/linux/kernfs.h` | 19.9 KB | 26.6 KB | 26.4 KB | 26.6 KB | 26.6 KB | 26.6 KB | 26.6 KB | 26.6 KB |
-| `cat include/linux/kernfs.h \| sed 's/^/> /' \| wc -c` | 6 B | 45.1 KB | 25.5 KB | 25.8 KB | 25.8 KB | 25.8 KB | 25.8 KB | 25.8 KB |
+| `cat include/linux/kernfs.h \| sed 's/^/> /' \| wc -c` | 6 B | 45.1 KB | 25.5 KB | 25.8 KB | 25.8 KB | 25.8 KB | 25.8 KB | 26.0 KB |
 | `grep -rn qdbzzabsentterm .` | 0 B | 12.2 KB | 12.0 KB | 19.6 KB | 20.3 KB | 20.3 KB | 20.3 KB | 20.3 KB |
 | `grep -rl qdbzzabsentterm .` | 0 B | 12.2 KB | 12.0 KB | 19.6 KB | 20.3 KB | 20.3 KB | 20.3 KB | 20.3 KB |
 | `grep -rn ausgabenspezifisches .` | 116 B | 16.0 KB | 15.8 KB | 26.1 KB | 27.8 KB | 27.8 KB | 27.8 KB | 27.8 KB |
@@ -312,47 +312,47 @@ Index work per command that changes data:
 | `grep -rn define .` | 821.1 MB | 830.5 MB | 31.8 KB | 26.8 KB | 26.9 KB | 26.9 KB | 26.9 KB | 26.9 KB |
 | `grep -rl define .` | 1867.6 KB | 1972.3 KB | 6624 B | 9290 B | 9418 B | 9418 B | 9418 B | 9418 B |
 | `grep -rc separately .` | 3591.0 KB | 3941.1 KB | 40.0 KB | 19.9 KB | 20.2 KB | 361.3 KB | 361.3 KB | 297.5 KB |
-| `grep -rin MISPREDICTED .` | 135.7 KB | 165.5 KB | 19.4 KB | 16.4 KB | 17.1 KB | 90.8 KB | 90.8 KB | 51.9 KB |
+| `grep -rin MISPREDICTED .` | 135.7 KB | 165.5 KB | 19.4 KB | 16.4 KB | 17.1 KB | 90.8 KB | 90.8 KB | 51.8 KB |
 | `grep -ri separately .` | 100.6 KB | 176.7 KB | 10.5 KB | 14.2 KB | 14.5 KB | 343.3 KB | 343.3 KB | 279.5 KB |
 | `grep -rn separately Documentation` | 19.9 KB | 28.7 KB | 9151 B | 14.2 KB | 14.5 KB | 35.4 KB | 35.4 KB | 43.8 KB |
 | `grep -rl conditions Documentation` | 9541 B | 27.3 KB | 8675 B | 14.2 KB | 14.5 KB | 133.0 KB | 133.0 KB | 189.4 KB |
 | `grep -rF 'separately' .` | 99.7 KB | 169.6 KB | 3480 B | 2284 B | 2540 B | 343.3 KB | 343.3 KB | 279.5 KB |
-| `grep -rE 'atomic_[a-z]+\(' .` | 1294.9 KB | 2040.2 KB | 16.5 KB | 23.0 KB | 23.2 KB | 945.1 KB | 945.1 KB | 1037.8 KB |
+| `grep -rE 'atomic_[a-z]+\(' .` | 1294.9 KB | 2040.2 KB | 16.5 KB | 23.0 KB | 23.2 KB | 945.1 KB | 945.1 KB | 1037.7 KB |
 | `grep -rE 'mispredicted\|ausgabenspezifisches' .` | 109.2 KB | 179.1 KB | 33.0 KB | 41.2 KB | 43.1 KB | 62.6 KB | 62.6 KB | 53.6 KB |
 | `grep -rE 'conditions\|separately' .` | 1427.8 KB | 2571.4 KB | 20.3 KB | 26.8 KB | 27.4 KB | 188.8 KB | 188.8 KB | 195.7 KB |
 | `grep -rE '[0-9]{4,}' .` | 467.5 MB | 729.8 MB | 27.1 KB | 28.6 KB | 28.6 KB | 28.6 KB | 28.6 KB | 28.6 KB |
 | `grep -rn '^#include' .` | 24.9 MB | 33.6 MB | 24.5 KB | 29.4 KB | 29.6 KB | 29.6 KB | 29.6 KB | 29.6 KB |
 | `grep -rE '^(import\|from) ' .` | 116.4 KB | 144.7 KB | 11.5 KB | 20.9 KB | 21.0 KB | 21.0 KB | 21.0 KB | 21.0 KB |
-| `grep -rin 'return [a-z_]*;$' Documentation` | 24.1 KB | 44.1 KB | 12.5 KB | 17.5 KB | 17.5 KB | 17.5 KB | 17.5 KB | 732.2 KB |
+| `grep -rin 'return [a-z_]*;$' Documentation` | 24.1 KB | 44.1 KB | 12.5 KB | 17.5 KB | 17.5 KB | 17.5 KB | 17.5 KB | 729.5 KB |
 | `grep -rv e drivers/usb` | 9638.5 KB | 9964.0 KB | 21.8 KB | 21.9 KB | 21.9 KB | 21.9 KB | 21.9 KB | 21.9 KB |
 | `grep -r '\(separately\).*\1' .` | 188 B | 6770 B | 6376 B | 9274 B | 9530 B | 346.3 KB | 346.3 KB | 282.5 KB |
 | `grep -n mispredicted include/linux/*.h` | 0 B | | | | | | 237.3 KB | 237.3 KB |
 | `grep -l separately include/linux/*.h` | 458 B | | | | | | 237.3 KB | 237.3 KB |
 | `grep -c qdbzzabsentterm include/linux/*.h` | 39.5 KB | | | | | | 237.3 KB | 237.3 KB |
-| `grep -rl conditions . \| wc -l` | 5 B | 648.5 KB | 10.2 KB | 14.9 KB | 15.2 KB | 133.7 KB | 133.7 KB | 190.2 KB |
-| `grep -rc define . \| grep -v ':0$' \| wc -l` | 6 B | 6164.4 KB | 25.4 KB | 25.8 KB | 26.0 KB | 26.0 KB | 26.0 KB | 26.0 KB |
-| `find . -name '*.h' \| wc -l` | 6 B | 1313.0 KB | 23.4 KB | 23.4 KB | 23.4 KB | 23.4 KB | 23.4 KB | 23.4 KB |
-| `find . -type f \| grep -c h` | 6 B | 3935.0 KB | 34.9 KB | 35.8 KB | 35.8 KB | 35.8 KB | 35.8 KB | 35.8 KB |
-| `grep -rn define . \| head -n 5` | 473 B | 830.5 MB | 6667 B | 10.2 KB | 10.3 KB | 10.3 KB | 10.3 KB | 10.3 KB |
-| `grep -rn conditions . \| head -n 1` | 107 B | 2565.4 KB | 9150 B | 15.0 KB | 15.3 KB | 15.3 KB | 15.3 KB | 15.3 KB |
-| `find . -type f \| head -n 3` | 47 B | 3934.6 KB | 32.6 KB | 32.6 KB | 32.6 KB | 32.6 KB | 32.6 KB | 32.6 KB |
+| `grep -rl conditions . \| wc -l` | 5 B | 648.5 KB | 10.2 KB | 14.9 KB | 15.2 KB | 133.7 KB | 133.7 KB | 190.3 KB |
+| `grep -rc define . \| grep -v ':0$' \| wc -l` | 6 B | 6164.4 KB | 25.4 KB | 25.8 KB | 26.0 KB | 26.0 KB | 26.0 KB | 26.2 KB |
+| `find . -name '*.h' \| wc -l` | 6 B | 1313.0 KB | 23.4 KB | 23.4 KB | 23.4 KB | 23.4 KB | 23.4 KB | 23.6 KB |
+| `find . -type f \| grep -c h` | 6 B | 3935.0 KB | 34.9 KB | 35.8 KB | 35.8 KB | 35.8 KB | 35.8 KB | 35.9 KB |
+| `grep -rn define . \| head -n 5` | 473 B | 830.5 MB | 6667 B | 10.2 KB | 10.3 KB | 10.3 KB | 10.3 KB | 10.4 KB |
+| `grep -rn conditions . \| head -n 1` | 107 B | 2565.4 KB | 9150 B | 15.0 KB | 15.3 KB | 15.3 KB | 15.3 KB | 15.4 KB |
+| `find . -type f \| head -n 3` | 47 B | 3934.6 KB | 32.6 KB | 32.6 KB | 32.6 KB | 32.6 KB | 32.6 KB | 32.8 KB |
 | `cat include/linux/*.h \| head -n 2` | 42 B | 12.4 MB | 237.3 KB | 237.3 KB | 237.3 KB | 237.3 KB | 237.3 KB | 237.3 KB |
 | `mkdir -p bench_out/a/b` | 0 B | 1619 B | 1459 B | 1459 B | 1459 B | 1459 B | 1459 B | 1747 B |
 | `touch bench_out/empty.txt` | 0 B | 883 B | 979 B | 979 B | 979 B | 979 B | 979 B | 979 B |
-| `echo 'hello world' > bench_out/hello.txt` | 0 B | 1207 B | 1242 B | 1242 B | 1242 B | 1242 B | 1242 B | 1244 B |
+| `echo 'hello world' > bench_out/hello.txt` | 0 B | 1207 B | 1242 B | 1242 B | 1242 B | 1242 B | 1242 B | 1268 B |
 | `echo 'another line' >> bench_out/hello.txt` | 0 B | 1150 B | 1246 B | 1246 B | 1246 B | 1246 B | 1246 B | 1246 B |
 | `cp include/linux/kernfs.h bench_out/copy.txt` | 0 B | 21.0 KB | 20.8 KB | 20.8 KB | 20.8 KB | 26.0 KB | 26.0 KB | 283.2 KB |
-| `cp -r Documentation bench_out/dir_copy` | 0 B | 48.1 MB | 48.1 MB | 48.1 MB | 48.1 MB | 59.4 MB | 59.4 MB | 27.1 MB |
-| `cp -r include/linux bench_out/work` | 0 B | 19.1 MB | 19.1 MB | 19.1 MB | 19.1 MB | 22.2 MB | 22.2 MB | 5626.6 KB |
+| `cp -r Documentation bench_out/dir_copy` | 0 B | 48.1 MB | 48.1 MB | 48.1 MB | 48.1 MB | 59.4 MB | 59.4 MB | 21.7 MB |
+| `cp -r include/linux bench_out/work` | 0 B | 19.1 MB | 19.1 MB | 19.1 MB | 19.1 MB | 22.2 MB | 22.2 MB | 13.6 MB |
 | `sed -i 's/define/QDBBENCHONE/g' bench_out/copy.txt` | 0 B | 27.3 KB | 27.2 KB | 27.2 KB | 27.2 KB | 27.6 KB | 28.0 KB | 47.8 KB |
 | `sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt` | 0 B | 24.9 KB | 24.7 KB | 24.8 KB | 24.8 KB | 25.8 KB | 28.5 KB | 47.6 KB |
-| `sed -i 's/define/QDBBENCHMANY/g' bench_out/work/*.h` | 0 B | 4911.5 KB | 4911.3 KB | 4911.4 KB | 4911.4 KB | 6764.6 KB | 6737.5 KB | 2546.0 KB |
+| `sed -i 's/define/QDBBENCHMANY/g' bench_out/work/*.h` | 0 B | 4911.5 KB | 4911.3 KB | 4911.4 KB | 4911.4 KB | 6764.6 KB | 6737.5 KB | 6254.3 KB |
 | `sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.h` | 0 B | | | | | | 250.1 KB | 250.1 KB |
 | `sed -i 's/mispredicted/QDBBENCHFEW/g' bench_out/work/*.h` | 0 B | | | | | | 248.6 KB | 248.6 KB |
 | `cp include/linux/kernfs.h bench_out/same.txt` | 0 B | | | | | | 20.8 KB | 20.8 KB |
 | `cp include/linux/kernfs.h bench_out/same.txt` | 0 B | | | | | | 20.8 KB | 20.8 KB |
 | `cat include/linux/kernfs.h > bench_out/same.txt` | 0 B | | | | | | 21.1 KB | 21.0 KB |
-| `grep -rc QDBBENCHMANY bench_out` | 687.0 KB | 1189.3 KB | 28.1 KB | 28.7 KB | 29.2 KB | 191.9 KB | 191.9 KB | 205.9 KB |
+| `grep -rc QDBBENCHMANY bench_out` | 687.0 KB | 1189.3 KB | 28.1 KB | 28.7 KB | 29.2 KB | 191.9 KB | 191.9 KB | 206.0 KB |
 | `grep -rl QDBBENCHMANY .` | 39.7 KB | 65.9 KB | 10.4 KB | 16.4 KB | 17.1 KB | 164.6 KB | 164.6 KB | 178.7 KB |
 | `grep -rl QDBBENCHONE .` | 21 B | 10.0 KB | 9829 B | 15.3 KB | 16.0 KB | 16.0 KB | 16.0 KB | 16.0 KB |
 | `mv bench_out/dir_copy bench_out/dir_moved` | 0 B | 1095 B | 1191 B | 1191 B | 1191 B | 1191 B | 1191 B | 1191 B |

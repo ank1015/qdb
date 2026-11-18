@@ -26,6 +26,13 @@ Runs bash command lines against a tree of text files.
                    (never an earlier line while keeping a later one)
   --piece BYTES    cut file content into pieces of at most BYTES (default
                    65536); applies to what is written from now on
+  --compress       store what is written from now on compressed (LZ4, a
+                   piece at a time); what is there already is read
+                   whichever way it was stored
+  --index WHEN     `write` (the default) indexes content as it is written;
+                   `later` indexes it in bulk, once 16 MB are waiting, when
+                   a data file is finished and when the database is closed;
+                   until then searches read what waits
   --no-index       answer every search by scanning, without the search index;
                    output is the same either way, only speed differs
   --check          check every checksum and every rule the database files
@@ -70,6 +77,14 @@ fn run() -> Result<i32, String> {
             "--segment" => cfg.segment = value("--segment")?.parse().ok().filter(|n| *n >= 4096).ok_or("--segment needs a number of bytes, at least 4096")?,
             "--checkpoint" => cfg.checkpoint = value("--checkpoint")?.parse().map_err(|_| "--checkpoint needs a number of bytes")?,
             "--no-index" => cfg.index = false,
+            "--compress" => cfg.compress = true,
+            "--index" => {
+                cfg.index_later = match value("--index")?.as_str() {
+                    "write" => false,
+                    "later" => true,
+                    other => return Err(format!("--index: {} is not `write` or `later`", other)),
+                }
+            }
             "--check" => check = true,
             "--stats" => stats = true,
             "--compact" => compact = true,
@@ -211,7 +226,7 @@ fn main() -> ExitCode {
         }
     }));
     // Deep folder trees and long lines recurse; give the work a large stack.
-    let worker = std::thread::Builder::new().stack_size(512 << 20).spawn(run).expect("spawn");
+    let worker = std::thread::Builder::new().stack_size(64 << 20).spawn(run).expect("spawn");
     match worker.join() {
         Ok(Ok(code)) => ExitCode::from(code as u8),
         Ok(Err(msg)) => {

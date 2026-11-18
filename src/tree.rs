@@ -246,11 +246,25 @@ pub struct Config {
     /// Output on its way to a file is held in memory up to this many
     /// bytes; more than that waits in a scratch file.
     pub spool: usize,
+    /// Move content out of data files that are mostly unused, as writes
+    /// go on. Off only to measure what it costs.
+    pub upkeep: bool,
+    /// Store each piece compressed (LZ4) when that makes it smaller.
+    /// Applies to what is written from now on; what is there is read
+    /// whichever way it was stored.
+    pub compress: bool,
+    /// Do not index content as it is written, but later and in bulk:
+    /// once this many megabytes are waiting, when a data file is
+    /// finished, and at close. Until then searches read what waits.
+    pub index_later: bool,
 }
+
+/// With `index_later`: how much text may wait to be indexed.
+const INDEX_WAIT: u64 = 16 << 20;
 
 impl Default for Config {
     fn default() -> Config {
-        Config { piece: 64 * 1024, segment: 128 << 20, sync: SyncMode::Always, batch_lines: 64, batch_bytes: 4 << 20, index: true, checkpoint: 1 << 20, spool: 8 << 20 }
+        Config { piece: 64 * 1024, segment: 128 << 20, sync: SyncMode::Always, batch_lines: 64, batch_bytes: 4 << 20, index: true, checkpoint: 1 << 20, spool: 8 << 20, upkeep: true, compress: false, index_later: false }
     }
 }
 
@@ -343,6 +357,9 @@ pub struct IoStats {
     pub tree_bytes: u64,
     pub checkpoints: u64,
     pub commits: u64,
+    /// Of `content_bytes`: content written again to free the space
+    /// around it.
+    pub moved_bytes: u64,
 }
 
 impl IoStats {
@@ -401,6 +418,34 @@ pub struct Db {
     /// Work done by indexes that are no longer in memory.
     work: IndexWork,
     io: IoStats,
+    /// Upkeep under way, done a step at a time as command lines end: an
+    /// index file being written, the tree being saved, and the data file
+    /// whose content is being moved out so that it can be removed (and
+    /// the position reached in it).
+    idx_job: Option<IdxJob>,
+    ckp_job: Option<CkpJob>,
+    clean: Option<(u32, u32)>,
+    /// Bytes of content that may be moved now: earned by writing.
+    clean_credit: u64,
+    /// Content and log bytes written when the last command line ended.
+    mark: u64,
+    /// Bytes of text written and not yet indexed (`index_later`).
+    waiting: u64,
+}
+
+struct IdxJob {
+    seg: u32,
+    w: PackedWriter,
+}
+
+struct CkpJob {
+    w: disk::CheckpointWriter,
+    /// Nodes below this id are written.
+    cursor: NodeId,
+    /// The data file the log went on in when the save began.
+    seg: u32,
+    /// `log_since` when the save began.
+    log_before: u64,
 }
 
 impl Default for Db {
@@ -445,6 +490,63 @@ impl Clone for Db {
 /// Content must be valid UTF-8 with no NUL bytes.
 pub fn is_valid_text(bytes: &[u8]) -> bool {
     !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok()
+}
+
+/// `is_valid_text` for text that arrives in parts.
+pub struct TextCheck {
+    valid: bool,
+    /// The start of a character whose other bytes have not arrived.
+    carry: Vec<u8>,
+}
+
+impl Default for TextCheck {
+    fn default() -> TextCheck {
+        TextCheck { valid: true, carry: Vec::new() }
+    }
+}
+
+impl TextCheck {
+    /// The next part. False once the text cannot be valid.
+    pub fn feed(&mut self, mut data: &[u8]) -> bool {
+        if !self.valid {
+            return false;
+        }
+        if memchr::memchr(0, data).is_some() {
+            self.valid = false;
+            return false;
+        }
+        if !self.carry.is_empty() {
+            let whole = match self.carry[0] {
+                0xC2..=0xDF => 2,
+                0xE0..=0xEF => 3,
+                _ => 4,
+            };
+            let take = (whole - self.carry.len()).min(data.len());
+            self.carry.extend_from_slice(&data[..take]);
+            data = &data[take..];
+            match std::str::from_utf8(&self.carry) {
+                Ok(_) => self.carry.clear(),
+                Err(e) if e.error_len().is_none() => return true,
+                Err(_) => {
+                    self.valid = false;
+                    return false;
+                }
+            }
+        }
+        if let Err(e) = std::str::from_utf8(data) {
+            if e.error_len().is_none() {
+                self.carry.extend_from_slice(&data[e.valid_up_to()..]);
+            } else {
+                self.valid = false;
+            }
+        }
+        self.valid
+    }
+
+    /// The text has ended. True if all of it was valid text.
+    pub fn finish(&self) -> bool {
+        self.valid && self.carry.is_empty()
+    }
 }
 
 /// Names follow POSIX: anything except `/` and NUL, and not empty.
@@ -528,6 +630,12 @@ impl Db {
             failed: None,
             work: IndexWork::default(),
             io: IoStats::default(),
+            idx_job: None,
+            ckp_job: None,
+            clean: None,
+            clean_credit: 0,
+            mark: 0,
+            waiting: 0,
         }
     }
 
@@ -688,7 +796,12 @@ impl Db {
                 }
                 at = rec.end;
             }
-            let last_file = next.is_none();
+            // A data file is synced before the next is made. If it names
+            // a next one that is not there (or is not whole), the power
+            // went in between, and this file's end may not have been
+            // synced either: it is looked at like a last file.
+            let next_missing = next.is_some_and(|n| Segment::open(&*db.vfs, n, db.cfg.segment).is_err());
+            let last_file = next.is_none() || next_missing;
             let mut limit = at;
             if last_file {
                 // What was written after the last sync we know of may be
@@ -700,6 +813,10 @@ impl Db {
                         break;
                     }
                 }
+            }
+            if next_missing && limit < at {
+                // Not all of it is there: the log ends in this file.
+                next = None;
             }
             let (mut good_end, mut good_ords) = (start, if cur == log_seg { log_ords } else { 0 });
             for (end, ords_then, ops) in &lines {
@@ -731,6 +848,12 @@ impl Db {
             if good_end < seg.end {
                 report.discarded = seg.end - good_end;
                 seg.truncate(good_end).map_err(io)?;
+                seg.sync().map_err(io)?;
+            } else if report.replayed > 0 {
+                // The log that was read may never have been synced. What
+                // recovery writes from here on (an index built again) is
+                // made from it, so it must not be able to go away in a
+                // second power cut.
                 seg.sync().map_err(io)?;
             }
             seg.sealed = false;
@@ -905,6 +1028,8 @@ impl Db {
     /// written too. Returns the data files it did this for and the bytes
     /// of text read.
     fn index_backlog(&mut self) -> io::Result<(Vec<u32>, u64)> {
+        self.idx_finish()?;
+        self.waiting = 0;
         let behind: Vec<u32> = self.segs.iter().flatten().filter(|s| (s.indexed as usize) < s.owners.len() || (s.sealed && s.dynamic.is_some())).map(|s| s.id).collect();
         for seg in self.segs.iter_mut().flatten() {
             if seg.dynamic.is_none() && (!seg.sealed || behind.contains(&seg.id)) {
@@ -921,7 +1046,12 @@ impl Db {
                 todo.extend(t.pieces.iter().filter(|p| p.ord >= self.segs[p.seg as usize].as_ref().unwrap().indexed));
             }
         }
+        // And those the command line now running has taken out of files:
+        // until its record is in the log they are still in use as far as
+        // the disk goes, and an index file must have them.
+        todo.extend(self.retired.iter().filter(|p| self.segs[p.seg as usize].as_ref().is_some_and(|s| p.ord >= s.indexed && s.owners[p.ord as usize] != DEAD)).cloned());
         todo.sort_unstable_by_key(|p| (p.seg, p.ord));
+        todo.dedup_by_key(|p| (p.seg, p.ord));
         let mut bytes = 0u64;
         let mut at = 0;
         for &id in &behind {
@@ -954,23 +1084,21 @@ impl Db {
     /// part in memory is then dropped, or started afresh if the data file
     /// is still being written.
     fn save_index(&mut self, id: u32) -> io::Result<()> {
+        self.idx_finish()?;
+        self.idx_start(id)?;
+        self.idx_finish()
+    }
+
+    /// Begin writing the index file of a data file, if what is indexed
+    /// in memory has anything to add to it. `idx_step` does the writing.
+    fn idx_start(&mut self, id: u32) -> io::Result<()> {
+        debug_assert!(self.idx_job.is_none());
         let seg = self.segs[id as usize].as_mut().unwrap();
         let fresh = seg.dynamic.as_ref().is_some_and(|d| d.next_doc() - 1 > seg.packed.as_ref().map_or(0, |p| p.ndocs));
         if fresh {
-            let (old, new) = (seg.packed.as_ref(), seg.dynamic.as_ref());
-            let mut w = PackedWriter::new(&*self.vfs, id, old, new)?;
-            while !w.step(old, new, usize::MAX)? {}
-            w.finish(&*self.vfs, seg.indexed)?;
-            self.io.syncs += 1;
-            self.io.dir_syncs += 1;
-            let packed = Packed::open(&*self.vfs, id).map_err(io_err)?.ok_or_else(|| io_err("the index file just written is not there".into()))?;
-            let sizes = packed.sizes();
-            self.io.index_bytes += sizes.0 + sizes.1 + sizes.2;
-            self.work.add(&seg.dynamic.as_ref().unwrap().work());
-            seg.packed = Some(packed);
-            seg.dynamic = None;
-        }
-        if seg.sealed {
+            let w = PackedWriter::new(&*self.vfs, id, seg.packed.as_ref(), seg.dynamic.as_ref())?;
+            self.idx_job = Some(IdxJob { seg: id, w });
+        } else if seg.sealed {
             seg.dynamic = None;
         } else if seg.dynamic.is_none() {
             seg.dynamic = Some(Index::starting_after(seg.indexed));
@@ -978,9 +1106,71 @@ impl Db {
         Ok(())
     }
 
+    /// Write about `budget` more bytes of the index file under way. When
+    /// it is whole it replaces the old one, and the part of the index
+    /// that was in memory is dropped, or started afresh if the data file
+    /// is still being written.
+    fn idx_step(&mut self, budget: usize) -> io::Result<()> {
+        let Some(mut job) = self.idx_job.take() else { return Ok(()) };
+        let id = job.seg;
+        let Some(seg) = self.segs[id as usize].as_mut() else {
+            // The data file is gone, and its index with it.
+            drop(job);
+            let _ = self.vfs.remove(&disk::idx_tmp(id));
+            return Ok(());
+        };
+        if !job.w.step(seg.packed.as_ref(), seg.dynamic.as_ref(), budget)? {
+            self.idx_job = Some(job);
+            return Ok(());
+        }
+        // The lists no longer name pieces that files stopped using while
+        // they were being written. If the log of that were lost in a
+        // power cut, those pieces would be in use again and missing from
+        // the index: so the log is synced before the index file is given
+        // its name.
+        self.sync_log()?;
+        let seg = self.segs[id as usize].as_mut().unwrap();
+        job.w.finish(&*self.vfs, seg.indexed)?;
+        self.io.syncs += 1;
+        self.io.dir_syncs += 1;
+        let packed = Packed::open(&*self.vfs, id).map_err(io_err)?.ok_or_else(|| io_err("the index file just written is not there".into()))?;
+        let sizes = packed.sizes();
+        self.io.index_bytes += sizes.0 + sizes.1 + sizes.2;
+        self.work.add(&seg.dynamic.as_ref().unwrap().work());
+        seg.packed = Some(packed);
+        seg.dynamic = if seg.sealed { None } else { Some(Index::starting_after(seg.indexed)) };
+        Ok(())
+    }
+
+    /// Sync what has been logged, if anything has been since the last
+    /// sync.
+    fn sync_log(&mut self) -> io::Result<()> {
+        if self.volatile {
+            return Ok(());
+        }
+        let active = self.segs[self.active as usize].as_mut().unwrap();
+        if active.end > self.synced {
+            active.sync()?;
+            self.io.syncs += 1;
+            self.synced = active.end;
+            self.unsynced_lines = 0;
+        }
+        Ok(())
+    }
+
+    /// Write the index file under way to its end.
+    fn idx_finish(&mut self) -> io::Result<()> {
+        while self.idx_job.is_some() {
+            self.idx_step(usize::MAX)?;
+        }
+        Ok(())
+    }
+
     /// Save the tree: write a new checkpoint, make it the current one,
     /// and remove what it makes unnecessary.
     fn checkpoint(&mut self) -> io::Result<()> {
+        // A save under way is given up: this one is newer.
+        self.ckp_job = None;
         // The checkpoint says "the log goes on from here", so everything
         // before here has to be on disk first.
         let active = self.segs[self.active as usize].as_mut().unwrap();
@@ -1018,6 +1208,174 @@ impl Db {
         self.drop_empty()
     }
 
+    /// Begin saving the tree a step at a time. The checkpoint names the
+    /// place the log has reached now; the nodes are written over the
+    /// command lines that follow, each as it is when its turn comes.
+    /// Applying the log from the named place to such a tree gives the
+    /// right tree, because applying a change twice does nothing.
+    fn ckp_start(&mut self) -> io::Result<()> {
+        let active = self.segs[self.active as usize].as_ref().unwrap();
+        let mut w = disk::CheckpointWriter::new(&*self.vfs, self.ckp + 1)?;
+        let e = w.entry();
+        disk::put_u64(e, 0);
+        disk::put_u64(e, self.seq);
+        disk::put_u64(e, self.active as u64);
+        disk::put_u64(e, active.end);
+        disk::put_u64(e, active.owners.len() as u64);
+        disk::put_u64(e, self.next_id);
+        w.end_block()?;
+        self.ckp_job = Some(CkpJob { w, cursor: 0, seg: self.active, log_before: self.log_since });
+        Ok(())
+    }
+
+    /// Write about `budget` more bytes of the tree being saved. After
+    /// the last node, everything logged so far is synced (the saved tree
+    /// may hold any of it) and the checkpoint becomes the current one.
+    fn ckp_step(&mut self, budget: u64) -> io::Result<()> {
+        let Some(mut job) = self.ckp_job.take() else { return Ok(()) };
+        let start = job.w.bytes();
+        loop {
+            let ids = self.nodes.ids_from(job.cursor, 64);
+            if ids.is_empty() {
+                break;
+            }
+            for id in ids {
+                encode_node(&self.nodes[id], job.w.entry());
+                job.w.entry_done()?;
+                job.cursor = id + 1;
+            }
+            if job.w.bytes() - start >= budget {
+                self.ckp_job = Some(job);
+                return Ok(());
+            }
+        }
+        let active = self.segs[self.active as usize].as_mut().unwrap();
+        if active.end > self.synced {
+            active.sync()?;
+            self.io.syncs += 1;
+            self.synced = active.end;
+            self.unsynced_lines = 0;
+        }
+        let number = job.w.number;
+        let size = job.w.finish(&*self.vfs)?;
+        self.io.syncs += 2;
+        self.io.dir_syncs += 2;
+        self.io.tree_bytes += size + 20;
+        self.io.checkpoints += 1;
+        if self.ckp != 0 {
+            self.vfs.remove(&disk::ckp_name(self.ckp))?;
+        }
+        self.ckp = number;
+        self.ckp_seg = job.seg;
+        self.ckp_size = size;
+        self.log_since = self.log_since.saturating_sub(job.log_before);
+        self.drop_empty()
+    }
+
+    /// The steps of upkeep that the command line just ended pays for:
+    /// `wrote` is how many bytes it wrote.
+    fn upkeep(&mut self, wrote: u64) -> io::Result<()> {
+        if self.idx_job.is_some() {
+            self.idx_step(32 * 1024 + wrote as usize)?;
+        }
+        if self.waiting > INDEX_WAIT && self.cfg.index {
+            self.index_backlog()?;
+        }
+        if self.volatile {
+            return Ok(());
+        }
+        if self.ckp_job.is_none() {
+            let active = self.active;
+            let due = self.log_since > self.cfg.checkpoint.max(2 * self.ckp_size)
+                // A data file that holds nothing can be removed once a
+                // saved tree is newer than the last use of it.
+                || (self.log_since > 0 && self.segs.iter().flatten().any(|s| s.id < active && s.sealed && s.live_pieces == 0));
+            if due {
+                self.ckp_start()?;
+            }
+        }
+        self.ckp_step(8 * 1024 + wrote / 2)
+    }
+
+    /// Move content out of the data file that wastes the most space, as
+    /// much as the writing of this command line has earned. The moves go
+    /// into the log with the command line's own changes.
+    fn clean_step(&mut self) {
+        let wrote = self.io.content_bytes + self.io.log_bytes - self.mark + self.ops.len() as u64;
+        let slack = self.cfg.segment / 32;
+        let (mut live, mut dead) = (0u64, 0u64);
+        for s in self.segs.iter().flatten().filter(|s| s.live_pieces > 0 || !s.sealed) {
+            live += s.live_bytes;
+            dead += s.end - SEG_HEADER - s.live_bytes;
+        }
+        if dead <= live * 3 / 10 + slack {
+            self.clean = None;
+            self.clean_credit = 0;
+            return;
+        }
+        let factor = if dead > live * 6 / 10 + slack { 16 } else { 4 };
+        self.clean_credit = (self.clean_credit + wrote * factor).min(64 << 20);
+        if self.clean.is_none() {
+            // The data file with the largest share of unused bytes. If
+            // that is the one being written, it is finished here and a
+            // new one started, so that it can be emptied.
+            let share = |s: &Segment| (s.end - SEG_HEADER - s.live_bytes) as f64 / (s.end - SEG_HEADER).max(1) as f64;
+            let active = self.active;
+            let best = self.segs.iter().flatten().filter(|s| s.id != active && s.live_pieces > 0).map(|s| (share(s), s.id)).fold((0.0, 0), |a, b| if b.0 > a.0 { b } else { a });
+            let own = self.seg(active);
+            let own_dead = own.end - SEG_HEADER - own.live_bytes;
+            let victim = if own_dead > slack && share(own) > best.0 {
+                if let Err(e) = self.roll(0) {
+                    self.fail(e);
+                    return;
+                }
+                active
+            } else {
+                best.1
+            };
+            if victim == 0 {
+                return;
+            }
+            self.clean = Some((victim, 0));
+        }
+        while let Some((id, mut ord)) = self.clean {
+            let Some(seg) = self.segs[id as usize].as_ref() else {
+                self.clean = None;
+                break;
+            };
+            while (ord as usize) < seg.owners.len() && seg.owners[ord as usize] == DEAD {
+                ord += 1;
+            }
+            if ord as usize >= seg.owners.len() {
+                self.clean = None;
+                break;
+            }
+            let owner = seg.owners[ord as usize];
+            let found = match self.nodes.get(owner) {
+                Some(Node { kind: NodeKind::File(t), .. }) => t.pieces.iter().position(|q| q.seg == id && q.ord == ord).map(|i| (i, t.pieces[i].clone())),
+                _ => None,
+            };
+            // Not found: taken out of its file by this command line.
+            let Some((pos, piece)) = found else {
+                self.clean = Some((id, ord + 1));
+                continue;
+            };
+            if self.clean_credit < piece.len as u64 {
+                self.clean = Some((id, ord));
+                break;
+            }
+            self.clean_credit -= piece.len as u64;
+            let text = self.text_of(&piece).into_owned();
+            let new = self.store(owner, &text);
+            if self.failed.is_some() {
+                return;
+            }
+            self.io.moved_bytes += text.len() as u64;
+            self.splice(owner, pos, 1, new);
+            self.clean = Some((id, ord + 1));
+        }
+    }
+
     /// Remove data files that hold nothing any file uses and that the log
     /// no longer runs through.
     fn drop_empty(&mut self) -> io::Result<()> {
@@ -1027,6 +1385,13 @@ impl Db {
                 let seg = self.segs[id as usize].take().unwrap();
                 let had_index = seg.packed.is_some();
                 drop(seg);
+                if self.idx_job.as_ref().is_some_and(|j| j.seg == id) {
+                    self.idx_job = None;
+                    let _ = self.vfs.remove(&disk::idx_tmp(id));
+                }
+                if self.clean.is_some_and(|c| c.0 == id) {
+                    self.clean = None;
+                }
                 self.vfs.remove(&disk::seg_name(id))?;
                 if had_index {
                     self.vfs.remove(&disk::idx_name(id))?;
@@ -1133,6 +1498,11 @@ impl Db {
         if cap >= u32::MAX as u64 {
             return Err(io_err(format!("a single write of {} bytes is more than a data file can hold", need)));
         }
+        if self.cfg.index {
+            // An index file still being written is finished first, and
+            // anything not yet indexed is.
+            self.index_backlog()?;
+        }
         let old = self.segs[self.active as usize].as_mut().unwrap();
         if !self.volatile {
             // The old file is finished and synced before the new one is
@@ -1156,9 +1526,10 @@ impl Db {
         self.synced = SEG_HEADER;
         self.unsynced_lines = 0;
         if self.cfg.index {
-            self.index_backlog()?;
-            self.save_index(old_id)?;
-            self.save_index(next)?;
+            // The finished file's index file is written a step at a time
+            // from here on; until it is whole the part in memory serves.
+            self.idx_start(old_id)?;
+            self.segs[next as usize].as_mut().unwrap().dynamic = Some(Index::starting_after(0));
         }
         Ok(())
     }
@@ -1179,16 +1550,27 @@ impl Db {
             while j < cuts.len() && cuts[j].1 - cuts[i].0 <= RECORD_MAX {
                 j += 1;
             }
+            // With compression: each piece by itself, kept only if it
+            // comes out smaller.
+            let packed: Vec<Option<Vec<u8>>> = cuts[i..j]
+                .iter()
+                .map(|&(a, b)| if self.cfg.compress { Some(lz4_flex::block::compress(&data[a..b])).filter(|c| c.len() < b - a) } else { None })
+                .collect();
             let items: Vec<Stored> = cuts[i..j]
                 .iter()
-                .map(|&(a, b)| {
+                .zip(&packed)
+                .map(|(&(a, b), packed)| {
                     if b - a >= u32::MAX as usize {
                         damage(format!("a single line of {} bytes is longer than can be stored", b - a));
                     }
-                    Stored { bytes: &data[a..b], len: (b - a) as u32, lines: count_newlines(&data[a..b]) as u32, enc: disk::ENC_PLAIN }
+                    let (len, lines) = ((b - a) as u32, count_newlines(&data[a..b]) as u32);
+                    match packed {
+                        Some(c) => Stored { bytes: c, len, lines, enc: disk::ENC_LZ4 },
+                        None => Stored { bytes: &data[a..b], len, lines, enc: disk::ENC_PLAIN },
+                    }
                 })
                 .collect();
-            let payload = 8 + items.len() as u64 * disk::TABLE_ENTRY + (cuts[j - 1].1 - cuts[i].0) as u64;
+            let payload = 8 + items.len() as u64 * disk::TABLE_ENTRY + items.iter().map(|s| s.bytes.len() as u64).sum::<u64>();
             if !self.seg(self.active).fits(payload) {
                 if let Err(e) = self.roll(payload) {
                     self.fail(e);
@@ -1198,7 +1580,9 @@ impl Db {
             let seg = self.segs[self.active as usize].as_mut().unwrap();
             match seg.append_content(&items, owner) {
                 Ok(pieces) => {
-                    if let Some(index) = &mut seg.dynamic {
+                    if self.cfg.index_later {
+                        self.waiting += (cuts[j - 1].1 - cuts[i].0) as u64;
+                    } else if let Some(index) = &mut seg.dynamic {
                         if seg.indexed == pieces[0].ord {
                             for (p, item) in pieces.iter().zip(&items) {
                                 let doc = index.add(&data[cuts[i + (p.ord - pieces[0].ord) as usize].0..][..item.len as usize]);
@@ -1511,6 +1895,24 @@ impl Db {
                 }
             }
         }
+        if self.dirty && self.failed.is_none() && self.cfg.upkeep {
+            self.clean_step();
+        }
+        let wrote = self.io.content_bytes + self.io.log_bytes - self.mark + self.ops.len() as u64;
+        // The record goes into the log before the pieces taken out of
+        // files are forgotten: writing it can finish an index file, and
+        // an index file must not lack a piece that the log on disk still
+        // has in use.
+        let mut r = Ok(());
+        let changed = self.dirty;
+        if self.dirty {
+            self.dirty = false;
+            if self.failed.is_some() {
+                self.ops.clear();
+            } else if !self.volatile {
+                r = self.log_commit();
+            }
+        }
         for p in std::mem::take(&mut self.retired) {
             if let Some(seg) = self.segs[p.seg as usize].as_mut() {
                 if seg.owners[p.ord as usize] != DEAD {
@@ -1519,15 +1921,13 @@ impl Db {
                 }
             }
         }
-        if !self.dirty {
-            return;
+        if self.failed.is_none() && changed {
+            if self.volatile {
+                r = r.and_then(|_| self.drop_empty());
+            }
+            r = r.and_then(|_| self.upkeep(wrote));
         }
-        self.dirty = false;
-        if self.failed.is_some() {
-            self.ops.clear();
-            return;
-        }
-        let r = if self.volatile { self.drop_empty() } else { self.log_commit() };
+        self.mark = self.io.content_bytes + self.io.log_bytes;
         if let Err(e) = r {
             self.fail(e);
         }
@@ -1559,9 +1959,6 @@ impl Db {
         }
         self.ops = ops;
         self.ops.clear();
-        if self.log_since > self.cfg.checkpoint.max(2 * self.ckp_size) {
-            self.checkpoint()?;
-        }
         Ok(())
     }
 
@@ -1599,6 +1996,12 @@ impl Db {
     #[inline]
     pub fn text_of(&self, p: &Piece) -> Cow<'_, [u8]> {
         let stored = self.seg(p.seg).piece(p);
+        if p.enc == disk::ENC_LZ4 {
+            return match lz4_flex::block::decompress(stored, p.len as usize) {
+                Ok(text) if text.len() == p.len as usize => Cow::Owned(text),
+                _ => damage(format!("{}: damaged: the compressed piece at offset {} does not unpack to its {} bytes", self.seg(p.seg).name(), p.off, p.len)),
+            };
+        }
         if p.enc != disk::ENC_PLAIN {
             damage(format!("{}: the piece at offset {} is stored with encoding {}, which this version does not know", self.seg(p.seg).name(), p.off, p.enc));
         }
@@ -1671,6 +2074,9 @@ impl Db {
                 self.fail(e);
             }
         } else {
+            if let Some(job) = self.idx_job.take() {
+                let _ = self.vfs.remove(&disk::idx_tmp(job.seg));
+            }
             for seg in self.segs.iter_mut().flatten() {
                 // What the index file covers stays covered; what was only
                 // in memory is no longer indexed.
@@ -2248,6 +2654,8 @@ impl Db {
     /// saved. Nothing is done if no data file holds anything unused.
     pub fn compact(&mut self) -> Result<(), String> {
         self.commit();
+        self.clean = None;
+        self.clean_credit = 0;
         let unused: usize = self.segs.iter().flatten().map(|s| s.owners.len() - s.live_pieces as usize).sum();
         let r = (|| -> io::Result<()> {
             if unused > 0 {
@@ -2456,7 +2864,8 @@ impl Db {
         let mut lists = 0u64;
         if self.cfg.index {
             for seg in self.segs.iter().flatten() {
-                if seg.sealed && (seg.dynamic.is_some() || (seg.indexed as usize) < seg.owners.len()) {
+                let being_written = self.idx_job.as_ref().is_some_and(|j| j.seg == seg.id);
+                if seg.sealed && !being_written && (seg.dynamic.is_some() || (seg.indexed as usize) < seg.owners.len()) {
                     return Err(format!("{}: is finished but its index file does not cover it", seg.name()));
                 }
                 let live = &by_seg[seg.id as usize];
