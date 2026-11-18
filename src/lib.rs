@@ -22,6 +22,7 @@ pub mod regex;
 pub mod scan;
 pub mod shell;
 pub mod store;
+pub mod testgen;
 pub mod testing;
 pub mod tree;
 pub mod util;

@@ -37,7 +37,9 @@ pub fn order_is_unspecified(command: &str) -> bool {
 }
 
 pub fn sorted_lines(bytes: &[u8]) -> Vec<&[u8]> {
-    let mut lines: Vec<&[u8]> = bytes.split_inclusive(|c| *c == b'\n').collect();
+    // What -print0 and --null write is cut at the zero bytes.
+    let end = if bytes.contains(&0) && !bytes.contains(&b'\n') { 0 } else { b'\n' };
+    let mut lines: Vec<&[u8]> = bytes.split_inclusive(|c| *c == end).collect();
     lines.sort();
     lines
 }

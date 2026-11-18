@@ -224,6 +224,9 @@ impl Parser<'_> {
                     Ok(n) if rest.first().is_some_and(|c| c.is_ascii_digit() || *c == b'.') => n,
                     _ => return Err(Stop::Usage(format!("find: invalid argument `{}' to `{}'", lossy(arg), lossy(tok)))),
                 };
+                // GNU find reads `-mtime -0` as it reads `-mtime -1`:
+                // changed within the last day.
+                let n = if tok == b"-mtime" && n == 0.0 && arg.starts_with(b"-") { 1.0 } else { n };
                 if tok == b"-mmin" {
                     Expr::Mmin(cmp, n)
                 } else {

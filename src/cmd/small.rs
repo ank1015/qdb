@@ -128,7 +128,9 @@ fn float_digits(v: f64, conv: u8, prec: Option<usize>, alt: bool) -> String {
             let p = prec.unwrap_or(6).max(1);
             let (m, e) = e_style(p - 1);
             let strip = |s: String| -> String {
-                if alt || !s.contains('.') {
+                if alt {
+                    if s.contains('.') { s } else { s + "." }
+                } else if !s.contains('.') {
                     s
                 } else {
                     s.trim_end_matches('0').trim_end_matches('.').to_string()
@@ -1002,7 +1004,8 @@ pub fn seq(args: Vec<Vec<u8>>) -> Result<Runner, String> {
             !io.stopped()
         };
         // Whole numbers with no format of the caller's: counted exactly.
-        if let (Some(a), Some(s), Some(b), None) = (first.int, step.int, last.int, &format) {
+        let minus_zero = first.v == 0.0 && first.v.is_sign_negative();
+        if let (Some(a), Some(s), Some(b), None, false) = (first.int, step.int, last.int, &format, minus_zero) {
             let width = if equal { first.width.max(last.width) } else { 0 };
             let mut n = a;
             while (s > 0 && n <= b) || (s < 0 && n >= b) {
@@ -1041,7 +1044,7 @@ pub fn seq(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         };
         let mut k = 0u64;
         loop {
-            let x = first.v + k as f64 * step.v;
+            let x = if k == 0 { first.v } else { first.v + k as f64 * step.v };
             if (step.v > 0.0 && x > last.v) || (step.v < 0.0 && x < last.v) {
                 // The sum can overshoot by a rounding error: what prints
                 // the same as the limit is still in.
@@ -1088,7 +1091,7 @@ pub fn seq(args: Vec<Vec<u8>>) -> Result<Runner, String> {
                 }
                 _ if fixed => {
                     let digits = format!("{:.*}", decimals, x.abs());
-                    let neg = x < 0.0 && digits.bytes().any(|c| c.is_ascii_digit() && c != b'0');
+                    let neg = x.is_sign_negative() && (k == 0 || digits.bytes().any(|c| c.is_ascii_digit() && c != b'0'));
                     if neg {
                         out.push(b'-');
                     }

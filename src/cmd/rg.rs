@@ -787,6 +787,8 @@ impl<'a> Search<'a> {
         let mut pos = 0;
         let mut next_match: Option<(usize, usize)> = None;
         let mut looked_to = 0;
+        let mut tail: Option<(usize, usize)> = None;
+        let mut tail_done = false;
         loop {
             // The next selected line at or after pos.
             let selected = if p.count >= o.max.unwrap_or(u64::MAX) || pos >= hay.len() {
@@ -810,10 +812,24 @@ impl<'a> Search<'a> {
             };
             // Lines owed after the last selected line, up to this one.
             let limit = selected.map_or(hay.len(), |(s, _)| s);
+            let capped = p.count >= o.max.unwrap_or(u64::MAX);
             while owed > 0 && shown_to < limit {
                 let e = line_end(shown_to);
+                // Past the limit of -m, a line that would have been
+                // selected is still marked as one.
+                let mut mark = b'-';
+                if capped {
+                    if !tail_done && tail.is_none_or(|(ts, _)| ts < shown_to) {
+                        tail = self.m.as_mut().unwrap().next_line(hay, shown_to)?;
+                        tail_done = tail.is_none();
+                    }
+                    let is_match = tail.is_some_and(|(ts, _)| ts == shown_to);
+                    if is_match != o.invert {
+                        mark = b':';
+                    }
+                }
                 let n = line_no(p, shown_to);
-                self.line(io, label, n, &hay[shown_to..e], b'-');
+                self.line(io, label, n, &hay[shown_to..e], mark);
                 shown_to = e + 1;
                 owed -= 1;
             }

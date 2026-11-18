@@ -843,6 +843,11 @@ pub fn wc(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         let mut status = 0;
         let mut totals = [0usize; 3];
         for f in &files {
+            if f.is_empty() {
+                io.err_line("wc: invalid zero-length file name");
+                status = 1;
+                continue;
+            }
             let mut counter = Counter::default();
             let data: &[u8] = match open(db, if f == b"-" { io.take_stdin() } else { b"" }, f) {
                 Source::Data(d) => d,

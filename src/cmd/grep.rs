@@ -780,6 +780,30 @@ impl Run {
 
     /// Print a selected line, or with -o each match in it. False if the
     /// matcher gave up.
+    /// A line of context. With -o, what is printed of it is what matches
+    /// in it, and only under -v, as GNU grep does: those are then the lines
+    /// around the selected ones.
+    fn emit_context(&mut self, io: &mut Io, label: &[u8], number: usize, text: &[u8]) {
+        if !self.opts.only {
+            self.emit(io, label, number, text, b'-');
+            return;
+        }
+        if !self.opts.invert {
+            return;
+        }
+        let mut at = 0;
+        while at <= text.len() {
+            match next_match(&self.finders, text, at) {
+                Ok(Some((s, e))) if e > s => {
+                    self.emit(io, label, number, &text[s..e], b'-');
+                    at = e;
+                }
+                Ok(Some((_, e))) => at = e + 1,
+                _ => break,
+            }
+        }
+    }
+
     fn emit_selected(&mut self, io: &mut Io, label: &[u8], number: usize, text: &[u8]) -> bool {
         if !self.opts.only {
             self.emit(io, label, number, text, b':');
@@ -861,14 +885,14 @@ impl Run {
             };
             let done = found.is_none() || o.max.is_some_and(|m| count >= m);
             // The lines after the last selected line, up to the next one.
-            let limit = found.map_or(content.len(), |(s, _)| s);
+            // Once -m has stopped the search, the lines after the last
+            // one selected are context whatever they hold.
+            let limit = if done { content.len() } else { found.map_or(content.len(), |(s, _)| s) };
             let mut at = last_end.unwrap_or(0);
             while after_left > 0 && at < limit {
                 let end = line_end(at);
-                if !o.only {
-                    let n = number_at(at);
-                    self.emit(io, label, n, &content[at..end], b'-');
-                }
+                let n = number_at(at);
+                self.emit_context(io, label, n, &content[at..end]);
                 at = (end + 1).min(content.len());
                 last_end = Some(at);
                 after_left -= 1;
@@ -891,10 +915,8 @@ impl Run {
             let mut at = from;
             while at < start {
                 let e = line_end(at);
-                if !o.only {
-                    let n = number_at(at);
-                    self.emit(io, label, n, &content[at..e], b'-');
-                }
+                let n = number_at(at);
+                self.emit_context(io, label, n, &content[at..e]);
                 at = e + 1;
             }
             let n = number_at(start);

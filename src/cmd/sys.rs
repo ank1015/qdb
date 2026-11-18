@@ -227,6 +227,13 @@ pub fn du(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         let mut seen = if files.len() > 1 { Some(HashSet::new()) } else { None };
         let mut out = Vec::new();
         for f in &files {
+            if f.is_empty() {
+                io.put(&out);
+                out.clear();
+                io.err_line("du: invalid zero-length file name");
+                status = 1;
+                continue;
+            }
             match db.resolve(f) {
                 Err(e) => {
                     io.put(&out);
@@ -235,7 +242,7 @@ pub fn du(args: Vec<Vec<u8>>) -> Result<Runner, String> {
                     status = 1;
                 }
                 Ok(id) => {
-                    if seen.as_ref().is_some_and(|s| s.contains(&id)) {
+                    if seen.as_ref().is_some_and(|s| s.contains(&id)) || d.excluded(f) {
                         continue;
                     }
                     let mut path = f.clone();
@@ -864,7 +871,18 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
     // Run one command. False when xargs must stop.
     let exec = |argv: &[Vec<u8>], db: &mut Db, io: &mut crate::engine::Io, status: &mut i32| -> bool {
         if x.trace {
-            let shown: Vec<String> = argv.iter().map(|w| quote_if_needed(w)).collect();
+            let shown: Vec<String> = argv
+                .iter()
+                .map(|w| {
+                    // As the shell would need it: a colon is no reason to quote.
+                    let plain: Vec<u8> = w.iter().map(|c| if *c == b':' { b'a' } else { *c }).collect();
+                    if quote_if_needed(&plain).as_bytes() == plain.as_slice() {
+                        String::from_utf8_lossy(w).into_owned()
+                    } else {
+                        quote_if_needed(w)
+                    }
+                })
+                .collect();
             io.err_line(shown.join(" "));
         }
         match run_argv(db, argv, io) {

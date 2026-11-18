@@ -6,7 +6,7 @@ use super::text::fails;
 use super::{options_long, LineBuf};
 use crate::engine::{Filter, Input, Io, Prepared, Runner};
 use crate::tree::Scratch;
-use crate::util::{quote, LongOpt};
+use crate::util::{quote, quote_if_needed, LongOpt};
 use crate::vfs::VFile;
 use std::cmp::Ordering;
 
@@ -732,11 +732,11 @@ pub fn sort(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             }
             match db.resolve(&c.name) {
                 Err(e) => {
-                    io.err_line([&b"sort: open failed: "[..], &c.name, b": ", e.msg().as_bytes()].concat());
+                    io.err_line(format!("sort: open failed: {}: {}", quote_if_needed(&c.name), e.msg()));
                     2
                 }
                 Ok(id) if db.is_dir(id) => {
-                    io.err_line([&b"sort: read failed: "[..], &c.name, b": Is a directory"].concat());
+                    io.err_line(format!("sort: read failed: {}: Is a directory", quote_if_needed(&c.name)));
                     2
                 }
                 Ok(id) => {
@@ -768,7 +768,7 @@ pub fn sort(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         for f in &files {
             if f != b"-" {
                 if let Err(e) = db.resolve(f) {
-                    io.err_line([&b"sort: cannot read: "[..], f, b": ", e.msg().as_bytes()].concat());
+                    io.err_line(format!("sort: cannot read: {}: {}", quote_if_needed(f), e.msg()));
                     return 2;
                 }
             }
@@ -780,7 +780,7 @@ pub fn sort(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             } else {
                 let id = db.resolve(f).expect("checked");
                 if db.is_dir(id) {
-                    io.err_line([&b"sort: read failed: "[..], f, b": Is a directory"].concat());
+                    io.err_line(format!("sort: read failed: {}: Is a directory", quote_if_needed(f)));
                     return 2;
                 }
                 for piece in db.pieces(id) {

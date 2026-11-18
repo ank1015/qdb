@@ -20,6 +20,11 @@ With no case files, runs every tests/cases/*.case.
   --filter TEXT     only run cases whose command contains TEXT
   --fuzz N          also run N generated regex cases against grep and sed
   --seed N          seed for --fuzz (default 1)
+  --gen FAMILY      instead of the cases: generated tests against the real
+                    tools for one family of commands (shell, grep, sed,
+                    find, rg, text, ls, xargs, or all), with --count cases
+                    (default 10000) and --seed
+  --coverage        print the coverage table without running the cases
   --list-failures   print one line per failure instead of full details
   --no-index        run the engine with its search index switched off
   --store MODE      where the engine keeps its data: memory (default), disk
@@ -1431,6 +1436,8 @@ fn run() -> Result<bool, String> {
     let mut verbose = false;
     let mut brief = false;
     let mut coverage_only = false;
+    let mut generate: Option<String> = None;
+    let mut count = 10_000usize;
     let mut index = true;
     let mut diff = 0usize;
     let mut crash = 0usize;
@@ -1446,6 +1453,8 @@ fn run() -> Result<bool, String> {
             "--seed" => seed = value("--seed")?.parse().map_err(|_| "--seed needs a number")?,
             "--list-failures" => brief = true,
             "--coverage" => coverage_only = true,
+            "--gen" => generate = Some(value("--gen")?),
+            "--count" => count = value("--count")?.parse().map_err(|_| "--count needs a number")?,
             "--no-index" => index = false,
             "--store" => {
                 setup.mode = match value("--store")?.as_str() {
@@ -1496,6 +1505,51 @@ fn run() -> Result<bool, String> {
     if diff > 0 {
         let mut scratch = Scratch::new();
         return diff_run(diff, seed, &setup, &mut scratch);
+    }
+    if let Some(family) = generate {
+        let families: Vec<&str> = if family == "all" { qdb::testgen::FAMILIES.to_vec() } else { vec![family.as_str()] };
+        let mut scratch = Scratch::new();
+        let mut all_ok = true;
+        for family in families {
+            let g = qdb::testgen::generate(family, count, seed).ok_or(format!("--gen: no family {} (there are: {})", family, qdb::testgen::FAMILIES.join(", ")))?;
+            let mut db = store::parse_fixture(g.fixture.as_bytes()).map_err(|e| format!("generated tree: {}", e))?;
+            db.set_index(index);
+            let (mut passed, mut failed) = (0usize, 0usize);
+            for (i, command) in g.commands.iter().enumerate() {
+                if let Some(f) = &filter {
+                    if !command.contains(f.as_str()) {
+                        continue;
+                    }
+                }
+                // File times are set afresh for every case, the same on
+                // both sides, each so long before now.
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                for (path, age) in &g.ages {
+                    if let Ok(id) = db.resolve(path.as_bytes()) {
+                        db.set_mtime(id, (now - age) * 1_000_000_000);
+                    }
+                }
+                let case = Case {
+                    file: format!("generated {} seed {}", family, seed),
+                    fixture: String::new(),
+                    steps: vec![Step { command: command.clone(), kind: Kind::Compare { stderr: true }, line: i + 1 }],
+                };
+                match run_case(&case, &db, &mut scratch, &setup) {
+                    Ok(()) => passed += 1,
+                    Err(what) => {
+                        failed += 1;
+                        if brief {
+                            println!("FAIL  {}", what.lines().next().unwrap_or(""));
+                        } else {
+                            println!("FAIL  {}", what);
+                        }
+                    }
+                }
+            }
+            println!("generated {}: {} cases, seed {}, {}: {} passed, {} failed", family, passed + failed, seed, setup.describe(), passed, failed);
+            all_ok &= failed == 0;
+        }
+        return Ok(all_ok);
     }
     let default_run = files.is_empty() && fuzz == 0;
     if coverage_only {
