@@ -26,6 +26,7 @@ pub mod testing;
 pub mod tree;
 pub mod util;
 pub mod vfs;
+pub mod when;
 
 pub use engine::{execute, execute_to, Outcome, Sink};
 pub use tree::{Config, Db, SyncMode};

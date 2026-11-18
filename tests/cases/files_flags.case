@@ -1,0 +1,135 @@
+# Stage 4, part 3: the new flags of touch, cp, mv, rm and rmdir.
+@fixture basic
+
+$ touch -c nofile; ls
+$ touch -c README.md nofile; ls
+$ touch -c nodir/x
+$ touch -d 2020-01-02 new.txt; ls -l new.txt
+$ touch -d '2020-01-02 03:04' new.txt; ls -l new.txt
+$ touch -d '2020-01-02 03:04:05' new.txt; ls -l new.txt
+$ touch -d '2020-01-02 03:04:05.123456789' new.txt; ls -l new.txt
+$ touch -d 2020-01-02T03:04 new.txt; ls -l new.txt
+$ touch -d 2020-01-02T03:04:05 new.txt; ls -l new.txt
+$ touch -d @0 new.txt; ls -l new.txt
+$ touch -d @1700000000 new.txt; ls -l new.txt
+$ touch -d @1700000000.5 new.txt; ls -l new.txt
+$ touch -d 2020-01-02 README.md; ls -l README.md
+$ touch -d 2020-01-02 src; ls -ld src
+$ touch -d 2020-02-30 new.txt
+$ touch -d 2020-13-01 new.txt
+$ touch -d '2020-01-01 25:00' new.txt
+$ touch -cd 2020-01-02 nofile; ls
+$ touch -t 202001020304 new.txt; ls -l new.txt
+$ touch -t 202001020304.05 new.txt; ls -l new.txt
+$ touch -t 2001020304 new.txt; ls -l new.txt
+$ touch -t 9901020304 new.txt; ls -l new.txt
+$ touch -t 6812312359 new.txt; ls -l new.txt
+$ touch -t 1311 new.txt
+$ touch -t 202013010000 new.txt
+$ touch -t 202001020304.5 new.txt
+$ touch -t abc new.txt
+$ touch -d 2020-01-01 -t 202001010000 new.txt
+$ touch -d 2020-01-02 a b c; ls -l a b c
+$ touch -d 2020-01-02 a nodir/b c; ls -l a c
+$ touch -d
+$ touch -t
+! touch -d yesterday x ## flag: touch -d
+! touch -d '2 days ago' x ## flag: touch -d
+! touch -d 'Jan 2 2020' x ## flag: touch -d
+! touch -r README.md x ## flag: touch -r
+! touch -a x ## flag: touch -a
+! touch -m x ## flag: touch -m
+
+$ cp -R src copy; find copy
+$ cp -R src/lib src/main.c empty; find empty
+$ cp -v README.md copy.md
+$ cp -v README.md notes.txt src
+$ cp -rv src copy
+$ cp -Rv src empty
+$ cp -v nope x
+$ cp -v README.md README.md
+$ cp -f README.md notes.txt; cat notes.txt
+$ cp -rf src copy; find copy
+$~ cp -n README.md notes.txt; cat notes.txt
+$~ cp -n README.md fresh.txt; cat fresh.txt
+$~ cp -nv README.md notes.txt
+$~ cp -rn src empty; cp -rn src empty; find empty
+$ cp -T README.md copy.md; cat copy.md
+$ cp -T README.md src
+$ cp -T README.md notes.txt; cat notes.txt
+$ cp -rT src empty; find empty
+$ cp -rT src newdir; find newdir
+$ cp -T README.md notes.txt extra
+$ cp -T README.md
+$ cp -T src empty
+$ touch -d 2020-01-02 README.md; cp -p README.md kept.md; ls -l kept.md
+$ touch -d 2020-01-02 README.md; cp README.md fresh.md; touch -d 2021-01-01 fresh.md; cp -p README.md fresh.md; ls -l fresh.md
+$ touch -d 2020-01-02 src/* src/lib/*; touch -d 2019-03-03 src/lib; touch -d 2018-04-04 src; cp -a src copy; ls -lR copy; ls -ld copy
+$ touch -d 2020-01-02 src/* src/lib/*; touch -d 2019-03-03 src/lib; touch -d 2018-04-04 src; cp -rp src copy; ls -lR copy; ls -ld copy
+$ touch -d 2020-01-02 src/* src/lib/*; touch -d 2019-03-03 src/lib; touch -d 2018-04-04 src; cp -a src empty; ls -lR empty
+$ touch -d 2020-01-02 README.md; cp -a README.md kept.md; ls -l kept.md
+$ touch -d 2020-01-02 README.md; cp -pv README.md kept.md; ls -l kept.md
+$ cp -a src/lib/lex.c src/main.c empty; find empty
+$ cp -a nope x
+$ cp -a src
+! cp -l a b ## flag: cp -l
+! cp -s a b ## flag: cp -s
+! cp -u a b ## flag: cp -u
+! cp -i a b ## flag: cp -i
+! cp --preserve a b ## long options
+
+$ mv -v README.md renamed.md
+$ mv -v README.md notes.txt src
+$ mv -v src moved; find moved
+$ mv -v nope x
+$ mv -v README.md README.md
+$ mv -f README.md notes.txt; cat notes.txt
+$ mv -n README.md notes.txt; cat notes.txt; ls
+$ mv -n README.md fresh.md; ls
+$ mv -nv README.md notes.txt
+$ mv -nv README.md fresh.md
+$ mv -n README.md notes.txt src; ls src
+$ mv -nf README.md notes.txt; cat notes.txt
+$ mv -fn README.md notes.txt; cat notes.txt
+$ mv -n nope notes.txt
+$ touch -d 2020-01-02 README.md; mv README.md renamed.md; ls -l renamed.md
+$ touch -d 2020-01-02 src/main.c; touch -d 2010-01-01 src; mv src moved; ls -ld moved; ls -l moved/main.c
+! mv -i a b ## flag: mv -i
+! mv -u a b ## flag: mv -u
+! mv -t d a ## flag: mv -t
+
+$ rm -R src; ls
+$ rm -Rf src nope; ls
+$ rm -v README.md
+$ rm -v README.md notes.txt nope
+$ rm -rv src
+$ rm -Rv empty src/lib
+$ rm -v src
+$ rm -fv nope README.md
+$ rm -d empty; ls
+$ rm -d src
+$ rm -dv empty
+$ rm -d README.md; ls
+$ rm -d nope
+$ rm -df nope empty; ls
+$ rm -d .
+$ rm -rd src; ls
+$ rm -rv .
+$ rm -f src/main.c/x
+$ rm src/main.c/x
+! rm -i x ## flag: rm -i
+! rm -I x ## flag: rm -I
+
+$ mkdir -p a/b/c; rmdir -p a/b/c; ls
+$ mkdir -p a/b/c a/x; rmdir -p a/b/c; find a
+$ mkdir -p a/b/c; rmdir -p a/b/c/; ls
+$ mkdir -p a/b/c; rmdir -p a/b; find a
+$ mkdir -p a/b/c; rmdir -p ./a/b/c; ls
+$ mkdir -p a/b/c; rmdir -p a//b//c; ls
+$ rmdir -p empty; ls
+$ rmdir -p nope/x
+$ rmdir -p src/lib
+$ rmdir -p README.md
+$ mkdir -p a/b c/d; rmdir -p a/b c/d; ls
+$ mkdir -p a/b; touch a/f; rmdir -p a/b; find a
+! rmdir -v x ## flag: rmdir -v

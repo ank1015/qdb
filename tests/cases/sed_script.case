@@ -1,0 +1,534 @@
+# Stage 4, part 3: sed options, addresses, commands and blocks.
+@fixture basic
+
+# options
+$ sed -n p notes.txt
+$ sed -n 2p notes.txt
+$ sed -n -e 1p -e 3p notes.txt
+$ sed -e 1d -e 's/note/NOTE/' notes.txt
+$ sed -e1d notes.txt
+$ sed -ne 2p notes.txt
+$ sed -r 's/(o+)/[\1]/' notes.txt
+$ sed -E 's/(o+)/[\1]/' notes.txt
+$ sed -s -n '$p' notes.txt README.md
+$ sed -n '$p' notes.txt README.md
+$ sed -s -n 1p notes.txt README.md
+$ sed -n 1p notes.txt README.md
+$ sed -s '2,/zzz/d' notes.txt README.md
+$ sed -n -s '$=' notes.txt README.md
+$ sed -n '$=' notes.txt README.md
+$ sed -n '$=' README.md notes.txt
+$ sed -e
+$ sed -n
+$ sed
+$ sed -n -e p -- notes.txt
+$ sed -- p notes.txt
+$ sed p - < notes.txt
+$ sed p README.md - < notes.txt
+$ sed p nope notes.txt
+$ sed -n '$p' notes.txt nope
+$ sed -n '$p' nope README.md
+$ sed -n '$p' README.md empty/nothing
+$ sed p src
+$ sed p notes.txt src README.md
+$ sed -i p src
+$ sed -n -i p
+$ sed -i p nope notes.txt
++ cat notes.txt
+$ sed -i.bak 's/note/N/' notes.txt
++ cat notes.txt notes.txt.bak
++ ls
+$ sed -i.bak 's/note/N/' notes.txt README.md
++ ls
+$ sed -ibak 2d notes.txt
++ cat notes.txtbak notes.txt
+$ sed -i.orig 's/zzz/y/' src/util.c
++ ls src
+$ sed -ni.o 2p notes.txt
++ cat notes.txt notes.txt.o
+$ sed -in 2p notes.txt
++ ls
++ cat notes.txt
+$ sed -i.bak 1d notes.txt; sed -i.bak 1d notes.txt
++ cat notes.txt.bak notes.txt
+$ sed -n -i 2p notes.txt
++ cat notes.txt
+$ sed -i -n '$p;1p' notes.txt README.md
++ cat notes.txt README.md
+$ sed -i '$d' notes.txt README.md
++ cat notes.txt README.md
+$ sed -i 2q README.md
++ cat README.md
+$ sed -i 2Q README.md notes.txt
++ cat README.md notes.txt
+$ sed -i '2q5' README.md notes.txt
++ cat README.md notes.txt
+$ sed -i 1d empty/nothing
++ cat empty/nothing
+$ sed -i -e 1d -e '$d' README.md
++ cat README.md
+$ sed -i '1i\top' notes.txt
++ cat notes.txt
+$ sed -i '$a END' notes.txt
++ cat notes.txt
+$ sed -i 'y/aeiou/AEIOU/' docs/guide.md
++ cat docs/guide.md
+$ sed -i '/TODO/d' README.md src/main.c src/util.c
++ grep -rc TODO .
+$ sed -i -n '/TODO/p' README.md src/main.c
++ cat README.md src/main.c
+$ sed -i '2,3s/^/> /' README.md
++ cat README.md
+$ sed -i '1~2d' data/numbers.txt
++ cat data/numbers.txt
+$ sed -i '/^$/d' README.md
++ cat README.md
+$ sed -i '2c\changed' README.md
++ cat README.md
+$ sed -i = notes.txt
++ cat notes.txt
+! sed -i'bk_*' 2d notes.txt ## backup suffix
+! sed -i.b/x 2d notes.txt ## backup suffix
+! sed --quiet p notes.txt ## long options
+! sed --expression=p notes.txt ## long options
+! sed -z p notes.txt ## sed -z
+! sed -f script notes.txt ## sed -f
+! sed -u p notes.txt ## sed -u
+! sed -l 5 p notes.txt ## sed -l
+
+# line and last-line addresses
+$ sed 2d README.md
+$ sed -n 1p README.md
+$ sed -n 100p README.md
+$ sed '$d' README.md
+$ sed -n '$p' notes.txt
+$ sed '$!d' README.md
+$ sed '2!d' README.md
+$ sed '2 ! d' README.md
+$ sed ' 2 d' README.md
+$ sed '0p' README.md
+$ sed '0,3d' README.md
+$ sed '2!!d' README.md
+$ sed '!p' notes.txt
+$ sed '2' README.md
+$ sed '2!' README.md
+$ sed '2!;' README.md
+$ cat README.md | sed -n '$p'
+$ cat notes.txt | sed -n '$p'
+$ cat notes.txt | sed '$d'
+$ cat README.md | sed -n '2p;$p'
+$ cat empty/nothing | sed -n '$p'
+$ echo one | sed '$d'
+$ echo one | sed -n '$p;1p'
+
+# ranges
+$ sed '2,4d' README.md
+$ sed -n '2,4p' README.md
+$ sed -n '2,$p' README.md
+$ sed -n '2,$!p' README.md
+$ sed -n '4,2p' README.md
+$ sed -n '2,4p;4,2p' README.md
+$ sed -n '$,2p' README.md
+$ sed -n '$,$p' README.md
+$ sed -n '2,+2p' README.md
+$ sed -n '2,+0p' README.md
+$ sed -n '2,+p' README.md
+$ sed -n '2,+100p' README.md
+$ sed ' 2 , 3 d' README.md
+$ sed '2,d' README.md
+$ sed ',2d' README.md
+$ sed '2,3' README.md
+$ sed -n '2,3p' notes.txt README.md
+$ sed -n '3,5p' notes.txt README.md
+$ sed -s -n '3,5p' notes.txt README.md
+$ sed -n '/small/,/data/p' README.md
+$ sed -n '/small/,$p' README.md
+$ sed -n '/#/,2p' README.md
+$ sed -n '/small/,1p' README.md
+$ sed -n '2,/a/p' README.md
+$ sed -n '1,/Sample/p' README.md
+$ sed -n '0,/Sample/p' README.md
+$ sed -n '0 , /Sample/ p' README.md
+$ sed '0,/note/d' notes.txt
+$ sed '1,/note/d' notes.txt
+$ sed -n '0,/NOTE/Ip' notes.txt
+$ sed -n '/a/,/a/p' data/words.txt
+$ sed -n '/apple/,+1p' data/words.txt
+$ sed -n '/an/,+1p' data/words.txt
+$ sed '/banana/,/grape/d' data/words.txt
+$ sed '/banana/,/grape/!d' data/words.txt
+$ sed '/nothinghere/,/grape/d' data/words.txt
+$ sed '/banana/,/nothinghere/d' data/words.txt
+$ sed -n '/include/,/^$/p' src/main.c src/util.c
+$ sed -s -n '/include/,/^$/p' src/main.c src/util.c
+$ sed -n '/int/,/}/p' src/util.c
+$ sed '3,1!d' README.md
+$ sed -n '2,3!{p}' README.md
+! sed '2,~2d' README.md ## addr1,~N
+$ sed '~2p' README.md
+$ sed '+2p' README.md
+
+# steps
+$ sed '1~2d' data/numbers.txt
+$ sed '0~2d' data/numbers.txt
+$ sed '2~0d' data/numbers.txt
+$ sed -n '0~3p' data/numbers.txt
+$ sed -n '2~3p' data/numbers.txt
+$ sed -n '0~3p;2~3p' data/numbers.txt
+$ sed -n '5~1p' data/numbers.txt
+$ sed -n '2~3,+1p' data/numbers.txt
+$ sed '1~' data/numbers.txt
+
+# regex addresses
+$ sed '/TODO/d' README.md
+$ sed -n '/TODO/p' README.md src/main.c
+$ sed -n '/todo/Ip' README.md src/util.c
+$ sed -n '/todo/I p' src/util.c
+$ sed -n '/todo/ Ip' src/util.c
+$ sed '/TODO/!d' README.md
+$ sed -n '\%src/%p' Makefile
+$ sed -n '\,main,p' Makefile
+$ sed -n '\/main/p' Makefile
+$ sed -n '\%a\%b%p' data/words.txt
+$ sed -n '/src\/main/p' Makefile
+$ sed -n '/[/]/p' Makefile
+$ sed -n '/a\|c/p' notes.txt
+$ sed -E -n '/a|c/p' notes.txt
+$ sed -E -n '/^(first|second)/p' notes.txt
+$ sed -n '/^$/p' README.md
+$ sed -n '/^$/!p' README.md
+$ sed -n '/./p' README.md
+$ sed '/a' notes.txt
+$ sed '\%a' notes.txt
+$ sed -n '/a\{1/p' notes.txt
+$ sed -n '/TODO/p' nope README.md
+$ sed -n '/nothinghere/p' README.md notes.txt
+$ sed -n '/last/p' notes.txt README.md
+$ sed -n '/first/p;/last/p' notes.txt
+$ sed -n '/note/{p}' notes.txt
+$ sed '/note/a after' notes.txt
+$ sed '/note/i before' notes.txt
+$ sed '/second/c changed' notes.txt
+$ sed '/first/y/first/FIRST/' notes.txt
+$ sed '/second/s/note/N/' notes.txt
+$ sed -n '/second/s/note/N/p' notes.txt
+! sed -n '/a/Mp' notes.txt ## M flag
+$ cat src/main.c | sed -n '/TODO/p'
+$ cat src/main.c src/util.c | sed '/int/d'
+$ cat notes.txt | sed -n '/last/p'
+
+# the empty regex
+$ sed 's//X/' notes.txt
+$ sed '//d' notes.txt
+$ sed 's//X/' empty/nothing
+$ sed '/second/s//X/' notes.txt
+$ sed -n '/second/{//p}' notes.txt
+$ sed 's/first/X/;s//Y/' notes.txt
+$ sed -e p -e 's//x/' notes.txt
+$ sed -n '/note/,//p' notes.txt
+
+# p, d, =
+$ sed p notes.txt
+$ sed -n p notes.txt
+$ sed 'p;p' notes.txt
+$ sed 'p⏎p' notes.txt
+$ sed 'p p' notes.txt
+$ sed pp notes.txt
+$ sed 'p;;p' notes.txt
+$ sed 'p # twice' notes.txt
+$ sed d notes.txt
+$ sed 'd;p' notes.txt
+$ sed '2d;2p' notes.txt
+$ sed 'd x' notes.txt
+$ sed = notes.txt
+$ sed -n = notes.txt
+$ sed -n '$=' README.md
+$ sed '2=;3=' README.md
+$ sed '1,2=' README.md
+$ sed '=p' README.md
+$ sed '2{=;d}' README.md
+$ sed = README.md notes.txt
+$ sed -s = README.md notes.txt
+$ sed -n '/TODO/=' README.md src/main.c
+
+# q, Q
+$ sed q README.md
+$ sed 2q README.md
+$ sed 2Q README.md
+$ sed '2q5' README.md
+$ sed '2Q7' README.md
+$ sed '2 q 3' README.md
+$ sed '2q3x' README.md
+$ sed 'q x' README.md
+$ sed 'q5;p' README.md
+$ sed '2q;3p' README.md
+$ sed 'q;q' README.md
+$ sed '1,2q' README.md
+$ sed '1,2Q' README.md
+$ sed 100q README.md
+$ sed '$q' notes.txt
+$ sed 3q notes.txt
+$ sed 2q notes.txt README.md
+$ sed '/data/q' README.md
+$ sed -n '/data/{p;q}' README.md
+$ sed '/data/Q' README.md
+$ sed 's/Sample/1/;q' README.md notes.txt
+$ sed 'q300' README.md
+$ cat README.md | sed 2q
+$ cat README.md | sed '2q4' || echo stopped
+$ sed -i '$q' notes.txt
++ cat notes.txt
+$ sed -i -e '$p' notes.txt
++ cat notes.txt
+$ sed '#nx⏎p' notes.txt
+$ cat data/long.txt | sed 1q | wc -l
+$ sed 2q README.md | sed 1d
+
+# a, i, c
+$ sed 'a foo' notes.txt
+$ sed '1a foo' notes.txt
+$ sed '$a END' notes.txt
+$ sed '$i BEG' notes.txt
+$ sed '1i\top' notes.txt
+$ sed '1i\  indented' notes.txt
+$ sed '1a\  indented' notes.txt
+$ sed '1a   stripped' notes.txt
+$ sed '1a  \  kept' notes.txt
+$ sed '1a\\ x' notes.txt
+$ sed '1a\a\tb' notes.txt
+$ sed '1a a\tb\\c\qd' notes.txt
+$ sed '1a\⏎  x\⏎  y' notes.txt
+$ sed '1a foo⏎2d' notes.txt
+$ sed '1a foo;2d' notes.txt
+$ sed '1a foo}' notes.txt
+$ sed -e '1a\' -e '  two' notes.txt
+$ sed -e '1a one\' -e two notes.txt
+$ sed -e 'a foo' -e p notes.txt
+$ sed -e 'i\' -e 'one\' -e 'two' -e p notes.txt
+$ sed -e '2i\' -e 'a b' notes.txt
+$ sed -e '2c\' -e x notes.txt
+$ sed -e '1{' -e 'a foo' -e '}' notes.txt
+$ sed '1a' notes.txt
+$ sed a notes.txt
+$ sed '1a\' notes.txt
+$ sed '1i\' notes.txt
+$ sed '1c\' notes.txt
+$ sed 'a\' notes.txt
+$ sed 'a\\' notes.txt
+$ sed -n 'a X' notes.txt
+$ sed -n 'i X' notes.txt
+$ sed 'a X' empty/nothing
+$ sed '2c\foo' README.md
+$ sed '2,3c\foo' README.md
+$ sed '2,3!c\foo' README.md
+$ sed '$!c foo' notes.txt
+$ sed 'c foo' notes.txt
+$ sed '$c foo' notes.txt
+$ sed '/small/,/data/c\gone' README.md
+$ sed '2,100c\gone' README.md
+$ sed '2,+1c\gone' README.md
+$ sed '4,2c\one' README.md
+$ sed '1d;a after' notes.txt
+$ sed 'a after⏎d' notes.txt
+$ sed '1{a one⏎a two⏎}' notes.txt
+$ sed '1{i one⏎a two⏎p⏎}' notes.txt
+$ sed '2q;a X' README.md
+$ sed 'a X⏎2q' README.md
+$ sed 'a X⏎2Q' README.md
+$ sed '$a\' notes.txt
+$ sed '1i top' notes.txt README.md
+$ echo x | sed 'a y'
+$ echo -n x | sed 'a y'
+$ echo -n x | sed 'i y'
+$ echo -n x | sed 'c y'
+$ echo -n x | sed p
+$ echo -n x | sed =
+$ echo -n x | sed -n p
+
+# y
+$ sed 'y/abc/xyz/' notes.txt
+$ sed 'y/abc/xy/' notes.txt
+$ sed 'y/a\/b/x\ny/' notes.txt
+$ sed 'y/a\nb/xyz/' notes.txt
+$ sed 'y,a\,,xy,' notes.txt
+$ sed 'y/a/\//' notes.txt
+$ sed 'y/aa/bc/' notes.txt
+$ sed 'y/t/\\/' notes.txt
+$ sed 'y//' notes.txt
+$ sed 'y///' notes.txt
+$ sed 'y/a/' notes.txt
+$ sed 'y/a/b/x' notes.txt
+$ sed 'y/a/b/;p' notes.txt
+$ sed 'y/x⏎y/a/' notes.txt
+$ sed '2y/abcdefghijklmnopqrstuvwxyz/ABCDEFGHIJKLMNOPQRSTUVWXYZ/' README.md
+$ sed 'y/abc/ABC/;s/A/[&]/g' notes.txt
+$ cat notes.txt | sed 'y/ /_/'
+
+# s: flags, references
+$ sed 's/a/X/2' data/words.txt
+$ sed 's/a/X/2g' data/words.txt
+$ sed 's/a/X/g2' data/words.txt
+$ sed 's/a/X/0' data/words.txt
+$ sed 's/a/X/pp' data/words.txt
+$ sed 's/a/X/22' data/words.txt
+$ sed 's/a/X/2 3' data/words.txt
+$ sed -n 's/a/X/p' data/words.txt
+$ sed 's/a/X/p' notes.txt
+$ sed -n 's/a/X/gp' data/words.txt
+$ sed -n 's/a/X/pg' data/words.txt
+$ sed -n 's/a/b/2p' data/words.txt
+$ sed -n 's/a/b/p2' data/words.txt
+$ sed -n 's/a/b/2pg' data/words.txt
+$ sed 's/APPLE/X/i' data/words.txt
+$ sed 's/APPLE/X/I' data/words.txt
+$ sed 's/a/X/Ig' data/words.txt
+$ sed 's/a/b/I I' data/words.txt
+$ sed 's/a/b/gg' data/words.txt
+$ sed 's/a/X/x' data/words.txt
+$ sed 's/a/[&]\0\1/' data/words.txt
+$ sed 's/\(a\)/[\1\0]/' data/words.txt
+$ sed 's/a/[\0]/g' data/words.txt
+$ sed 's/a/x\ny/' data/words.txt
+$ sed 's/a/\&\//' data/words.txt
+$ sed 's/a/\9/' data/words.txt
+$ sed 's/\(a\)/\2/' data/words.txt
+$ sed -E 's/(a)|b/\1\1/' data/words.txt
+$ sed -E 's/(a)(p)(p)(l)(e)/\5\4\3\2\1/' data/words.txt
+$ sed 's/\(x\)\|y/[\1]/g' data/words.txt
+$ sed 's/./X/3' data/words.txt
+$ sed 's/b*/X/2' data/words.txt
+$ sed 's/b*/X/g' data/words.txt
+$ sed 's/b*/X/3' data/words.txt
+$ sed 's/$/X/2' data/words.txt
+$ sed 's/^/X/g' data/words.txt
+$ sed 's/x*/-/g' data/words.txt
+$ sed 's,a,\,,' data/words.txt
+$ sed 's|a\|b|X|' data/words.txt
+$ sed 's/a/b/;;;' data/words.txt
+$ sed 's/a/b/ ; p' notes.txt
+$ sed 's/a/b/ # c' notes.txt
+$ sed 's/a/b/}' notes.txt
+$ sed '{s/a/b/}' notes.txt
+$ sed '{s/a/b/;}' notes.txt
+$ sed 's/b/&&/;s/c/\n/;s/\n/N/' data/words.txt
+$ sed 's/a/x\⏎y/' data/words.txt
+$ sed 's/a⏎b/x/' data/words.txt
+$ sed 's/a' notes.txt
+$ sed 's/a/b' notes.txt
+$ sed 's/x/a\' notes.txt
+$ sed 's/a\+/X/' data/words.txt
+$ sed -E 's/a\+/X/' data/words.txt
+$ sed 's/\n/X/' notes.txt
+$ sed -e 's/a/1/' -e 's/b/2/' -e 's/c/3/' data/words.txt
+$ sed 's/a/1/;s/1/2/;s/2/3/' data/words.txt
+$ sed '2s/a/X/g;4s/a/Y/g' data/words.txt
+$ sed '2,4s/a/X/' data/words.txt
+$ sed '2,4!s/a/X/' data/words.txt
+$ sed '$s/$/ END/' notes.txt
+$ sed -n '$s/$/ END/p' README.md notes.txt
+! sed 's/a/X/m' notes.txt ## `m` flag
+! sed 's/a/X/w out' notes.txt ## `w` flag
+! sed 's/a/X/e' notes.txt ## `e` flag
+! sed 's/a/\U&/' notes.txt ## case conversion
+
+# blocks
+$ sed '2{p;p}' README.md
+$ sed '2{p' README.md
+$ sed '2p}' README.md
+$ sed '2{p;};3d' README.md
+$ sed -n '2{p}' README.md
+$ sed '{}' notes.txt
+$ sed '2,3{/small/d;s/It/it/}' README.md
+$ sed '{{p}}' notes.txt
+$ sed '{p;{p;};}' notes.txt
+$ sed '2{/note/{p}}' notes.txt
+$ sed '1{}' notes.txt
+$ sed '2{;p;}' notes.txt
+$ sed '2{ p ; p }' notes.txt
+$ sed '2{⏎p⏎}' notes.txt
+$ sed '2{p;}x' notes.txt
+$ sed '}' notes.txt
+$ sed '2}' notes.txt
+$ sed '2,3}' notes.txt
+$ sed '{p;}}' notes.txt
+$ sed '{2}' notes.txt
+$ sed '{2p;3}' notes.txt
+$ sed '{' notes.txt
+$ sed '2,3{' notes.txt
+$ sed -e p -e '{' notes.txt
+$ sed -e '{' -e p notes.txt
+$ sed -e '2{' -e p -e '}' notes.txt
+$ sed '1!{p}' notes.txt
+$ sed '$!{$!d}' README.md
+$ sed '$!{p}' notes.txt
+$ sed '2{d};2p' README.md
+$ sed '1d;$d' README.md
+$ sed -n '/TODO/{=;p}' README.md src/main.c
+$ sed -n '2,4{/a/p}' README.md
+$ sed -n '2,4!{/a/p}' README.md
+$ sed '/first/{s/first/1st/;a added⏎}' notes.txt
+$ sed '/note/{/second/!d}' notes.txt
+$ sed '2{q}' README.md
+$ sed '2{s/A/a/;q}' README.md
+$ sed -n '/a/{/e/{/i/p}}' README.md
+$ sed '{;}' notes.txt
+$ sed ';' notes.txt
+$ sed ';;p' notes.txt
+
+# comments and layout
+$ sed '# only a comment' notes.txt
+$ sed '#n' notes.txt
+$ sed '#n⏎p' notes.txt
+$ sed -e '#n' -e p notes.txt
+$ sed '#no⏎p' notes.txt
+$ sed ' #n⏎p' notes.txt
+$ sed 'p #n' notes.txt
+$ sed '1,2#x' notes.txt
+$ sed '' notes.txt
+$ sed ' ' notes.txt
+$ sed '⏎⏎p⏎⏎' notes.txt
+$ sed 'k' notes.txt
+$ sed -e p -e 'q;k' notes.txt
+$ sed -e p -e k notes.txt
+$ sed '2,3I' notes.txt
+
+# still refused
+! sed h notes.txt ## `h` command
+! sed H notes.txt ## `H` command
+! sed g notes.txt ## `g` command
+! sed G notes.txt ## `G` command
+! sed x notes.txt ## `x` command
+! sed N notes.txt ## `N` command
+! sed D notes.txt ## `D` command
+! sed P notes.txt ## `P` command
+! sed n notes.txt ## `n` command
+! sed ':a' notes.txt ## `:` command
+! sed b notes.txt ## `b` command
+! sed 't' notes.txt ## `t` command
+! sed 'T' notes.txt ## `T` command
+! sed 'r README.md' notes.txt ## `r` command
+! sed 'R README.md' notes.txt ## `R` command
+! sed 'w out' notes.txt ## `w` command
+! sed 'W out' notes.txt ## `W` command
+! sed e notes.txt ## `e` command
+! sed l notes.txt ## `l` command
+! sed z notes.txt ## `z` command
+! sed F notes.txt ## `F` command
+! sed '1!G;h;$!d' notes.txt ## `G` command
+! sed '$!N;s/\n/ /' notes.txt ## `N` command
+! sed ':a;s/x/y/;ta' notes.txt ## `:` command
+
+# pipelines and the shell
+$ sed -n '/TODO/p' README.md | sed 's/TODO/DONE/'
+$ grep -n '' README.md | sed -n '2,3p'
+$ sed -n 2p README.md > out.txt; cat out.txt
+$ sed 2d < README.md
+$ sed -n '$p' < notes.txt
+$ sed -n 1p README.md nope 2>&1 | cat
+$ sed -n '2{p;q}' README.md && echo ok
+$ sed '2q1' README.md || echo stopped
+$ find src -name '*.h' -exec sed -n 1p {} \;
+$ sed -n "$(echo 2)p" README.md
+$ sed -n '/TODO/p' src/*.c
+$ sed -s -n '1p;$p' src/*.c
+$ sed -n '1p;$p' src/*.c

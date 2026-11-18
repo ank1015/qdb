@@ -152,6 +152,8 @@ impl Dfa {
                             Assert::NotWordBoundary => prev == next,
                             Assert::WordStart => !prev && next,
                             Assert::WordEnd => prev && !next,
+                            Assert::AfterNonWord => !prev,
+                            Assert::BeforeNonWord => !next,
                         };
                         if holds {
                             self.stack.push(pc + 1);

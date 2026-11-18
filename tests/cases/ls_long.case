@@ -1,0 +1,64 @@
+# Stage 4, part 3: ls -A -d -r -S -t -l -h, with the fixed values for
+# what the data model does not hold.
+@fixture basic
+
+$ ls -A
+$ ls -A src
+$ touch .hidden; mkdir .hd; ls -A
+$ touch .hidden; ls -a; ls -A; ls
+$ touch .hidden; ls -aA
+$ touch .hidden; ls -Aa
+$ ls -d
+$ ls -d .
+$ ls -d src
+$ ls -d src README.md
+$ ls -d src/ empty
+$ ls -d */
+$ ls -d *
+$ ls -d src/*
+$ ls -d nope src
+$ ls -dp src README.md
+$ ls -dR src
+$ ls -r
+$ ls -r src
+$ ls -r src README.md empty notes.txt
+$ ls -rR
+$ ls -ra
+$ ls -S
+$ ls -S src
+$ ls -Sr
+$ ls -S src/lib README.md
+$ ls -aS
+$ ls -SR
+$ touch -d 2020-01-01 a; touch -d 2021-01-01 b; touch -d 2019-01-01 c; ls -t a b c
+$ touch -d 2020-01-01 a; touch -d 2021-01-01 b; touch -d 2019-01-01 c; ls -tr a b c
+$ touch -d 2020-01-01 a b; touch -d 2021-01-01 c; ls -t a b c
+$ touch -d 2020-01-01 src/main.c; touch -d 2022-01-01 src/util.c; ls -t src/main.c src/util.c
+$ touch -d 2020-01-01 a; touch -d 2021-01-01 b; ls -St a b; ls -tS a b
+$ touch -d '2020-01-02 03:04:05' a; ls -l a
+$ touch -d '2020-01-02 03:04:05' a README.md; ls -l a README.md
+$ touch -d '2001-12-31 23:59' *; ls -l
+$ touch -d '2001-12-31 23:59' * src/* src/lib/*; touch -d 2002-02-02 src src/lib; ls -l src
+$ touch -d 2002-02-02 * src/*; ls -ld src
+$ touch -d 2002-02-02 * src/*; ls -ld src README.md empty
+$ touch -d 2002-02-02 * src/* src/lib/*; ls -lR src
+$ touch -d 2002-02-02 * src/* src/lib/*; ls -lr src
+$ touch -d 2002-02-02 * src/* src/lib/*; ls -lS src
+$ touch -d 2002-02-02 * src/* src/lib/*; ls -lh src
+$ touch -d 2002-02-02 * src/* src/lib/*; ls -lp
+$ touch -d 2002-02-02 * src/* src/lib/*; ls -lA src
+$ touch -d 2002-02-02 * src/* src/lib/* .; ls -la src/lib
+$ touch -d 2002-02-02 * src/*; ls -l1 src; ls -1l src
+$ touch -d 2002-02-02 * ; ls -l README.md nope
+$ touch -d 2002-02-02 * ; ls -l empty
+$ touch -d 2002-02-02 * ; ls -l empty src/lib/lex.c
+$ touch -d 2002-02-02 * ; ls -lh
+$ touch -d 2002-02-02 * ; ls -lS; ls -lSr
+$ touch -d 2002-02-02 * ; ls -h
+$ touch -d 2002-02-02 big; cat src/*.c src/lib/* > big; cat big big big big big big big big > big2; cat big2 big2 big2 big2 > big3; touch -d 2002-02-02 big big2 big3; ls -l big big2 big3; ls -lh big big2 big3
+$ touch -d 2002-02-02 * ; ls -l | wc -l
+$ touch -d 2002-02-02 * ; ls -l | grep -c 2002
+! ls -i ## flag: ls -i
+! ls -s ## flag: ls -s
+! ls -F ## flag: ls -F
+! ls --all ## long options

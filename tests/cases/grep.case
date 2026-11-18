@@ -248,22 +248,22 @@ $ grep -c note notes.txt >> notes.txt
 + cat notes.txt
 $ grep -r TODO {ROOT}/src
 $ grep -n add {ROOT}/src/util.c
-! grep -w foo data/words.txt ## grep -w
-! grep -e TODO README.md ## grep -e
+$ grep -w foo data/words.txt
+$ grep -e TODO README.md
 ! grep -f pats README.md ## grep -f
-! grep -o foo data/words.txt ## grep -o
-! grep -A 1 foo data/words.txt ## grep -A
-! grep -B1 foo data/words.txt ## grep -B
-! grep -C 1 foo data/words.txt ## grep -C
-! grep --include='*.c' -r foo . ## long options
-! grep -q foo data/words.txt ## grep -q
-! grep -x foo data/words.txt ## grep -x
+$ grep -o foo data/words.txt
+$ grep -A 1 foo data/words.txt
+$ grep -B1 foo data/words.txt
+$ grep -C 1 foo data/words.txt
+$ grep --include='*.c' -r foo .
+$ grep -q foo data/words.txt
+$ grep -x foo data/words.txt
 ! grep -P 'fo+' data/words.txt ## grep -P
-! grep -h foo data/words.txt ## grep -h
-! grep -H foo data/words.txt ## grep -H
-! grep -s foo data/words.txt ## grep -s
-! grep -R foo . ## grep -R
-! grep -m 1 foo data/words.txt ## grep -m
-! grep -L foo data/words.txt ## grep -L
+$ grep -h foo data/words.txt
+$ grep -H foo data/words.txt
+$ grep -s foo data/words.txt
+$ grep -R foo .
+$ grep -m 1 foo data/words.txt
+$ grep -L foo data/words.txt
 ! grep --recursive foo . ## long options
-! grep -rw foo . ## grep -w
+$ grep -rw foo .

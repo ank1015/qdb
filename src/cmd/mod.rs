@@ -5,7 +5,7 @@
 //! any command on the line has run.
 
 use crate::engine::{Io, Prepared, Runner};
-use crate::util::{getopt, lossy, OptError, Parsed};
+use crate::util::{getopt_long, lossy, LongOpt, OptError, Parsed};
 
 mod files;
 mod find;
@@ -100,14 +100,40 @@ impl LineBuf {
 /// Parse options, turning a missing option argument into GNU's message.
 /// `status` is the exit status the real tool uses for usage errors.
 fn options(cmd: &'static str, args: &[Vec<u8>], bools: &[u8], with_arg: &[u8], status: i32) -> Result<Result<Parsed, Runner>, String> {
-    match getopt(cmd, args, bools, with_arg) {
+    options_long(cmd, args, bools, with_arg, &[], status)
+}
+
+/// `options` for a command with long options.
+fn options_long(
+    cmd: &'static str,
+    args: &[Vec<u8>],
+    bools: &[u8],
+    with_arg: &[u8],
+    longs: &[LongOpt],
+    status: i32,
+) -> Result<Result<Parsed, Runner>, String> {
+    match getopt_long(cmd, args, bools, with_arg, longs) {
         Ok(p) => Ok(Ok(p)),
         Err(OptError::Unsupported(what)) => Err(what),
-        Err(OptError::MissingArg(c)) => Ok(Err(Box::new(move |_, io: &mut Io| {
-            io.err_line(format!("{}: option requires an argument -- '{}'", cmd, char::from(c)));
+        Err(OptError::MissingLongArg(name)) => Ok(Err(Box::new(move |_, io: &mut Io| {
+            io.err_line(format!("{}: option '--{}' requires an argument", cmd, name));
+            usage_line(cmd, io);
             io.err_line(format!("Try '{} --help' for more information.", cmd));
             status
         }))),
+        Err(OptError::MissingArg(c)) => Ok(Err(Box::new(move |_, io: &mut Io| {
+            io.err_line(format!("{}: option requires an argument -- '{}'", cmd, char::from(c)));
+            usage_line(cmd, io);
+            io.err_line(format!("Try '{} --help' for more information.", cmd));
+            status
+        }))),
+    }
+}
+
+/// The line some tools put before "Try 'cmd --help'".
+fn usage_line(cmd: &str, io: &mut Io) {
+    if cmd == "grep" {
+        io.err_line("Usage: grep [OPTION]... PATTERNS [FILE]...".to_string());
     }
 }
 

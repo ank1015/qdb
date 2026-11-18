@@ -30,9 +30,9 @@ $ cat README.md | cat - notes.txt
 $ cat README.md | cat notes.txt -
 $ cat README.md | cat notes.txt
 $ echo hi | cat - -
-! cat -A README.md ## cat -A
-! cat -s README.md ## cat -s
-! cat -b README.md ## cat -b
+$ cat -A README.md
+$ cat -s README.md
+$ cat -b README.md
 ! cat --number README.md ## long options
 
 $ head data/numbers.txt
@@ -69,11 +69,11 @@ $ cat data/numbers.txt | head -n 4
 $ cat data/numbers.txt | head
 $ cat data/numbers.txt | head -n 2 - README.md
 $ head -n 2 {ROOT}/README.md
-! head -5 README.md ## head -5
-! head -c 10 README.md ## head -c
-! head -q README.md ## head -q
-! head -n 1k README.md ## size suffix
-! head -n 2MB README.md ## size suffix
+$ head -5 README.md
+$ head -c 10 README.md
+$ head -q README.md
+$ head -n 1k README.md
+$ head -n 2MB README.md
 $ head -n 1x README.md
 $ cat 'no such file'
 $ cat 'a:b' '~x' 'x~' "it's" 'a?b' 'a,b'
@@ -114,11 +114,11 @@ $ cat data/numbers.txt | tail -n +19
 $ cat data/numbers.txt | tail
 $ head -n 12 data/numbers.txt | tail -n 3
 $ tail -n 2 {ROOT}/notes.txt
-! tail -5 README.md ## tail -5
+$ tail -5 README.md
 ! tail +5 README.md ## tail +N
-! tail -c 10 README.md ## tail -c
+$ tail -c 10 README.md
 ! tail -f README.md ## tail -f
-! tail -n 1k README.md ## size suffix
+$ tail -n 1k README.md
 
 $ wc README.md
 $ wc -l README.md
@@ -164,6 +164,6 @@ $ echo -n | wc
 $ wc
 $ wc -l
 $ wc {ROOT}/README.md
-! wc -m README.md ## wc -m
+$ wc -m README.md
 ! wc -L README.md ## wc -L
 ! wc --lines README.md ## long options

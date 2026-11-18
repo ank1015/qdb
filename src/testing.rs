@@ -15,12 +15,22 @@ pub fn order_is_unspecified(command: &str) -> bool {
     };
     script.all_commands().iter().any(|c| {
         let words: Vec<Vec<u8>> = c.words.iter().map(|w| w.text()).collect();
+        // Every letter given as a short flag.
+        let flags: Vec<u8> = words
+            .iter()
+            .skip(1)
+            .take_while(|w| w.as_slice() != b"--")
+            .filter(|w| w.starts_with(b"-") && !w.starts_with(b"--"))
+            .flat_map(|w| w[1..].to_vec())
+            .collect();
+        let has = |f: &[u8]| f.iter().any(|c| flags.contains(c));
         match words.first().map(|w| w.as_slice()) {
-            Some(b"find") => true,
-            Some(b"grep") => words[1..]
-                .iter()
-                .take_while(|w| w.as_slice() != b"--")
-                .any(|w| w.starts_with(b"-") && !w.starts_with(b"--") && w.contains(&b'r')),
+            Some(b"find") | Some(b"du") => true,
+            Some(b"grep") => has(b"rR"),
+            // The lines -v prints for a tree come in the order of the walk.
+            Some(b"rm") | Some(b"cp") => has(b"v") && has(b"rRa"),
+            // rg walks in directory order unless told to sort.
+            Some(b"rg") => !words.windows(2).any(|w| w[0] == b"--sort" && w[1] == b"path") && !words.iter().any(|w| w == b"--sort=path"),
             _ => false,
         }
     })
@@ -70,9 +80,40 @@ pub fn check_safe(command: &str, root: &Path) -> Result<(), String> {
     for c in &script.all_commands() {
         let words = c.words.iter().skip(1);
         let targets = c.redirects.iter().filter_map(|r| r.target());
+        // A sed script is not a path, though one can name a file to
+        // read or write: that it must not do with a path from the root.
+        let is_sed = c.words.first().is_some_and(|w| w.text() == b"sed");
+        let explicit = is_sed && c.words.iter().any(|w| w.text().starts_with(b"-e") || (w.text().starts_with(b"-") && !w.text().starts_with(b"--") && w.text().ends_with(b"e")));
+        let mut script_next = false;
+        let mut seen_script = explicit;
         for w in words.chain(targets).flat_map(shell::brace_expand).map(|w| w.text()) {
             if w == b"/dev/null" {
                 continue;
+            }
+            if is_sed {
+                let is_script = if script_next {
+                    script_next = false;
+                    true
+                } else if w.starts_with(b"-") && w.len() > 1 {
+                    script_next = !w.starts_with(b"--") && w.ends_with(b"e");
+                    w.starts_with(b"-e") && w.len() > 2
+                } else if !seen_script {
+                    seen_script = true;
+                    true
+                } else {
+                    false
+                };
+                if is_script {
+                    let names_file = (0..w.len()).any(|i| {
+                        let rest = &w[i + 1..];
+                        let name = rest.trim_ascii_start();
+                        b"wWrR".contains(&w[i]) && (i == 0 || w[i - 1] != b'\\') && name.len() < rest.len() && (name.starts_with(b"/") || name.starts_with(b".."))
+                    });
+                    if names_file {
+                        return Err(format!("refusing to run on the real tools (sed script names a file): {}", command));
+                    }
+                    continue;
+                }
             }
             // Follow the path: it must never climb above where it starts,
             // and an absolute path must start inside the root.
@@ -100,6 +141,36 @@ pub fn check_safe(command: &str, root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// In lines that look like `ls -l` entries, replace the owner and group
+/// with `qdb`.
+fn mask_owner(out: &[u8]) -> Vec<u8> {
+    let mut masked = Vec::with_capacity(out.len());
+    for line in out.split_inclusive(|c| *c == b'\n') {
+        let is_entry = line.len() > 11 && matches!(line[0], b'-' | b'd') && line[1..10].iter().all(|c| b"rwx-".contains(c)) && line[10] == b' ';
+        if !is_entry {
+            masked.extend_from_slice(line);
+            continue;
+        }
+        static NAMES: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        let names = NAMES.get_or_init(|| {
+            let id = |flag: &str| {
+                let out = Command::new("id").arg(flag).output().expect("cannot run id");
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            };
+            format!(" {} {} ", id("-un"), id("-gn")).into_bytes()
+        });
+        match line.windows(names.len()).position(|w| w == &names[..]) {
+            Some(at) => {
+                masked.extend_from_slice(&line[..at]);
+                masked.extend_from_slice(b" qdb qdb ");
+                masked.extend_from_slice(&line[at + names.len()..]);
+            }
+            None => masked.extend_from_slice(line),
+        }
+    }
+    masked
+}
+
 /// Run a command line with the real tools: bash, in the C locale, with
 /// `root` as the working directory and no standard input. The root's path
 /// is removed from the output, and bash's own error prefix is replaced by
@@ -119,6 +190,9 @@ pub fn run_real(root: &Path, command: &str) -> Outcome {
     let stdout = replace(&out.stdout, &root_bytes, b"");
     let stderr = replace(&out.stderr, &root_bytes, b"");
     let stderr = replace(&stderr, b"bash: line 1: ", b"qdb: ");
+    // What the data model has no fact for is fixed on the engine's side;
+    // the owner and group of ls -l are made to agree here.
+    let stdout = if command.contains("ls ") { mask_owner(&stdout) } else { stdout };
     Outcome { stdout, stderr, code: out.status.code().unwrap_or(-1) }
 }
 

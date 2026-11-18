@@ -332,6 +332,30 @@ impl Drop for Engine {
     }
 }
 
+/// Give every file and folder under `root` the modification time the
+/// engine has for it, so that commands that sort or select by time see
+/// the same on both sides.
+fn sync_times(db: &Db, root: &Path) {
+    fn walk(db: &Db, id: qdb::tree::NodeId, path: &Path) {
+        if db.is_dir(id) {
+            for (name, child) in db.children(id) {
+                use std::os::unix::ffi::OsStrExt;
+                walk(db, *child, &path.join(std::ffi::OsStr::from_bytes(name)));
+            }
+        }
+        use std::os::unix::ffi::OsStrExt;
+        let t = db.mtime(id);
+        let ts = libc::timespec { tv_sec: t.div_euclid(1_000_000_000) as libc::time_t, tv_nsec: t.rem_euclid(1_000_000_000) as _ };
+        if let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) {
+            // Safety: a path and two times, as utimensat expects.
+            unsafe {
+                libc::utimensat(libc::AT_FDCWD, c.as_ptr(), [ts, ts].as_ptr(), libc::AT_SYMLINK_NOFOLLOW);
+            }
+        }
+    }
+    walk(db, db.root(), root);
+}
+
 fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> Result<(), String> {
     let mut engine = Engine::new(fixture, setup, scratch)?;
     let db = &mut engine;
@@ -382,6 +406,8 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> 
                     let real_command = step.command.replace("{ROOT}", &root_text);
                     let engine_command = step.command.replace("{ROOT}", "");
                     check_safe(&real_command, root)?;
+                    // Both sides start the step with the same file times.
+                    sync_times(db.db(), root);
                     let real = run_real(root, &real_command);
                     let got = db.execute(engine_command.as_bytes())?;
                     // Once a case has stored unordered output, later steps

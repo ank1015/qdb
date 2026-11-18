@@ -201,7 +201,7 @@ $ sed -i -E 's/(add|sub)\(/my_\1(/g' src/util.c src/util.h src/main.c
 + grep -rn my_ src
 $ sed -E -i 's/[0-9]+/N/' data/numbers.txt
 + head -n 3 data/numbers.txt
-! sed -iE 's/1/x/' data/numbers.txt ## backup suffix
+$ sed -iE 's/1/x/' data/numbers.txt
 $ sed -Ei 's/[0-9]+/N/' data/numbers.txt
 + head -n 3 data/numbers.txt
 $ sed 's/1/one/' -i data/numbers.txt
@@ -243,35 +243,35 @@ $ sed -i 's/first/1st/' notes.txt | wc -c
 $ sed -i 's/first/1st/' notes.txt > out.txt
 + wc -c out.txt
 + cat notes.txt
-! sed -n 's/a/b/p' notes.txt ## sed -n
-! sed -e 's/a/b/' notes.txt ## sed -e
-! sed -r 's/a/b/' notes.txt ## sed -r
-! sed -i.bak 's/a/b/' notes.txt ## backup suffix
-! sed -ibak 's/a/b/' notes.txt ## backup suffix
+$ sed -n 's/a/b/p' notes.txt
+$ sed -e 's/a/b/' notes.txt
+$ sed -r 's/a/b/' notes.txt
+$ sed -i.bak 's/a/b/' notes.txt
+$ sed -ibak 's/a/b/' notes.txt
 ! sed --in-place 's/a/b/' notes.txt ## long options
-! sed -s 's/a/b/' notes.txt ## sed -s
+$ sed -s 's/a/b/' notes.txt
 ! sed -z 's/a/b/' notes.txt ## sed -z
-! sed 's/a/b/p' notes.txt ## `p` flag
-! sed 's/a/b/2' notes.txt ## `2` flag
-! sed 's/a/b/I' notes.txt ## `I` flag
-! sed 's/a/b/i' notes.txt ## `i` flag
+$ sed 's/a/b/p' notes.txt
+$ sed 's/a/b/2' notes.txt
+$ sed 's/a/b/I' notes.txt
+$ sed 's/a/b/i' notes.txt
 ! sed 's/a/b/w out.txt' notes.txt ## `w` flag
 ! sed 's/a/b/e' notes.txt ## `e` flag
-! sed 's/a/b/gp' notes.txt ## `p` flag
-! sed '2s/a/b/' notes.txt ## addresses
-! sed '1,2s/a/b/' notes.txt ## addresses
-! sed '/note/s/a/b/' notes.txt ## addresses
-! sed '$s/a/b/' notes.txt ## addresses
-! sed 's/a/b/;s/c/d/' notes.txt ## more than one command
-! sed 's/a/b/⏎s/c/d/' notes.txt ## more than one command
-! sed d notes.txt ## `d` command
-! sed '2d' notes.txt ## addresses
-! sed p notes.txt ## `p` command
-! sed '5,10p' notes.txt ## addresses
-! sed 'y/abc/xyz/' notes.txt ## `y` command
-! sed q notes.txt ## `q` command
-! sed '{s/a/b/}' notes.txt ## blocks
-! sed '' notes.txt ## empty script
+$ sed 's/a/b/gp' notes.txt
+$ sed '2s/a/b/' notes.txt
+$ sed '1,2s/a/b/' notes.txt
+$ sed '/note/s/a/b/' notes.txt
+$ sed '$s/a/b/' notes.txt
+$ sed 's/a/b/;s/c/d/' notes.txt
+$ sed 's/a/b/⏎s/c/d/' notes.txt
+$ sed d notes.txt
+$ sed '2d' notes.txt
+$ sed p notes.txt
+$ sed '5,10p' notes.txt
+$ sed 'y/abc/xyz/' notes.txt
+$ sed q notes.txt
+$ sed '{s/a/b/}' notes.txt
+$ sed '' notes.txt
 ! sed 's/a/\U&/' notes.txt ## case conversion
 ! sed 's/a/\L&/' notes.txt ## case conversion
 ! sed 's/a/\x41/' notes.txt ## escape
@@ -280,4 +280,4 @@ $ sed -i 's/first/1st/' notes.txt > out.txt
 ! sed 's/a/\cA/' notes.txt ## escape
 ! sed 's/a/\o101/' notes.txt ## escape
 ! sed 's\a\b\' notes.txt ## delimiter
-! sed -i -n 's/a/b/' notes.txt ## sed -n
+$ sed -i -n 's/a/b/' notes.txt

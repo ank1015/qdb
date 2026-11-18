@@ -113,12 +113,12 @@ $ cp -r {ROOT}/src {ROOT}/src9
 + ls -R src9
 $ cp {ROOT}/README.md copy.md
 + ls
-! cp -n README.md x ## cp -n
-! cp -a src x ## cp -a
-! cp -R src x ## cp -R
-! cp -v README.md x ## cp -v
-! cp -f README.md x ## cp -f
-! cp -p README.md x ## cp -p
+$ cp -n README.md x
+$ cp -a src x
+$ cp -R src x
+$ cp -v README.md x
+$ cp -f README.md x
+$ cp -p README.md x
 ! cp -t src README.md ## cp -t
 ! cp --recursive src x ## long options
 
@@ -235,9 +235,9 @@ $ mv README.md ''
 $ mv '' x
 $ mv {ROOT}/README.md {ROOT}/abs.md
 + ls
-! mv -n README.md x ## mv -n
-! mv -f README.md x ## mv -f
-! mv -v README.md x ## mv -v
+$ mv -n README.md x
+$ mv -f README.md x
+$ mv -v README.md x
 ! mv -i README.md x ## mv -i
 ! mv -t src README.md ## mv -t
 ! mv --force README.md x ## long options

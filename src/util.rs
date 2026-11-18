@@ -7,6 +7,8 @@ pub enum OptError {
     Unsupported(String),
     /// A flag that takes an argument was last on the line.
     MissingArg(u8),
+    /// The same for a long option.
+    MissingLongArg(&'static str),
 }
 
 #[derive(Debug, Default)]
@@ -33,6 +35,17 @@ impl Parsed {
 /// `bool_flags` and `arg_flags` are the supported flags. Anything else,
 /// including every long option, is an `Unsupported` error.
 pub fn getopt(cmd: &str, args: &[Vec<u8>], bool_flags: &[u8], arg_flags: &[u8]) -> Result<Parsed, OptError> {
+    getopt_long(cmd, args, bool_flags, arg_flags, &[])
+}
+
+/// A long option: its name without the dashes, whether it takes an
+/// argument, and the flag it is recorded as. A long form of a short
+/// flag gives that flag's letter; others give a code of their own.
+pub type LongOpt = (&'static str, bool, u8);
+
+/// `getopt` with long options: `--name`, `--name=value`, `--name value`.
+/// Only the long options listed are known; names are not abbreviated.
+pub fn getopt_long(cmd: &str, args: &[Vec<u8>], bool_flags: &[u8], arg_flags: &[u8], longs: &[LongOpt]) -> Result<Parsed, OptError> {
     let mut out = Parsed::default();
     let mut i = 0;
     while i < args.len() {
@@ -43,11 +56,30 @@ pub fn getopt(cmd: &str, args: &[Vec<u8>], bool_flags: &[u8], arg_flags: &[u8]) 
             break;
         }
         if a.starts_with(b"--") {
-            return Err(OptError::Unsupported(format!(
-                "flag: {} {} (long options are not supported yet)",
-                cmd,
-                String::from_utf8_lossy(a)
-            )));
+            let (name, value) = match a.iter().position(|c| *c == b'=') {
+                Some(eq) => (&a[2..eq], Some(a[eq + 1..].to_vec())),
+                None => (&a[2..], None),
+            };
+            let known = longs.iter().find(|(n, _, _)| n.as_bytes() == name);
+            match (known, value) {
+                (Some((_, true, code)), Some(v)) => out.flags.push((*code, Some(v))),
+                (Some((n, true, code)), None) => {
+                    if i == args.len() {
+                        return Err(OptError::MissingLongArg(n));
+                    }
+                    out.flags.push((*code, Some(args[i].clone())));
+                    i += 1;
+                }
+                (Some((_, false, code)), None) => out.flags.push((*code, None)),
+                _ => {
+                    return Err(OptError::Unsupported(format!(
+                        "flag: {} {} (long options other than the ones listed in the README are not supported)",
+                        cmd,
+                        String::from_utf8_lossy(a)
+                    )))
+                }
+            }
+            continue;
         }
         if a.len() < 2 || a[0] != b'-' {
             out.operands.push(a.clone());

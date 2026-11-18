@@ -265,7 +265,7 @@ $ touch empty/x
 + ls empty
 $ touch {ROOT}/abs.txt
 + ls
-! touch -c x ## touch -c
-! touch -t 202001010000 x ## touch -t
+$ touch -c x
+$ touch -t 202001010000 x
 ! touch -d yesterday x ## touch -d
 ! touch -a x ## touch -a

@@ -1,0 +1,181 @@
+# Stage 4, part 3: the new flags of cat, head, tail and wc.
+@fixture basic
+
+$ cat -A README.md
+$ cat -A src/main.c
+$ cat -b README.md
+$ cat -b src/main.c notes.txt
+$ cat -n -b README.md
+$ cat -bn README.md
+$ cat -e README.md
+$ cat -E README.md
+$ cat -E notes.txt README.md
+$ cat -s README.md
+$ cat -t src/main.c
+$ cat -T src/main.c
+$ cat -u README.md
+$ cat -v README.md
+$ cat -vET src/main.c
+$ cat -sn README.md
+$ cat -sb README.md
+$ cat -nE README.md
+$ cat -bE README.md
+$ cat -AT src/main.c
+$ cat -A nope README.md
+$ cat -A src
+$ cat -A empty/nothing
+$ echo -n 'no newline' | cat -A
+$ echo -n 'no newline' | cat -n
+$ echo -n 'no newline' | cat -E
+$ echo -n 'no newline' > a; echo second > b; cat -n a b
+$ echo -n 'no newline' > a; echo second > b; cat -E a b
+$ echo -n 'no newline' > a; echo second > b; cat -b a b
+$ echo -n 'no newline' > a; echo second > b; cat -A a b
+$ printf 'a\n\n\n\nb\n\n\nc\n' | cat -s
+$ printf 'a\n\n\n\nb\n\n\nc\n' | cat -sn
+$ printf 'a\n\n\n\nb\n\n\nc\n' | cat -sb
+$ printf 'a\n\n\n\nb\n\n\nc\n' | cat -b
+$ printf 'a\n\n\n\nb\n\n\nc\n' | cat -n
+$ printf 'a\n\n\n\nb\n\n\nc\n' | cat -sE
+$ printf 'a\n\n\n\nb\n\n\nc\n' | cat -bE
+$ printf '\n\n\na\n' | cat -s
+$ printf '\n\n\na\n' > f; printf '\n\nb\n' > g; cat -s f g
+$ printf 'a\n\n' > f; printf '\n\nb\n' > g; cat -sn f g
+$ printf 'tab\there\n' | cat -T
+$ printf 'tab\there\n' | cat -t
+$ printf 'tab\there\n' | cat -v
+$ printf 'tab\there\n' | cat -A
+$ printf 'ctl\001\002\033x\177y\n' | cat -v
+$ printf 'ctl\001\002\033x\177y\n' | cat -A
+$ printf 'ctl\001\002\033x\177y\n' | cat -e
+$ printf 'ctl\001\002\033x\177y\n' | cat -t
+$ printf 'cr\r\nlf\n' | cat -E
+$ printf 'cr\r\nlf\n' | cat -A
+$ printf 'cr\r\nlf\n' | cat -v
+$ printf 'cr\rmid\n' | cat -E
+$ printf 'cr\r' | cat -E
+$ printf 'h\303\251llo \342\202\254\n' | cat -v
+$ printf 'h\303\251llo \342\202\254\n' | cat -A
+$ printf 'h\303\251llo\n' | cat -E
+$ printf '\200\237\240\377\n' | cat -v
+$ cat -A - < README.md
+$ echo x | cat -A README.md -
+$ cat -n README.md | cat -A
+! cat --show-all x ## long options
+! cat -x ## flag: cat -x
+
+$ head -c 10 README.md
+$ head -c 0 README.md
+$ head -c 1000 README.md
+$ head -c 10 README.md notes.txt
+$ head -c -10 README.md
+$ head -c -1000 README.md
+$ head -c -0 README.md
+$ head -c 1K README.md | wc -c
+$ head -c 1b README.md | wc -c
+$ head -c 1kB README.md | wc -c
+$ head -c 1KiB README.md | wc -c
+$ head -c 1M README.md | wc -c
+$ head -c 10 < README.md
+$ cat README.md | head -c 10
+$ cat README.md | head -c -10
+$ cat README.md | head -c 0
+$ cat README.md notes.txt | head -c 120 | wc -c
+$ head -c x README.md
+$ head -c 1q README.md
+$ head -c '' README.md
+$ head -c
+$ head -q README.md notes.txt
+$ head -q -n 1 README.md notes.txt
+$ head -v README.md
+$ head -v -n 1 README.md
+$ head -v -n 1 README.md notes.txt
+$ head -qv -n 1 README.md
+$ head -vq -n 1 README.md notes.txt
+$ cat README.md | head -v -n 1
+$ head -v -n 1 - < README.md
+$ head -2 README.md
+$ head -1 README.md notes.txt
+$ head -0 README.md
+$ head -100 README.md
+$ cat README.md | head -3
+$ head -n -2 README.md
+$ head -n -0 README.md
+$ head -n -100 README.md
+$ cat README.md | head -n -2
+$ cat README.md | head -n -100
+$ cat README.md | head -n -0
+$ echo -n 'a⏎b⏎c' | head -n -1
+$ head -n 1K README.md | wc -l
+$ head -n 1b README.md | wc -l
+$ head -n 2 -c 5 README.md
+$ head -c 5 -n 2 README.md
+$ head -n x README.md
+$ head -n 1x README.md
+$ head -n 99999999999999999999 README.md | wc -l
+$ head -c 99999999999999999999 README.md | wc -c
+$ head -c 5 nope README.md
+$ head -c 5 src
+! head -z x ## flag: head -z
+! head --lines=2 x ## long options
+
+$ tail -c 10 README.md
+$ tail -c 0 README.md
+$ tail -c 1000 README.md
+$ tail -c 10 README.md notes.txt
+$ tail -c +10 README.md
+$ tail -c +1 README.md
+$ tail -c +0 README.md
+$ tail -c +1000 README.md
+$ tail -c 1K README.md | wc -c
+$ tail -c 1b README.md | wc -c
+$ tail -c 10 < README.md
+$ cat README.md | tail -c 10
+$ cat README.md | tail -c +10
+$ cat README.md | tail -c 0
+$ cat README.md | tail -c 1000
+$ cat README.md notes.txt | tail -c 30
+$ tail -c x README.md
+$ tail -c
+$ tail -q README.md notes.txt
+$ tail -q -n 1 README.md notes.txt
+$ tail -v README.md
+$ tail -v -n 1 README.md notes.txt
+$ tail -qv -n 1 README.md
+$ cat README.md | tail -v -n 1
+$ tail -2 README.md
+$ tail -1 README.md notes.txt
+$ tail -1 README.md
+$ tail -0 README.md
+$ tail -100 README.md
+$ cat README.md | tail -3
+$ tail -n 1K README.md | wc -l
+$ tail -n +1K README.md | wc -l
+$ tail -n 2 -c 5 README.md
+$ tail -c 5 -n 2 README.md
+$ tail -c 5 nope README.md
+$ tail -c 5 src
+! tail -f README.md ## flag: tail -f
+! tail -F README.md ## flag: tail -F
+! tail +2 README.md ## tail +N
+! tail --bytes=2 x ## long options
+
+$ wc -m README.md
+$ wc -m README.md notes.txt
+$ wc -lm README.md
+$ wc -mc README.md
+$ wc -lwmc README.md
+$ wc -cmwl README.md notes.txt
+$ wc -m < README.md
+$ cat README.md | wc -m
+$ cat README.md | wc -mc
+$ printf 'h\303\251llo\n' | wc -m
+$ printf 'h\303\251llo\n' | wc -c
+$ wc -m nope README.md
+$ wc -m src
+$ wc < README.md
+$ wc -lw < README.md
+$ wc -l < README.md
+$ wc < empty/nothing
+! wc -L x ## flag: wc -L
+! wc --lines x ## long options

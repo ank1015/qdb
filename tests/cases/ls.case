@@ -69,11 +69,11 @@ $ ls {ROOT}/src
 $ ls -R {ROOT}/deep
 $ ls {ROOT}/README.md
 $ ls {ROOT}/nope
-! ls -l ## ls -l
-! ls -la ## ls -l
-! ls -S ## ls -S
-! ls -d src ## ls -d
-! ls -t ## ls -t
-! ls -h ## ls -h
+$ ls -l
+$ ls -la src
+$ ls -S
+$ ls -d src
+$ ls -t
+$ ls -h
 ! ls --all ## long options
-! ls -r ## ls -r
+$ ls -r

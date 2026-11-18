@@ -274,3 +274,28 @@ mod tests {
 pub fn has_glob_bytes(text: &[u8]) -> bool {
     text.iter().any(|c| matches!(c, b'*' | b'?' | b'['))
 }
+
+/// Make a compiled pattern ignore the case of ASCII letters, as
+/// `find -iname` does.
+pub fn fold(toks: &mut [Tok]) {
+    for t in toks {
+        match t {
+            Tok::Lit(c) if c.is_ascii_alphabetic() => {
+                let mut set = Box::new([false; 256]);
+                set[c.to_ascii_lowercase() as usize] = true;
+                set[c.to_ascii_uppercase() as usize] = true;
+                *t = Tok::Class(set);
+            }
+            Tok::Class(set) => {
+                for c in b'a'..=b'z' {
+                    let up = c.to_ascii_uppercase();
+                    if set[c as usize] || set[up as usize] {
+                        set[c as usize] = true;
+                        set[up as usize] = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}

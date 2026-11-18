@@ -121,11 +121,11 @@ $ rm {ROOT}/README.md
 > notes.txt
 > with space.txt
 ! rm -i README.md ## rm -i
-! rm -v README.md ## rm -v
-! rm -d empty ## rm -d
-! rm -R src ## rm -R
+$ rm -v README.md
+$ rm -d empty
+$ rm -R src
 ! rm --recursive src ## long options
-! rm -rfv src ## rm -v
+$ rm -rfv src
 
 $ rmdir empty
 + ls -p
@@ -163,6 +163,6 @@ $ rmdir {ROOT}/empty
 = rmdir /
 2> rmdir: failed to remove '/': Device or resource busy
 ? 1
-! rmdir -p x/y ## rmdir -p
+$ rmdir -p x/y
 ! rmdir -v empty ## rmdir -v
 ! rmdir --parents x ## long options

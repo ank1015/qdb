@@ -68,15 +68,15 @@ $ find . -type f -name '*.md' | wc -l
 $ find . -name '*.c' | grep lib
 $ find {ROOT}/src -name '*.h'
 $ find {ROOT}/deep -maxdepth 1
-! find . -iname '*.C' ## find -iname
-! find . -path './src/*' ## find -path
-! find . -size +1k ## find -size
-! find . -name '*.c' -exec cat {} + ## find -exec
-! find . -print ## find -print
+$ find . -iname '*.C'
+$ find . -path './src/*'
+$ find . -type f -size +1k
+$ find . -name '*.c' -exec cat {} +
+$ find . -print
 ! find . -type l ## find -type l
-! find . -newer README.md ## find -newer
-! find . -name a -o -name b ## find -o
-! find . ! -name a ## find !
+$ find . -newer README.md
+$ find . -name a -o -name b
+$ find . ! -name a
 ! find . -delete ## find -delete
-! find . -mindepth 1 ## find -mindepth
+$ find . -mindepth 1
 ! find . -type f,d ## list of types

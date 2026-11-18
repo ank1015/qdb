@@ -49,6 +49,10 @@ pub enum Assert {
     NotWordBoundary,
     WordStart,
     WordEnd,
+    /// The byte before is not a word byte, or there is none (`grep -w`).
+    AfterNonWord,
+    /// The byte after is not a word byte, or there is none.
+    BeforeNonWord,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +139,8 @@ fn check_assert(a: Assert, hay: &[u8], pos: usize) -> bool {
         Assert::NotWordBoundary => prev == next,
         Assert::WordStart => !prev && next,
         Assert::WordEnd => prev && !next,
+        Assert::AfterNonWord => !prev,
+        Assert::BeforeNonWord => !next,
     }
 }
 
@@ -178,6 +184,9 @@ struct Parser<'a> {
     closed: Vec<bool>,
     has_backref: bool,
     warnings: Vec<String>,
+    /// grep -E with a back-reference: the matcher that handles those
+    /// reads a `{` at the start of an expression as itself.
+    brace_literal: bool,
 }
 
 type PResult<T> = Result<T, String>;
@@ -281,7 +290,7 @@ impl<'a> Parser<'a> {
                         if !grep {
                             return Err(BAD_REPEAT.into());
                         }
-                        false
+                        self.brace_literal && op == b'{'
                     } else if grep {
                         fresh
                     } else if op == b'{' {
@@ -747,9 +756,15 @@ impl Compiler {
 impl Regex {
     /// Compile a pattern. The error is GNU's message for it.
     pub fn new(pattern: &[u8], syn: Syntax) -> Result<Regex, String> {
-        let mut p = Parser { p: pattern, i: 0, syn, ngroups: 0, closed: Vec::new(), has_backref: false, warnings: Vec::new() };
-        let ast = p.parse_alt(0)?;
+        let mut p = Parser { p: pattern, i: 0, syn, ngroups: 0, closed: Vec::new(), has_backref: false, warnings: Vec::new(), brace_literal: false };
+        let mut ast = p.parse_alt(0)?;
         debug_assert!(p.i == pattern.len());
+        if p.has_backref && p.warnings.iter().any(|w| w.contains("{...} at start")) {
+            let warnings = std::mem::take(&mut p.warnings);
+            p = Parser { p: pattern, i: 0, syn, ngroups: 0, closed: Vec::new(), has_backref: false, warnings: Vec::new(), brace_literal: true };
+            ast = p.parse_alt(0)?;
+            p.warnings = warnings;
+        }
         let mut c = Compiler { prog: Vec::new(), sets: Vec::new() };
         if !p.has_backref {
             c.compile(&ast)?;
@@ -772,6 +787,19 @@ impl Regex {
         c.compile(&ast).ok()?;
         c.emit(Inst::Match).ok()?;
         Some(Regex { ast, ngroups: 0, has_backref: false, icase, prog: c.prog, sets: c.sets, scratch: RefCell::default(), warnings: Vec::new() })
+    }
+
+    /// The same pattern, matching only a whole line (`grep -x`) or only
+    /// between bytes that are not word bytes (`grep -w`).
+    pub fn bounded(&self, whole_line: bool) -> Result<Regex, String> {
+        let (before, after) = if whole_line { (Assert::LineStart, Assert::LineEnd) } else { (Assert::AfterNonWord, Assert::BeforeNonWord) };
+        let ast = Node::Cat(vec![Node::Assert(before), self.ast.clone(), Node::Assert(after)]);
+        let mut c = Compiler { prog: Vec::new(), sets: Vec::new() };
+        if !self.has_backref {
+            c.compile(&ast)?;
+            c.emit(Inst::Match)?;
+        }
+        Ok(Regex { ast, prog: c.prog, sets: c.sets, scratch: RefCell::default(), ..self.clone() })
     }
 
     /// One pattern that matches wherever any of `parts` does. None if one

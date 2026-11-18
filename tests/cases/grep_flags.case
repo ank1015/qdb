@@ -1,0 +1,300 @@
+# Stage 4, part 3: the new flags of grep.
+@fixture basic
+
+# -G, -R
+$ grep -G 'a\+' data/words.txt
+$ grep -G -E 'a+' data/words.txt
+$ grep -E -F 'a+' data/words.txt
+$ grep -F -G 'a+' data/words.txt
+$ grep -G -G foo data/words.txt
+$ grep -R TODO src
+$ grep -R TODO .
+$ grep -Rn include src
+$ grep -Rl int .
+$ grep -Rc TODO src
+
+# -o
+$ grep -o foo data/words.txt
+$ grep -o 'a' data/words.txt
+$ grep -on 'an' data/words.txt
+$ grep -o 'p*' data/words.txt
+$ grep -oi 'apple' data/words.txt
+$ grep -o '[a-z]*' data/words.txt
+$ grep -oE '[0-9]+' data/numbers.txt
+! grep -ob 'an' data/words.txt ## grep -b
+$ grep -oc 'a' data/words.txt
+$ grep -ov 'a' data/words.txt
+$ grep -oH int src/util.c
+$ grep -orn int src
+$ grep -o 'x*' data/words.txt
+$ grep -oF 'foo.' data/words.txt
+$ grep -oF -e foo -e bar data/words.txt
+$ grep -ow foo data/words.txt
+$ grep -ox apple data/words.txt
+$ echo 'aaa bbb aaa' | grep -o aaa
+$ echo 'abcabc' | grep -o 'b\|c'
+$ echo -n 'tail no newline' | grep -o 'no'
+$ grep -ol int src/util.c
+
+# -L
+$ grep -L TODO README.md notes.txt
+$ grep -L TODO README.md
+$ grep -L nothinghere README.md notes.txt
+$ grep -rL TODO src
+$ grep -L TODO nope README.md
+$ grep -Ll TODO README.md notes.txt
+$ grep -lL TODO README.md notes.txt
+$ grep -Lc TODO README.md notes.txt
+$ echo TODO | grep -L TODO
+$ echo other | grep -L TODO
+$ grep -Lv TODO README.md notes.txt
+
+# -q
+$ grep -q foo data/words.txt
+$ grep -q nothinghere data/words.txt
+$ grep -q foo nope
+$ grep -q foo nope data/words.txt
+$ grep -q foo data/words.txt nope
+$ grep -q nothinghere nope data/words.txt
+$ grep -rq TODO .
+$ grep -rq nothinghere .
+$ echo foo | grep -q foo
+$ echo foo | grep -q bar
+$ grep -qc foo data/words.txt
+$ grep -ql foo data/words.txt
+$ grep -q foo data/words.txt && echo yes
+$ grep -q zzz data/words.txt || echo no
+$ grep -qv foo data/words.txt
+$ grep -q 'a\{1' data/words.txt
+
+# -s
+$ grep -s foo nope
+$ grep -s foo nope data/words.txt
+$ grep -s foo src
+$ grep -s foo data/words.txt
+$ grep -rs TODO . nope
+$ grep -s 'a\{1' data/words.txt
+$ grep -sq foo nope
+
+# -w
+$ grep -w foo data/words.txt
+$ grep -w apple data/words.txt
+$ grep -wi apple data/words.txt
+$ grep -w 'a' data/words.txt
+$ grep -w 'foo.bar' data/words.txt
+$ grep -wF 'foo' data/words.txt
+$ grep -wF 'foo.bar' data/words.txt
+$ grep -wE 'foo|grape' data/words.txt
+$ grep -wc foo data/words.txt
+$ grep -wn int src/util.c
+$ grep -rw int src
+$ grep -rwl add .
+$ grep -wv foo data/words.txt
+$ grep -w '' data/words.txt
+$ grep -w 'pp' data/words.txt
+$ echo 'foo_bar foo-bar' | grep -w foo
+$ echo 'foo_bar' | grep -w foo
+$ echo 'xfoo foo' | grep -ow foo
+$ echo 'foofoo foo' | grep -w foo
+$ echo 'a1 1a 1' | grep -ow 1
+$ grep -w 'b*' data/words.txt
+
+# -x
+$ grep -x foo data/words.txt
+$ grep -x apple data/words.txt
+$ grep -xi apple data/words.txt
+$ grep -x 'foo.bar' data/words.txt
+$ grep -xF 'foo.bar' data/words.txt
+$ grep -xF 'foo*bar' data/words.txt
+$ grep -xE 'apple|grape' data/words.txt
+$ grep -x '' data/words.txt
+$ grep -xc '' data/blank.txt
+$ grep -xv apple data/words.txt
+$ grep -xn 'ban.*' data/words.txt
+$ grep -rx '#endif' src
+$ grep -wx apple data/words.txt
+$ grep -x 'a*' data/words.txt
+
+# -h, -H
+$ grep -h TODO README.md src/main.c
+$ grep -H TODO README.md
+$ grep -h TODO README.md
+$ grep -rh TODO src
+$ grep -rhn TODO src
+$ grep -hH TODO README.md
+$ grep -Hh TODO README.md src/main.c
+$ grep -Hc TODO README.md
+$ grep -hc TODO README.md src/main.c
+$ grep -hl TODO README.md src/main.c
+$ echo TODO | grep -H TODO
+$ echo TODO | grep -Hn TODO
+$ echo TODO | grep -H TODO - README.md
+$ grep -rhc TODO src
+
+# -I, -a: accepted, no effect
+$ grep -I TODO README.md
+$ grep -a TODO README.md
+$ grep -Ia TODO README.md
+$ grep -rI TODO src
+$ grep -ra TODO src
+
+# -e
+$ grep -e TODO README.md
+$ grep -e TODO -e small README.md
+$ grep -e TODO -e nothinghere README.md
+$ grep -eTODO README.md
+$ grep -e -x README.md
+$ grep -e '-n' Makefile
+$ grep -e 'a' -e 'b' -c data/words.txt
+$ grep -F -e foo -e apple data/words.txt
+$ grep -E -e 'fo+' -e 'gr(a|e)pe' data/words.txt
+$ grep -i -e apple -e FOO data/words.txt
+$ grep -e TODO
+$ echo TODO | grep -e TODO
+$ grep -e '' data/words.txt
+$ grep -re TODO src
+$ grep -e TODO README.md -e small
+$ grep -w -e foo -e apple data/words.txt
+$ grep -x -e foo -e apple data/words.txt
+$ grep -o -e foo -e an data/words.txt
+$ grep -e 'a\{1' -e foo data/words.txt
+$ grep -e
+
+# -A, -B, -C, -NUM
+$ grep -A 1 foo data/words.txt
+$ grep -A1 apple data/words.txt
+$ grep -A 2 banana data/words.txt
+$ grep -B1 foo data/words.txt
+$ grep -B 2 grape data/words.txt
+$ grep -B 100 grape data/words.txt
+$ grep -C 1 grape data/words.txt
+$ grep -C1 apple data/words.txt
+$ grep -1 grape data/words.txt
+$ grep -2 grape data/words.txt
+$ grep -10 grape data/words.txt
+$ grep -A 0 grape data/words.txt
+$ grep -A 0 an data/words.txt
+$ grep -C 0 a data/words.txt
+$ grep -n -A 1 apple data/words.txt
+$ grep -n -B 1 apple data/words.txt
+$ grep -n -C 1 grape data/words.txt
+$ grep -c -A 1 apple data/words.txt
+$ grep -l -A 1 apple data/words.txt
+$ grep -A 1 -B 2 grape data/words.txt
+$ grep -C 1 -A 3 grape data/words.txt
+$ grep -A 3 -C 1 grape data/words.txt
+$ grep -2 -A 0 grape data/words.txt
+$ grep -A 1 TODO README.md src/main.c
+$ grep -B 1 TODO README.md src/main.c src/util.c
+$ grep -H -A 1 TODO README.md
+$ grep -n -A 1 TODO README.md src/main.c
+$ grep -r -A 1 TODO src
+$ grep -rn -C 1 TODO src
+$ grep -rh -B 1 TODO src
+$ grep -v -A 1 a data/words.txt
+$ grep -o -A 1 apple data/words.txt
+$ grep -o -C 1 an data/words.txt
+$ grep -A 1 nothinghere data/words.txt
+$ grep -A x foo data/words.txt
+$ grep -B -1 foo data/words.txt
+$ grep -C '' foo data/words.txt
+$ grep -A
+$ grep -A 1 last notes.txt
+$ grep -B 1 last notes.txt
+$ grep -C 5 second notes.txt
+$ cat data/words.txt | grep -A 1 apple
+$ cat data/words.txt | grep -B 1 grape
+$ cat data/words.txt | grep -n -C 1 grape
+$ cat data/words.txt | grep -H -C 1 grape
+$ grep -A 1 -m 1 apple data/words.txt
+$ grep -A 5 -m 2 an data/words.txt
+$ grep -B 1 -m 2 an data/words.txt
+$ grep -A 1 -e apple -e grape data/words.txt
+$ grep -w -A 1 foo data/words.txt
+$ grep -i -B 1 pine data/words.txt
+$ grep -F -A 1 'foo.' data/words.txt
+$ grep -12345678901234567890 foo data/words.txt
+$ grep -A 99999999999999999999 foo data/words.txt
+
+# -m
+$ grep -m 1 foo data/words.txt
+$ grep -m1 a data/words.txt
+$ grep -m 2 a data/words.txt
+$ grep -m 0 a data/words.txt
+$ grep -m 100 a data/words.txt
+$ grep -m 1 -c a data/words.txt
+$ grep -m 2 -c a data/words.txt
+$ grep -m 1 -n a data/words.txt
+$ grep -m 1 -v a data/words.txt
+$ grep -m 1 -o a data/words.txt
+$ grep -m 1 -l a data/words.txt
+$ grep -m 1 TODO README.md src/main.c src/lib/lex.c
+$ grep -rm 1 int src
+$ grep -rm 1 -c int src
+$ grep -m x a data/words.txt
+$ grep -m -1 a data/words.txt
+$ grep -m
+$ grep -m 1 nothinghere data/words.txt
+$ cat data/words.txt | grep -m 2 a
+$ cat data/words.txt | grep -m 1 -c a
+$ grep -m 1 -L a data/words.txt
+$ grep -m 1k a data/words.txt
+
+# --include, --exclude, --exclude-dir
+$ grep --include='*.c' -r int .
+$ grep --include '*.c' -r int .
+$ grep -r --include='*.h' int src
+$ grep -r --include='*.c' --include='*.h' -l int .
+$ grep -r --include='*.md' TODO .
+$ grep -r --include='nothing*' TODO .
+$ grep -r --include='lex.*' token .
+$ grep -r --include='src/*' int .
+$ grep -r --include='*' -c TODO src
+$ grep -r --exclude='*.c' int .
+$ grep -r --exclude '*.c' int .
+$ grep -r --exclude='*.c' --exclude='*.h' -l i .
+$ grep -r --exclude='*' TODO .
+$ grep -r --exclude='lex.*' -l int .
+$ grep -r --include='*.c' --exclude='main*' -l int .
+$ grep -r --exclude='main*' --include='*.c' -l int .
+$ grep -r --exclude-dir=lib int src
+$ grep -r --exclude-dir lib int src
+$ grep -r --exclude-dir=src -l i .
+$ grep -r --exclude-dir=lib/ int src
+$ grep -r --exclude-dir='l*' -l int .
+$ grep -r --exclude-dir=src/lib -l int .
+$ grep -r --exclude-dir=src -l int src
+$ grep -r --exclude-dir=. -l int .
+$ grep -r --exclude-dir=lib --exclude-dir=docs -l i .
+$ grep -r --exclude-dir=a -l leaf deep
+$ grep --include='*.c' int src/util.c src/util.h
+$ grep --exclude='*.c' int src/util.c src/util.h
+$ grep --exclude='util.c' int src/util.c src/util.h
+$ grep --exclude='src/util.c' int src/util.c src/util.h
+$ grep --exclude-dir=src int src/util.c
+$ grep -r --include='*.C' int src
+$ grep -r --include='[lp]*.c' -l int src
+$ grep -r --include='.*' . src
+$ grep -r --exclude='.*' -l . src
+$ grep -r --include= int src
+$ grep -r --include
+$ grep --exclude-dir
+$ echo int | grep --include='*.c' int
+$ echo int | grep --exclude='*' int
+$ grep -r --include='*.c' -c TODO .
+$ grep -r --include='*.c' -L TODO .
+$ grep -rw --include='*.c' -n add .
+$ grep -ro --include='*.h' 'int [a-z]*' .
+$ grep -rh --include='*.h' -A 1 add .
+
+# combined
+$ grep -nw int src/util.c src/util.h | head -n 3
+$ grep -rho 'int [a-z_]*' src
+$ grep -rhoE '[a-z_]+\(' src
+$ grep -c '' README.md notes.txt
+$ grep -iw 'todo' -r . -l
+$ grep -xn -m 1 '' README.md
+$ grep -vxc '' README.md
+$ grep -Hnm1 TODO README.md src/main.c
+$ grep -sqw foo data/words.txt && echo found
+$ grep -rsL TODO src nope

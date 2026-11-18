@@ -1,0 +1,156 @@
+# Stage 4, part 3: the rest of find.
+@fixture basic
+
+$ find . -iname '*.MD'
+$ find . -iname 'readme*'
+$ find . -iname '[a-m]*.C'
+$ find . -iname 'MAKEFILE'
+$ find . -name 'MAKEFILE'
+$ find . -path './src/*'
+$ find . -path '*lib*'
+$ find . -path 'src/*'
+$ find src -path 'src/*.c'
+$ find . -path './src/lib'
+$ find . -ipath './SRC/*.H'
+$ find . -path '*/lib/*' -name '*.c'
+$ find . -mindepth 1
+$ find . -mindepth 2
+$ find . -mindepth 1 -maxdepth 1
+$ find . -mindepth 2 -maxdepth 1
+$ find . -mindepth 0
+$ find . -mindepth 3 -name '*.c'
+$ find src -mindepth 1 -type d
+$ find . -mindepth x
+$ find . -mindepth
+$ find . -empty
+$ find . -empty -type f
+$ find . -empty -type d
+$ find . -type f ! -empty
+$ find . -type f -size 0
+$ find . -type f -size +0
+$ find . -type f -size -1
+$ find . -type f -size 1
+$ find . -type f -size +1
+$ find . -type f -size 1k
+$ find . -type f -size -2k
+$ find . -type f -size +50c
+$ find . -type f -size -50c
+$ find . -type f -size 104c
+$ find . -type f -size +1w
+$ find . -type f -size 1M
+$ find . -type f -size -1M
+$ find . -type f -size 1G
+$ find . -type f -size +0b
+$ find . -type f -size 5q
+$ find . -type f -size x
+$ find . -type f -size xk
+$ find . -type f -size 1.5k
+$ find . -type f -size ''
+$ find . -type f -size
+$ touch -d 2020-01-01 *; touch -d 2021-01-01 notes.txt; find . -maxdepth 1 -type f -newer README.md
+$ touch -d 2020-01-01 *; touch -d 2021-01-01 notes.txt; find . -maxdepth 1 -type f ! -newer README.md
+$ touch -d 2020-01-01 * src/*; touch -d 2019-01-01 Makefile; find src . -maxdepth 1 -type f -newer Makefile
+$ find . -newer nope
+$ find . -newer
+$ touch -d 2020-01-01 * src/* src/lib/* src/lib src empty; touch README.md; find . -mmin -5
+$ touch -d 2020-01-01 * src/* src/lib/* src/lib src empty .; touch README.md; find . -mmin +5
+$ touch -d 2020-01-01 * src/* src/lib/* src/lib src empty .; touch README.md; find . -mtime -1
+$ touch -d 2020-01-01 * src/* src/lib/* src/lib src empty .; touch README.md; find . -mtime +1
+$ touch -d 2020-01-01 * src/* src/lib/* src/lib src empty .; touch README.md; find . -mtime 0
+$ touch -d 2020-01-01 * src/* src/lib/* src/lib src empty .; find . -mtime +100000
+$ touch -d 2020-01-01 * src/* src/lib/* src/lib src empty .; find . -mmin +1 -type f -name '*.c'
+$ find . -mmin x
+$ find . -mtime
+$ find . -print
+$ find . -name '*.c' -print
+$ find . -print -name '*.c'
+$ find . -name '*.c' -print -print
+$ find . -type d -print -o -name '*.h' -print
+$ find . -type d -o -name '*.h' -print
+$ find . -type d -o -name '*.h'
+$ find src -name '*.c' -print0 | wc -c
+$ find src/lib -name '*.h' -print0 | cat -A
+$ find . -name src -prune
+$ find . -name src -prune -o -print
+$ find . -name src -prune -o -type f -print
+$ find . -name lib -prune -o -name '*.c' -print
+$ find . -prune
+$ find src -prune -name '*.c'
+$ find . -type f -prune
+$ find . ! -name '*.c'
+$ find . -not -name '*.c' -type f
+$ find . ! -type d
+$ find . ! ! -type d
+$ find . -name '*.c' -a -type f
+$ find . -name '*.c' -and -type f
+$ find . -name '*.c' -o -name '*.h'
+$ find . -name '*.c' -or -name '*.h'
+$ find . -name '*.md' -o -name '*.txt' -o -name '*.h'
+$ find . -type f -name '*.c' -o -type d
+$ find . '(' -name '*.c' -o -name '*.h' ')' -path '*lib*'
+$ find . \( -name '*.c' -o -name '*.h' \) -path '*lib*'
+$ find . \( -type f \) \( -name 'M*' \)
+$ find . ! \( -name '*.c' -o -type d \)
+$ find . \( ! -name '*.c' \) -a \( ! -type d \)
+$ find . -name '*.c' -o -name '*.h' -print
+$ find . \( -name '*.c' -o -name '*.h' \) -print
+$ find . -o -name x
+$ find . -name x -o
+$ find . -a -name x
+$ find . -name x -a
+$ find . !
+$ find . \(
+$ find . \( -name x
+$ find . -name x \)
+$ find . \( \)
+$ find . -name a b
+$ find . -type f -exec echo found {} \;
+$ find . -type f -exec echo found {} ';'
+$ find . -type f -exec echo {} {} \;
+$ find . -type f -exec echo pre-{}-post \;
+$ find . -type f -exec echo none \;
+$ find . -name '*.c' -exec wc -l {} \;
+$ find . -name '*.c' -exec grep -c int {} \;
+$ find . -name '*.c' -exec grep -l int {} \;
+$ find . -name '*.md' -exec cat {} \;
+$ find . -name '*.c' -exec head -n 1 {} \;
+$ find src -type f -exec grep -q int {} \; -print
+$ find src -type f ! -exec grep -q int {} \; -print
+$ find src -type f -exec grep -q int {} \; -exec echo has-int {} \;
+$ find . -name '*.c' -exec wc -l {} +
+$ find . -name '*.c' -exec ls {} +
+$ find . -name '*.c' -exec ls -d src {} +
+$ find . -name '*.c' -exec echo {} + | wc -w
+$ find . -type f -exec grep -l int {} +
+$ find . -type f -exec grep -c e {} + | wc -l
+$ find . -name '*.zzz' -exec echo {} +
+$ find . -name '*.zzz' -exec echo {} \;
+$ find . -name '*.c' -print -exec ls {} +
+$ find . -name '*.txt' -exec rm {} \;⏎ls
+$ find . -name '*.txt' -exec rm {} +⏎ls
+$ find . -name '*.c' -exec cp {} {}.bak \;⏎find . -name '*.bak'
+$ find . -name '*.c' -exec mv {} {}.old \;⏎find . -name '*.old'
+$ find src -type f -exec touch -d 2020-02-02 {} +⏎ls -l src/main.c
+$ find . -name '*.md' -exec sed -i s/a/A/ {} \;⏎cat README.md
+$ find . -type d -name lib -exec rm -r {} \;
+$ find . -type f -exec false \;
+$ find . -type f -exec ls nope-{} \;
+$ find . -name '*.md' -exec cat nope {} +
+$ find . -exec
+$ find . -exec echo
+$ find . -exec echo {}
+$ find . -exec echo {} x +
+$ find . -exec \;
+$ find . -name '*.c' -exec echo {} \; -o -name '*.h' -exec echo header {} \;
+! find . -exec awk 1 {} \; ## command: awk
+! find . -exec cd {} \; ## command: cd
+! find . -exec ls --color {} \; ## long options
+! find . -delete ## flag: find -delete
+! find . -regex x ## flag: find -regex
+! find . -name a , -name b ## comma
+! find . -printf x ## flag: find -printf
+! find . -ok echo {} \; ## flag: find -ok
+! find . -depth ## flag: find -depth
+! find . -perm 644 ## flag: find -perm
+! find . -user root ## flag: find -user
+! find -L . ## flag: find -L

@@ -159,5 +159,5 @@ $ cat data/long.txt > out.txt | head -n 1
 # anything unsupported is still refused before any stage runs
 ! cat data/long.txt | head -n 1 | awk 1 ## command: awk
 ! mkdir made | head --lines=1 ## long options
-! echo x > made.txt | tail -5 ## tail -5
-! rm notes.txt | grep -o a ## grep -o
+$ echo x > made.txt | tail -5
+$ rm notes.txt | grep -o a
