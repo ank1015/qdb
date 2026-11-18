@@ -21,8 +21,16 @@ path = "src/bin/harness.rs"
 name = "qdb-bench"
 path = "src/bin/bench.rs"
 
+[[bin]]
+name = "qdb-stress"
+path = "src/bin/stress.rs"
+
 [dependencies]
 memchr = "2"
+# System calls (mmap, flock) and a checksum: the two things the storage
+# layer does not write itself.
+libc = "0.2"
+crc32fast = "1"
 
 [profile.release]
 opt-level = 3

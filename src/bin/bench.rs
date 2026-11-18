@@ -12,7 +12,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
@@ -453,101 +453,7 @@ fn real_datasets() -> Vec<RealDataset> {
         .collect()
 }
 
-// ------------------------------------------------- real tools, for timing
-
-/// Run a command line with the real tools: bash in the C locale, in
-/// `root`, no standard input, output captured through a pipe.
-/// What a real command produced.
-struct RealOutput {
-    code: i32,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
-/// Run a command on the real tools: bash, in the dataset's folder, with
-/// its output captured through pipes. The time is from starting bash to
-/// its exit with all output read.
-///
-/// The command is started by a small helper process, not by this one.
-/// This process holds the whole dataset in memory, and starting a child
-/// from a process that large costs time that would be charged to the
-/// real tools; it also leaves this process's memory marked to be copied
-/// on the next write, which would be charged to the engine.
-fn run_real(root: &Path, command: &str) -> (Duration, RealOutput) {
-    use std::io::{Read, Write};
-    static HELPER: std::sync::Mutex<Option<(std::process::ChildStdin, std::process::ChildStdout)>> = std::sync::Mutex::new(None);
-    let mut helper = HELPER.lock().unwrap();
-    if helper.is_none() {
-        let exe = std::env::current_exe().expect("own path");
-        let mut child = Command::new(exe).arg("--helper").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("starting the helper");
-        *helper = Some((child.stdin.take().unwrap(), child.stdout.take().unwrap()));
-    }
-    let (to, from) = helper.as_mut().unwrap();
-    let root = root.to_string_lossy();
-    let mut request = Vec::new();
-    for part in [root.as_bytes(), command.as_bytes()] {
-        request.extend_from_slice(&(part.len() as u64).to_le_bytes());
-        request.extend_from_slice(part);
-    }
-    to.write_all(&request).and_then(|_| to.flush()).expect("writing to the helper");
-    let number = |from: &mut std::process::ChildStdout| {
-        let mut b = [0u8; 8];
-        from.read_exact(&mut b).expect("reading from the helper");
-        u64::from_le_bytes(b)
-    };
-    let nanos = number(from);
-    let code = number(from) as i64 as i32;
-    let read = |from: &mut std::process::ChildStdout| {
-        let mut data = vec![0u8; number(from) as usize];
-        from.read_exact(&mut data).expect("reading from the helper");
-        data
-    };
-    let stdout = read(from);
-    let stderr = read(from);
-    (Duration::from_nanos(nanos), RealOutput { code, stdout, stderr })
-}
-
-/// The helper process: runs each command it is sent and sends back the
-/// time, exit status and output. Ends when its input does.
-fn helper() {
-    use std::io::{Read, Write};
-    let mut input = std::io::stdin().lock();
-    let mut output = std::io::stdout().lock();
-    loop {
-        let mut field = || -> Option<Vec<u8>> {
-            let mut b = [0u8; 8];
-            input.read_exact(&mut b).ok()?;
-            let mut data = vec![0u8; u64::from_le_bytes(b) as usize];
-            input.read_exact(&mut data).ok()?;
-            Some(data)
-        };
-        let (root, command) = match (field(), field()) {
-            (Some(r), Some(c)) => (String::from_utf8_lossy(&r).into_owned(), String::from_utf8_lossy(&c).into_owned()),
-            _ => return,
-        };
-        let t = Instant::now();
-        let out = Command::new("bash")
-            .args(["--noprofile", "--norc", "-c", &command])
-            .current_dir(&root)
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("LC_ALL", "C")
-            .stdin(Stdio::null())
-            .output()
-            .expect("cannot run bash");
-        let nanos = t.elapsed().as_nanos() as u64;
-        let mut reply = Vec::new();
-        reply.extend_from_slice(&nanos.to_le_bytes());
-        reply.extend_from_slice(&(out.status.code().unwrap_or(-1) as i64 as u64).to_le_bytes());
-        for part in [&out.stdout, &out.stderr] {
-            reply.extend_from_slice(&(part.len() as u64).to_le_bytes());
-            reply.extend_from_slice(part);
-        }
-        if output.write_all(&reply).and_then(|_| output.flush()).is_err() {
-            return;
-        }
-    }
-}
+use qdb::testing::{helper, timed_real as run_real};
 
 fn shell_quote(arg: &[u8]) -> String {
     format!("'{}'", String::from_utf8_lossy(arg).replace('\'', "'\\''"))
@@ -1249,6 +1155,7 @@ const LABELS: &[(&str, &str)] = &[
     ("part3", "Part 3, no index"),
     ("part4-noindex", "Part 4, index off"),
     ("part4", "Part 4, index on"),
+    ("s3p1", "Stage 3 part 1"),
 ];
 
 struct Stored {

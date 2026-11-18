@@ -1,0 +1,14 @@
+# Values for the placeholders in bench/commands.txt, for the rfc dataset.
+# Chosen by qdb-bench from measured frequencies; delete this file to choose again.
+ABSENT=qdbzzabsentterm  # 0 of 7946 files, 0.00%
+COMMON=including  # 4751 of 7946 files, 59.79%
+EXT=ps  # 50 files in the whole dataset
+EXT2=txt  # 7896 files in the whole dataset
+FEW=characterizes  # 80 of 7946 files, 1.01%
+FILE=rfc1641.ps  # 20451 bytes
+GLOB=*.ps  # 50 files
+ONE=adjacencyisdestroyed  # 1 of 7946 files, 0.01%
+PREFIX=client  # PREFIX_[a-z]+\( matches in 11 of 7946 files, 0.14%
+RARE=currentcolortransfer  # 8 of 7946 files, 0.10%
+RAREUP=CURRENTCOLORTRANSFER  # the RARE term in capitals, for -i
+SOME=statistics  # 796 of 7946 files, 10.02%

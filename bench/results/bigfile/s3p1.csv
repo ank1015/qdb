@@ -1,0 +1,12 @@
+command,kind,gnu_ms,engine_ms,engine_peak_bytes,agree
+"grep -n qdbrareterm big.txt",read,867.9345,220.8524,15208,true
+"grep -c qdbrareterm big.txt",read,652.8053,98.7561,15973,true
+"wc -l big.txt",read,167.6851,1931.9544,1060,true
+"tail -n 5 big.txt",read,2.3084,0.0169,1148,true
+"echo 'one more line at the end' >> big.txt",write,1.7015,4250.0194,2147484622,true
+"echo 'and a second one' >> big.txt",write,2.5085,3358.0600,2147484632,true
+"echo 'and a third' >> big.txt",write,2.1433,3540.0790,2147484710,true
+"sed -i 's/QDBUNIQUELINE/QDBCHANGEDLINE/' big.txt",write,2817.1117,15106.3619,1342187503,true
+"grep -n QDBCHANGEDLINE big.txt",read,600.1370,184.1777,19132,true
+"tail -n 4 big.txt",read,2.2382,0.0114,1051,true
+"wc big.txt",read,14398.6683,2049.2876,892,true

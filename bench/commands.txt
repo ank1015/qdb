@@ -81,6 +81,11 @@ grep -rin 'return [a-z_]*;$' {DIR}
 grep -rv e {SMALLDIR}
 grep -r '\({FEW}\).*\1' .
 
+# Search in files named on the command line
+grep -n {RARE} {GLOB}
+grep -l {FEW} {GLOB}
+grep -c {ABSENT} {GLOB}
+
 # Pipelines
 grep -rl {SOME} . | wc -l
 grep -rc {COMMON} . | grep -v ':0$' | wc -l
@@ -104,6 +109,11 @@ mut: cp -r {GLOBDIR} bench_out/work
 mut: sed -i 's/{COMMON}/QDBBENCHONE/g' bench_out/copy.txt
 mut: sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt
 mut: sed -i 's/{COMMON}/QDBBENCHMANY/g' bench_out/work/*.{EXT}
+mut: sed -i 's/{ABSENT}/QDBBENCHNONE/g' bench_out/work/*.{EXT}
+mut: sed -i 's/{RARE}/QDBBENCHFEW/g' bench_out/work/*.{EXT}
+mut: cp {FILE} bench_out/same.txt
+mut: cp {FILE} bench_out/same.txt
+mut: cat {FILE} > bench_out/same.txt
 mut: grep -rc QDBBENCHMANY bench_out
 mut: grep -rl QDBBENCHMANY .
 mut: grep -rl QDBBENCHONE .
