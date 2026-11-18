@@ -33,6 +33,15 @@ pub enum Query {
 }
 
 impl Query {
+    /// How many trigrams the query names.
+    pub fn trigrams(&self) -> usize {
+        match self {
+            Query::All | Query::Nothing => 0,
+            Query::Has(_) => 1,
+            Query::And(parts) | Query::Or(parts) => parts.iter().map(|p| p.trigrams()).sum(),
+        }
+    }
+
     /// Files containing the string: all of its trigrams. A string shorter
     /// than three bytes says nothing.
     pub fn string(s: &[u8]) -> Query {

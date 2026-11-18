@@ -36,6 +36,7 @@ use crate::disk::{self, damage, Damage, Packed, PackedWriter, Piece, Reader, Seg
 use crate::index::{self, Index, Lists, Postings};
 pub use crate::index::{IndexStats, IndexWork};
 use crate::query::{Query, Trigram};
+use std::cell::Cell;
 use std::rc::Rc;
 use crate::vfs::{MemFs, RealFs, Vfs};
 use std::borrow::Cow;
@@ -294,6 +295,125 @@ impl Default for Config {
 pub struct Scratch {
     pub vfs: Option<Rc<dyn Vfs>>,
     pub limit: usize,
+    /// Bytes written to scratch files, for the cost report.
+    pub used: Rc<Cell<u64>>,
+}
+
+impl Scratch {
+    /// No place: everything is held in memory.
+    pub fn none() -> Scratch {
+        Scratch { vfs: None, limit: 0, used: Rc::default() }
+    }
+}
+
+/// What one unit of work used. Everything but the two times is a count,
+/// and is the same every time the same unit runs on the same database.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Cost {
+    /// Bytes of file content looked at, and in how many pieces.
+    pub text_bytes: u64,
+    pub text_pieces: u64,
+    /// Bytes of index lists read, and for how many trigrams.
+    pub index_bytes: u64,
+    pub index_lookups: u64,
+    /// Files and folders reached: every step of a path that was looked
+    /// up, and every entry of a folder that was listed.
+    pub tree_nodes: u64,
+    /// Bytes added to the data files as content.
+    pub content_written: u64,
+    /// Bytes added to the data files as records of what changed.
+    pub records_written: u64,
+    /// Bytes written by upkeep that fell due in this unit: index files,
+    /// saves of the tree, content moved to free space.
+    pub upkeep_written: u64,
+    /// Calls that waited for the disk.
+    pub syncs: u64,
+    /// Bytes that went to scratch files.
+    pub scratch_bytes: u64,
+    /// The most the engine's own memory rose above where it stood when
+    /// the unit began. 0 unless the program counts allocations (`mem`).
+    pub memory: u64,
+    /// Measured, so different from run to run: processor time and
+    /// elapsed time, in nanoseconds.
+    pub cpu_ns: u64,
+    pub elapsed_ns: u64,
+}
+
+impl Cost {
+    /// The counts without the two times: what must repeat exactly.
+    pub fn counts(&self) -> Cost {
+        Cost { cpu_ns: 0, elapsed_ns: 0, ..*self }
+    }
+
+    /// Add another unit's cost; memory is the larger of the two.
+    pub fn add(&mut self, o: &Cost) {
+        self.text_bytes += o.text_bytes;
+        self.text_pieces += o.text_pieces;
+        self.index_bytes += o.index_bytes;
+        self.index_lookups += o.index_lookups;
+        self.tree_nodes += o.tree_nodes;
+        self.content_written += o.content_written;
+        self.records_written += o.records_written;
+        self.upkeep_written += o.upkeep_written;
+        self.syncs += o.syncs;
+        self.scratch_bytes += o.scratch_bytes;
+        self.memory = self.memory.max(o.memory);
+        self.cpu_ns += o.cpu_ns;
+        self.elapsed_ns += o.elapsed_ns;
+    }
+
+    /// Every name and value, in the order `--cost` prints them.
+    pub fn fields(&self) -> [(&'static str, u64); 13] {
+        [
+            ("text_bytes", self.text_bytes),
+            ("text_pieces", self.text_pieces),
+            ("index_bytes", self.index_bytes),
+            ("index_lookups", self.index_lookups),
+            ("tree_nodes", self.tree_nodes),
+            ("content_written", self.content_written),
+            ("records_written", self.records_written),
+            ("upkeep_written", self.upkeep_written),
+            ("syncs", self.syncs),
+            ("scratch_bytes", self.scratch_bytes),
+            ("memory", self.memory),
+            ("cpu_us", self.cpu_ns / 1000),
+            ("elapsed_us", self.elapsed_ns / 1000),
+        ]
+    }
+}
+
+impl std::fmt::Display for Cost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, (name, value)) in self.fields().iter().enumerate() {
+            write!(f, "{}{}={}", if i == 0 { "" } else { " " }, name, value)?;
+        }
+        Ok(())
+    }
+}
+
+/// Running counts of what was read, behind `Cost`.
+#[derive(Default)]
+struct Tally {
+    text_bytes: Cell<u64>,
+    text_pieces: Cell<u64>,
+    index_bytes: Cell<u64>,
+    index_lookups: Cell<u64>,
+    tree_nodes: Cell<u64>,
+    scratch: Rc<Cell<u64>>,
+}
+
+/// Where the counts stood when a unit began.
+struct UnitStart {
+    reads: [u64; 6],
+    io: IoStats,
+    live: usize,
+    cpu: u64,
+    at: std::time::Instant,
+}
+
+#[inline]
+fn bump(c: &Cell<u64>, by: u64) {
+    c.set(c.get() + by);
 }
 
 /// What opening a database found and did.
@@ -451,6 +571,9 @@ pub struct Db {
     /// Work done by indexes that are no longer in memory.
     work: IndexWork,
     io: IoStats,
+    tally: Tally,
+    unit: Option<UnitStart>,
+    last_cost: Cost,
     /// Upkeep under way, done a step at a time as command lines end: an
     /// index file being written, the tree being saved, and the data file
     /// whose content is being moved out so that it can be removed (and
@@ -676,6 +799,9 @@ impl Db {
             failed: None,
             work: IndexWork::default(),
             io: IoStats::default(),
+            tally: Tally::default(),
+            unit: None,
+            last_cost: Cost::default(),
             idx_job: None,
             ckp_job: None,
             clean: None,
@@ -1555,8 +1681,48 @@ impl Db {
     /// A storage failure, if there has been one. After a failure nothing
     /// more is written, and what commands report is not to be relied on.
     /// Where output bound for a file may wait: see `engine::Spool`.
+    pub fn begin_unit(&mut self) {
+        self.unit = Some(UnitStart { reads: self.reads(), io: self.io, live: crate::mem::mark(), cpu: crate::mem::cpu_ns(), at: std::time::Instant::now() });
+    }
+
+    fn reads(&self) -> [u64; 6] {
+        let t = &self.tally;
+        [t.text_bytes.get(), t.text_pieces.get(), t.index_bytes.get(), t.index_lookups.get(), t.tree_nodes.get(), t.scratch.get()]
+    }
+
+    /// What the unit begun with `begin_unit` used. Kept as `last_cost`.
+    pub fn end_unit(&mut self) -> Cost {
+        let Some(start) = self.unit.take() else { return Cost::default() };
+        let now = self.reads();
+        let d = |i: usize| now[i] - start.reads[i];
+        let (a, b) = (&start.io, &self.io);
+        let moved = b.moved_bytes - a.moved_bytes;
+        let cost = Cost {
+            text_bytes: d(0),
+            text_pieces: d(1),
+            index_bytes: d(2),
+            index_lookups: d(3),
+            tree_nodes: d(4),
+            content_written: b.content_bytes - a.content_bytes - moved,
+            records_written: b.log_bytes - a.log_bytes,
+            upkeep_written: b.index_bytes - a.index_bytes + b.tree_bytes - a.tree_bytes + moved,
+            syncs: b.syncs - a.syncs + b.dir_syncs - a.dir_syncs,
+            scratch_bytes: d(5),
+            memory: crate::mem::rise(start.live) as u64,
+            cpu_ns: crate::mem::cpu_ns().saturating_sub(start.cpu),
+            elapsed_ns: start.at.elapsed().as_nanos() as u64,
+        };
+        self.last_cost = cost;
+        cost
+    }
+
+    /// The cost of the last unit that ended.
+    pub fn last_cost(&self) -> Cost {
+        self.last_cost
+    }
+
     pub fn scratch(&self) -> Scratch {
-        Scratch { vfs: if self.volatile { None } else { Some(self.vfs.clone()) }, limit: self.cfg.spool }
+        Scratch { vfs: if self.volatile { None } else { Some(self.vfs.clone()) }, limit: self.cfg.spool, used: self.tally.scratch.clone() }
     }
 
     /// A scratch file could not be written: the storage has failed.
@@ -2165,6 +2331,8 @@ impl Db {
     /// The text of one piece.
     #[inline]
     pub fn text_of(&self, p: &Piece) -> Cow<'_, [u8]> {
+        bump(&self.tally.text_bytes, p.len as u64);
+        bump(&self.tally.text_pieces, 1);
         let stored = self.seg(p.seg).piece(p);
         if p.enc == disk::ENC_LZ4 {
             return match lz4_flex::block::decompress(stored, p.len as usize) {
@@ -2216,6 +2384,8 @@ impl Db {
                     for p in pieces {
                         seg.piece(p);
                     }
+                    bump(&self.tally.text_bytes, end - first.off as u64);
+                    bump(&self.tally.text_pieces, pieces.len() as u64);
                     return Cow::Borrowed(seg.bytes(first.off as u64, (end - first.off as u64) as usize));
                 }
                 let mut all = Vec::with_capacity(self.text(id).len as usize);
@@ -2373,9 +2543,13 @@ impl Db {
             // Documents are numbered from 1, pieces from 0. The index
             // file covers the lower numbers, so the result is ascending.
             if let Some(p) = &seg.packed {
+                bump(&self.tally.index_bytes, index::cost(p, query) as u64);
+                bump(&self.tally.index_lookups, query.trigrams() as u64);
                 ords.extend(index::eval(p, query)?.into_iter().map(|d| d - 1));
             }
             if let Some(d) = &seg.dynamic {
+                bump(&self.tally.index_bytes, index::cost(d, query) as u64);
+                bump(&self.tally.index_lookups, query.trigrams() as u64);
                 ords.extend(index::eval(d, query)?.into_iter().map(|d| d - 1));
             }
             // Pieces in no index can always match.
@@ -2590,12 +2764,16 @@ impl Db {
     /// Children of a folder in byte order. Panics on a file.
     pub fn children(&self, id: NodeId) -> &BTreeMap<Vec<u8>, NodeId> {
         match &self.nodes[id].kind {
-            NodeKind::Folder(c) => c,
+            NodeKind::Folder(c) => {
+                bump(&self.tally.tree_nodes, c.len() as u64);
+                c
+            }
             NodeKind::File(_) => panic!("children() on a file"),
         }
     }
 
     pub fn child(&self, id: NodeId, name: &[u8]) -> Option<NodeId> {
+        bump(&self.tally.tree_nodes, 1);
         match &self.nodes[id].kind {
             NodeKind::Folder(c) => c.get(name).copied(),
             NodeKind::File(_) => None,
@@ -2652,6 +2830,7 @@ impl Db {
                 cur = self.nodes[cur].parent.unwrap_or(self.root);
                 continue;
             }
+            bump(&self.tally.tree_nodes, 1);
             cur = *children.get(comp).ok_or(Errno::NoEnt)?;
         }
         Ok(cur)

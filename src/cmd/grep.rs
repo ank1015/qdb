@@ -183,8 +183,7 @@ impl Plan {
 fn next_match(finders: &[Regex], line: &[u8], from: usize) -> Result<Option<(usize, usize)>, MatchError> {
     let mut best: Option<(usize, usize)> = None;
     for re in finders {
-        if let Some(caps) = re.find_at(line, from, false)? {
-            let (s, e) = caps[0].expect("the whole match");
+        if let Some((s, e)) = re.find_span(line, from)? {
             if best.map_or(true, |(bs, be)| s < bs || s == bs && e > be) {
                 best = Some((s, e));
             }

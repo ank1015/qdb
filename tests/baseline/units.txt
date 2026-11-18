@@ -1,0 +1,187 @@
+# The benchmark command list (bench/commands.txt) with the search terms of
+# the generated dataset `small` (bench/terms/small.txt) filled in. Made by
+# tests/baseline/make-units.py; make it again when the command list changes.
+# The harness runs these in order and compares what each one reads, writes
+# and syncs with counters.tsv.
+ls
+ls -a
+ls -R
+ls -aR src/mod_01
+ls -p src/mod_01
+find .
+find . -name '*.c'
+find . -name '*.txt'
+find . -type d
+find . -type f
+find . -maxdepth 2 -type f
+find src/mod_01 -name '*.c' -type f
+find . -name 'Makefile'
+cat src/main.c
+cat -n src/main.c
+head -n 20 src/main.c
+tail -n 20 src/main.c
+tail -n +100 src/main.c
+wc src/main.c
+wc -l src/*.c
+cat src/*.c | wc -l
+cat src/main.c | head -n 50 | tail -n 10
+grep -c kadifo src/main.c
+grep -n kadifo src/main.c
+sed 's/kadifo/XX/g' src/main.c
+sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' src/main.c
+cat src/main.c | sed 's/^/> /' | wc -c
+grep -rn qdbzzabsentterm .
+grep -rl qdbzzabsentterm .
+grep -rn coincobu .
+grep -rl coincobu .
+grep -rn bukadapa .
+grep -rl bukadapa .
+grep -rn cojokane .
+grep -rl cojokane .
+grep -rn zealto .
+grep -rl zealto .
+grep -rn kadifo .
+grep -rl kadifo .
+grep -rc cojokane .
+grep -rin BUKADAPA .
+grep -ri cojokane .
+grep -rn cojokane src/mod_01
+grep -rl zealto src/mod_01
+grep -rF 'cojokane' .
+grep -rE 'beunbe_[a-z]+\(' .
+grep -rE 'bukadapa|coincobu' .
+grep -rE 'zealto|cojokane' .
+grep -rE '[0-9]{4,}' .
+grep -rn '^#include' .
+grep -rE '^(import|from) ' .
+grep -rin 'return [a-z_]*;$' src/mod_01
+grep -rv e docs/mod_01/mod_02
+grep -r '\(cojokane\).*\1' .
+grep -n bukadapa src/*.c
+grep -l cojokane src/*.c
+grep -c qdbzzabsentterm src/*.c
+grep -rl zealto . | wc -l
+grep -rc kadifo . | grep -v ':0$' | wc -l
+find . -name '*.c' | wc -l
+find . -type f | grep -c c
+grep -rn kadifo . | head -n 5
+grep -rn zealto . | head -n 1
+find . -type f | head -n 3
+cat src/*.c | head -n 2
+grep -rno cojokane .
+grep -rw cojokane .
+grep -rnw bukadapa .
+grep -rn -C 2 bukadapa .
+grep -rn -A 1 -B 1 cojokane .
+grep -rho 'beunbe_[a-z_]*' . | sort | uniq -c | sort -rn | head
+grep -rhow '[a-z]*bukadapa[a-z]*' . | sort | uniq -c | sort -rn | head -n 5
+rg -j 1 qdbzzabsentterm
+rg -j 1 coincobu
+rg -j 1 bukadapa
+rg -j 1 cojokane
+rg -j 1 zealto
+rg -j 1 kadifo
+rg -j 1 -l cojokane
+rg -j 1 -l kadifo
+rg -j 1 -c zealto
+rg -j 1 -i BUKADAPA
+rg -j 1 -w cojokane
+rg -j 1 -F 'cojokane'
+rg -j 1 -n -C 2 bukadapa
+rg -j 1 'beunbe_[a-z]+\('
+rg -j 1 'bukadapa|coincobu'
+rg -j 1 '\bbukadapa\w*'
+rg -j 1 -t c cojokane
+rg -j 1 -g '*.c' cojokane
+rg -j 1 cojokane src/mod_01
+rg -j 1 -uu cojokane
+rg -j 1 --sort path bukadapa
+rg -j 1 --files | wc -l
+rg -j 1 -l zealto | wc -l
+ls -ltR
+ls -lt src
+ls -ltr src/mod_01 | tail -n 3
+find . -newer src/main.c
+find . -newer src/main.c -name '*.c'
+find . -type f -mtime +30
+du -s .
+du -sh src/mod_01
+du -sb .
+du -sb src/mod_01
+du -b -d 1 src/mod_01
+sort src/main.c
+sort -r src/main.c | head -n 3
+sort -u src/main.c | wc -l
+sort -k 2 src/main.c | tail -n 3
+cat src/*.c | sort | uniq -c | sort -rn | head -n 5
+uniq -c src/main.c | wc -l
+cut -c 1-20 src/main.c
+cut -d ' ' -f 1 src/main.c | sort | uniq | wc -l
+tr a-z A-Z < src/main.c
+tr -d '\n' < src/main.c | wc -c
+tr -s ' ' < src/main.c | wc -c
+nl src/main.c
+nl -ba src/main.c | tail -n 3
+seq 1 100000 | wc -l
+seq -w 1 1000 | tail -n 2
+basename src/main.c
+basename -s .c src/main.c
+dirname src/main.c
+printf '%s\n' a b c
+printf '%05d %-8s|%x\n' 42 name 255
+test -f src/main.c && echo yes
+[ -d src/mod_01 ] && echo folder
+date -u -d '2024-02-29 12:00:00' '+%Y-%m-%d %H:%M:%S %s %a'
+echo a b c | xargs -n 1 echo
+find docs/mod_01/mod_02 -name '*.c' | xargs cat | wc -l
+find . -name '*.c' | xargs grep -l cojokane | wc -l
+echo {a,b,c}{1..3}
+echo {1..20..3} {a..e}
+echo $(wc -l < src/main.c) `basename src/main.c`
+echo "first line: $(head -n 1 src/main.c)"
+wc -l < src/main.c
+cat src/main.c > /dev/null 2>&1
+cat qdb_no_such_file 2> /dev/null ; echo after
+cat qdb_no_such_file 2>&1 | wc -l
+grep -q kadifo src/main.c && echo found || echo none
+false || echo fallback
+true && grep -c kadifo src/main.c
+cat <<EOF⏎one $(echo two)⏎three⏎EOF
+wc -l <<'EOF'⏎a⏎b⏎EOF
+echo one \⏎two
+grep -c kadifo src/main.c⏎wc -l src/main.c
+mkdir -p bench_out/a/b
+touch bench_out/empty.txt
+echo 'hello world' > bench_out/hello.txt
+echo 'another line' >> bench_out/hello.txt
+cp src/main.c bench_out/copy.txt
+cp -r src/mod_01 bench_out/dir_copy
+cp -r src bench_out/work
+sed -i 's/kadifo/QDBBENCHONE/g' bench_out/copy.txt
+sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt
+sed -i 's/kadifo/QDBBENCHMANY/g' bench_out/work/*.c
+sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.c
+sed -i 's/bukadapa/QDBBENCHFEW/g' bench_out/work/*.c
+cp src/main.c bench_out/same.txt
+cp src/main.c bench_out/same.txt
+cat src/main.c > bench_out/same.txt
+grep -rc QDBBENCHMANY bench_out
+grep -rl QDBBENCHMANY .
+grep -rl QDBBENCHONE .
+cat src/main.c | tee bench_out/tee.txt | wc -l
+sort src/main.c > bench_out/sorted.txt
+sort -u src/main.c >> bench_out/sorted.txt
+cat qdb_no_such_file &> bench_out/both.txt
+cat qdb_no_such_file 2>> bench_out/both.txt
+find docs/mod_01/mod_02 -name '*.c' | sort | xargs cat > bench_out/joined.txt
+cp bench_out/joined.txt bench_out/joined2.txt
+sed -i '1d' bench_out/joined2.txt
+wc -c bench_out/joined.txt bench_out/joined2.txt bench_out/tee.txt bench_out/sorted.txt
+cat bench_out/both.txt
+mv bench_out/dir_copy bench_out/dir_moved
+mv bench_out/hello.txt bench_out/a/b
+ls -R bench_out/a
+rm bench_out/a/b/hello.txt
+rmdir bench_out/a/b
+rm -r bench_out/dir_moved
+rm -rf bench_out

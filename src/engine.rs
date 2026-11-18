@@ -8,17 +8,28 @@
 use crate::cmd;
 use crate::glob;
 use crate::shell::{self, Connector, ParseError, Part, Pipeline, Redirect, Script, Word};
-use crate::tree::{is_valid_text, Db, Errno, NodeId, Scratch, TextCheck};
+use crate::tree::{is_valid_text, Cost, Db, Errno, NodeId, Scratch, TextCheck};
 use crate::vfs::VFile;
 use crate::util::lossy;
 
-/// What a command line produced.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// What a command line produced. Two outcomes are equal when output,
+/// errors and status are: what the unit used is not part of the answer.
+#[derive(Debug, Clone, Default)]
 pub struct Outcome {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub code: i32,
+    /// What the unit used.
+    pub cost: Cost,
 }
+
+impl PartialEq for Outcome {
+    fn eq(&self, o: &Outcome) -> bool {
+        self.stdout == o.stdout && self.stderr == o.stderr && self.code == o.code
+    }
+}
+
+impl Eq for Outcome {}
 
 /// Exit status for anything unsupported or unparsable.
 pub const EXIT_UNSUPPORTED: i32 = 2;
@@ -49,6 +60,9 @@ pub struct Spool {
     file: Option<(String, Box<dyn VFile>)>,
     len: u64,
     check: TextCheck,
+    /// Whatever arrives is kept: this is input held for a command, not
+    /// output for a file.
+    raw: bool,
     error: Option<std::io::Error>,
 }
 
@@ -59,11 +73,25 @@ static SPOOLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::
 
 impl Spool {
     pub fn new(scratch: Scratch) -> Spool {
-        Spool { scratch, mem: Vec::new(), file: None, len: 0, check: TextCheck::default(), error: None }
+        Spool { scratch, mem: Vec::new(), file: None, len: 0, check: TextCheck::default(), raw: false, error: None }
+    }
+
+    /// A place for all of a command's standard input to wait until the
+    /// command runs: in memory up to the scratch limit, in a scratch file
+    /// beyond it.
+    pub fn held(scratch: Scratch) -> Spool {
+        let mut s = Spool::new(scratch);
+        s.raw = true;
+        s
+    }
+
+    /// Everything held, once `end` has been called.
+    pub fn all(&self) -> &[u8] {
+        self.read(0, usize::MAX)
     }
 
     fn nowhere() -> Spool {
-        Spool::new(Scratch { vfs: None, limit: 0 })
+        Spool::new(Scratch::none())
     }
 
     fn to_file(&mut self) {
@@ -72,6 +100,12 @@ impl Spool {
             let name = format!("spool-{}.tmp", SPOOLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
             match vfs.create(&name, 1 << 38) {
                 Ok(f) => self.file = Some((name, f)),
+                Err(e) if self.raw => {
+                    // Held input stays in memory if it cannot go to disk.
+                    let _ = e;
+                    self.scratch.vfs = None;
+                    return;
+                }
                 Err(e) => {
                     self.error = Some(e);
                     return;
@@ -79,6 +113,7 @@ impl Spool {
             }
         }
         let (_, f) = self.file.as_mut().unwrap();
+        self.scratch.used.set(self.scratch.used.get() + self.mem.len() as u64);
         if let Err(e) = f.write_at(self.len - self.mem.len() as u64, &self.mem) {
             self.error = Some(e);
         }
@@ -95,7 +130,7 @@ impl Spool {
         if self.file.is_some() && !self.mem.is_empty() && self.error.is_none() {
             self.to_file();
         }
-        self.check.finish()
+        self.raw || self.check.finish()
     }
 
     /// Up to `max` bytes of the output from offset `at`. After `end`.
@@ -111,7 +146,7 @@ impl Spool {
 
 impl Sink for Spool {
     fn write(&mut self, data: &[u8]) -> bool {
-        if !self.check.feed(data) || self.error.is_some() {
+        if !self.raw && (!self.check.feed(data) || self.error.is_some()) {
             // Nothing will be stored; the command runs on as it would.
             self.mem = Vec::new();
             return true;
@@ -480,6 +515,7 @@ fn expand_redirect(db: &mut Db, r: &Redirect, err: &mut dyn Sink) -> Result<Redi
 pub fn execute(db: &mut Db, line: &[u8]) -> Outcome {
     let mut out = Outcome::default();
     out.code = execute_to(db, line, &mut out.stdout, &mut out.stderr);
+    out.cost = db.last_cost();
     out
 }
 
@@ -496,6 +532,13 @@ pub fn execute(db: &mut Db, line: &[u8]) -> Outcome {
 /// size of its output. If `out` returns false the commands that only read
 /// stop early; commands that change data always run to completion.
 pub fn execute_to(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
+    db.begin_unit();
+    let code = execute_unit(db, line, out, err);
+    db.end_unit();
+    code
+}
+
+fn execute_unit(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
     if let Some(e) = db.failure() {
         err.write(format!("qdb: {}\n", e).as_bytes());
         return 2;
@@ -731,7 +774,7 @@ enum State {
     /// Taking input in pieces.
     Streaming(Box<dyn Filter>),
     /// Gathering all the input, to run on it when it ends.
-    Gathering(Vec<u8>),
+    Gathering(Spool),
     /// Needs no input, or no more of it.
     Closed(Option<Box<dyn Filter>>),
 }
@@ -754,7 +797,7 @@ impl Stage {
             }
             _ if plan.input.is_some() || !piped => State::Closed(None),
             Input::Stream(f) => State::Streaming(f),
-            Input::Whole => State::Gathering(Vec::new()),
+            Input::Whole => State::Gathering(Spool::held(scratch.clone())),
             Input::Unused => State::Closed(None),
         };
         let spools = redirs.iter().map(|_| Spool::new(scratch.clone())).collect();
@@ -785,7 +828,7 @@ impl Stage {
                 false
             }
             State::Gathering(mut all) => {
-                all.extend_from_slice(data);
+                all.write(data);
                 self.state = State::Gathering(all);
                 true
             }
@@ -826,7 +869,10 @@ impl Stage {
             self.piped = stdin.is_some() || matches!(state, State::Gathering(_));
             code = match (state, stdin) {
                 (State::Streaming(f), _) | (State::Closed(Some(f)), _) => self.with_io(&[], down, None, |io| f.finish_db(db, io)).0,
-                (State::Gathering(all), None) => self.with_io(&all, down, out_file, |io| run.unwrap()(db, io)).0,
+                (State::Gathering(mut all), None) => {
+                    all.end();
+                    self.with_io(all.all(), down, out_file, |io| run.unwrap()(db, io)).0
+                }
                 (_, None) => self.with_io(&[], down, out_file, |io| run.unwrap()(db, io)).0,
                 (_, Some(stdin)) => match (self.stream.take(), stdin) {
                     (Some(mut f), Stdin::File(id)) => {
@@ -848,8 +894,15 @@ impl Stage {
                         .0
                     }
                     (None, Stdin::File(id)) => {
-                        let text = db.content(id).into_owned();
-                        self.with_io(&text, down, out_file, |io| run.unwrap()(db, io)).0
+                        // The command may change the file while it reads
+                        // its input, so the input is a copy: in memory,
+                        // or past the scratch limit in a scratch file.
+                        let mut text = Spool::held(self.scratch.clone());
+                        for p in db.pieces(id).to_vec() {
+                            text.write(&db.text_of(&p));
+                        }
+                        text.end();
+                        self.with_io(text.all(), down, out_file, |io| run.unwrap()(db, io)).0
                     }
                     (None, Stdin::Bytes(text)) => self.with_io(&text, down, out_file, |io| run.unwrap()(db, io)).0,
                 },

@@ -566,74 +566,96 @@ struct Xargs {
     warnings: Vec<String>,
 }
 
-/// The input as lines of words, read as xargs reads it without -0 or -d.
-/// A line that ends with a blank runs on into the next. With `whole`,
-/// each line is one word, without the blanks in front of it. An unmatched
-/// quote gives the words before it and which quote it was.
-fn words(input: &[u8], whole: bool) -> (Vec<Vec<Vec<u8>>>, Option<&'static str>) {
-    let mut lines: Vec<Vec<Vec<u8>>> = Vec::new();
-    let mut line: Vec<Vec<u8>> = Vec::new();
-    let mut word: Option<Vec<u8>> = None;
-    let mut last_blank = false;
-    let mut i = 0;
-    let blank = |c: u8| c == b' ' || c == b'\t';
-    while i < input.len() {
-        let c = input[i];
-        i += 1;
-        match c {
-            b'\n' => {
-                if let Some(w) = word.take() {
-                    line.push(w);
-                }
-                if !(last_blank && !whole) && !line.is_empty() {
-                    lines.push(std::mem::take(&mut line));
-                }
-                last_blank = false;
-            }
-            _ if blank(c) && (!whole || word.is_none()) => {
-                if let Some(w) = word.take() {
-                    line.push(w);
-                }
-                last_blank = true;
-            }
-            b'\'' | b'"' => {
-                let w = word.get_or_insert_with(Vec::new);
-                let end = input[i..].iter().position(|x| *x == c || *x == b'\n');
-                match end {
-                    Some(e) if input[i + e] == c => {
-                        w.extend_from_slice(&input[i..i + e]);
-                        i += e + 1;
+/// The input as lines of words, read as xargs reads it without -0 or -d,
+/// a line at a time. A line that ends with a blank runs on into the next.
+/// With `whole`, each line is one word, without the blanks in front of
+/// it. An unmatched quote ends the input: the words before it are given,
+/// and `unmatched` says which quote it was.
+struct Words<'a> {
+    input: &'a [u8],
+    i: usize,
+    whole: bool,
+    done: bool,
+    unmatched: Option<&'static str>,
+}
+
+impl<'a> Words<'a> {
+    fn new(input: &'a [u8], whole: bool) -> Words<'a> {
+        Words { input, i: 0, whole, done: false, unmatched: None }
+    }
+}
+
+impl Iterator for Words<'_> {
+    type Item = Vec<Vec<u8>>;
+
+    fn next(&mut self) -> Option<Vec<Vec<u8>>> {
+        if self.done {
+            return None;
+        }
+        let (input, whole) = (self.input, self.whole);
+        let mut line: Vec<Vec<u8>> = Vec::new();
+        let mut word: Option<Vec<u8>> = None;
+        let mut last_blank = false;
+        let blank = |c: u8| c == b' ' || c == b'\t';
+        while self.i < input.len() {
+            let c = input[self.i];
+            self.i += 1;
+            match c {
+                b'\n' => {
+                    if let Some(w) = word.take() {
+                        line.push(w);
                     }
-                    _ => {
-                        if !line.is_empty() {
-                            lines.push(line);
+                    if !(last_blank && !whole) && !line.is_empty() {
+                        return Some(line);
+                    }
+                    last_blank = false;
+                }
+                _ if blank(c) && (!whole || word.is_none()) => {
+                    if let Some(w) = word.take() {
+                        line.push(w);
+                    }
+                    last_blank = true;
+                }
+                b'\'' | b'"' => {
+                    let w = word.get_or_insert_with(Vec::new);
+                    let end = input[self.i..].iter().position(|x| *x == c || *x == b'\n');
+                    match end {
+                        Some(e) if input[self.i + e] == c => {
+                            w.extend_from_slice(&input[self.i..self.i + e]);
+                            self.i += e + 1;
                         }
-                        return (lines, Some(if c == b'\'' { "single" } else { "double" }));
+                        _ => {
+                            self.done = true;
+                            self.unmatched = Some(if c == b'\'' { "single" } else { "double" });
+                            return if line.is_empty() { None } else { Some(line) };
+                        }
                     }
+                    last_blank = false;
                 }
-                last_blank = false;
-            }
-            b'\\' => {
-                let w = word.get_or_insert_with(Vec::new);
-                if i < input.len() {
-                    w.push(input[i]);
-                    i += 1;
+                b'\\' => {
+                    let w = word.get_or_insert_with(Vec::new);
+                    if self.i < input.len() {
+                        w.push(input[self.i]);
+                        self.i += 1;
+                    }
+                    last_blank = false;
                 }
-                last_blank = false;
-            }
-            _ => {
-                word.get_or_insert_with(Vec::new).push(c);
-                last_blank = false;
+                _ => {
+                    word.get_or_insert_with(Vec::new).push(c);
+                    last_blank = false;
+                }
             }
         }
+        self.done = true;
+        if let Some(w) = word.take() {
+            line.push(w);
+        }
+        if line.is_empty() {
+            None
+        } else {
+            Some(line)
+        }
     }
-    if let Some(w) = word.take() {
-        line.push(w);
-    }
-    if !line.is_empty() {
-        lines.push(line);
-    }
-    (lines, None)
 }
 
 fn replace_all(word: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
@@ -907,15 +929,29 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
     };
     let size = |argv: &[Vec<u8>]| argv.iter().map(|w| w.len() + 1).sum::<usize>();
     let base = size(&x.command);
-    // The input as lines of words.
-    let (lines, unmatched): (Vec<Vec<Vec<u8>>>, Option<&str>) = match x.split {
-        Split::Words => words(input, x.replace.is_some()),
+    // The input as lines of words, made as they are needed: the input
+    // may be far larger than memory. An unmatched quote is reported
+    // before anything runs, so the input is read through once for that.
+    let unmatched = match x.split {
+        Split::Words => {
+            let mut all = Words::new(input, x.replace.is_some());
+            while all.next().is_some() {}
+            all.unmatched
+        }
+        Split::Byte(_) => None,
+    };
+    let lines: Box<dyn Iterator<Item = Vec<Vec<u8>>>> = match x.split {
+        Split::Words => Box::new(Words::new(input, x.replace.is_some())),
         Split::Byte(d) => {
-            let mut items: Vec<Vec<u8>> = input.split(|c| *c == d).map(|s| s.to_vec()).collect();
-            if items.last().is_some_and(|l| l.is_empty()) {
-                items.pop();
-            }
-            (items.into_iter().map(|w| vec![w]).collect(), None)
+            let mut parts = input.split(move |c| *c == d).peekable();
+            Box::new(std::iter::from_fn(move || {
+                let part = parts.next()?;
+                if parts.peek().is_none() && part.is_empty() {
+                    None
+                } else {
+                    Some(vec![part.to_vec()])
+                }
+            }))
         }
     };
     if let Some(which) = unmatched {
@@ -923,7 +959,7 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
         status = 1;
     }
     if let Some(pattern) = &x.replace {
-        for line in &lines {
+        for line in lines {
             let item: &[u8] = &line[0];
             if x.split == Split::Words && item.is_empty() {
                 continue;
@@ -944,8 +980,8 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
     let mut used = base;
     let mut lines_in = 0;
     let mut ran = false;
-    for line in &lines {
-        for word in line {
+    for line in lines {
+        for word in &line {
             if used + word.len() + 1 > x.max_chars {
                 if argv.len() == x.command.len() {
                     io.err_line("xargs: argument line too long");

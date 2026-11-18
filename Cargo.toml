@@ -25,6 +25,10 @@ path = "src/bin/bench.rs"
 name = "qdb-stress"
 path = "src/bin/stress.rs"
 
+[[bin]]
+name = "qdb-replay"
+path = "src/bin/replay.rs"
+
 [dependencies]
 memchr = "2"
 # System calls (mmap, flock) and a checksum: the two things the storage

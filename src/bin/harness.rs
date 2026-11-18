@@ -51,7 +51,18 @@ With no case files, runs every tests/cases/*.case.
                     process generated command lines and kill it with
                     SIGKILL, N times, each time opening and checking what
                     it left and going on from there
+  --counters        instead of the cases: only the counter check that a
+                    default run ends with. The benchmark's command list
+                    (tests/baseline/units.txt) runs twice on a generated
+                    tree on a simulated disk; every count of what a unit
+                    read, wrote and synced must be the same both times,
+                    and none may be above tests/baseline/counters.tsv
+  --update-baseline write tests/baseline/counters.tsv anew from this build.
+                    Say why in the commit that changes it
   -v                print every case as it runs";
+
+#[global_allocator]
+static ALLOC: qdb::mem::Counting = qdb::mem::Counting;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Kind {
@@ -1488,6 +1499,116 @@ fn coverage(table: &str, commands: &[String]) -> Result<bool, String> {
     Ok(ok)
 }
 
+// ------------------------------------------------------------- counters
+
+const UNITS: &str = "tests/baseline/units.txt";
+const BASELINE: &str = "tests/baseline/counters.tsv";
+
+/// The counts a unit may not exceed: everything it read, wrote and
+/// synced. Memory is recorded beside them and not enforced.
+const ENFORCED: usize = 10;
+
+fn counter_units() -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(UNITS).map_err(|e| format!("{}: {}", UNITS, e))?;
+    Ok(text.lines().filter(|l| !l.is_empty() && !l.starts_with('#')).map(|l| l.to_string()).collect())
+}
+
+/// Run the units on a fresh database on a simulated disk, with the
+/// default settings, and return what each one used.
+fn counter_run(units: &[String]) -> Result<Vec<[u64; 11]>, String> {
+    let spec = qdb::dataset::SPECS.iter().find(|s| s.name == "small").expect("the small dataset");
+    let source = qdb::dataset::generate(spec);
+    let mut db = Db::open(Box::new(MemFs::tracked()), Config::default())?.0;
+    store::copy_into(&source, &mut db)?;
+    db.compact()?;
+    // 2026-01-01 00:00:00 UTC, so that nothing depends on the day.
+    db.set_clock(Some(1_767_225_600_000_000_000));
+    let mut out = Vec::new();
+    for unit in units {
+        let cost = execute(&mut db, unit.replace('⏎', "\n").as_bytes()).cost;
+        let f = cost.fields();
+        let mut row = [0u64; 11];
+        for (i, slot) in row.iter_mut().enumerate() {
+            *slot = f[i].1;
+        }
+        out.push(row);
+    }
+    if let Some(e) = db.failure() {
+        return Err(format!("the counter run failed: {}", e));
+    }
+    db.check().map_err(|e| format!("the counter run left a database that does not check: {}", e))?;
+    Ok(out)
+}
+
+fn counters(update: bool) -> Result<bool, String> {
+    let units = counter_units()?;
+    let names: Vec<&str> = qdb::Cost::default().fields().iter().take(11).map(|f| f.0).collect();
+    let first = counter_run(&units)?;
+    let second = counter_run(&units)?;
+    let mut ok = true;
+    let mut differing = 0;
+    for (i, unit) in units.iter().enumerate() {
+        if first[i] != second[i] {
+            differing += 1;
+            ok = false;
+            for k in 0..11 {
+                if first[i][k] != second[i][k] {
+                    println!("FAIL  counters: {} was {} in one run and {} in the next: {}", names[k], first[i][k], second[i][k], unit);
+                }
+            }
+        }
+    }
+    if update {
+        let mut text = String::from("# What each unit of tests/baseline/units.txt used, on the generated dataset\n# `small` on a simulated disk with the default settings. A harness run fails\n# when a unit reads, writes or syncs more than this (every column but\n# memory). Written by `qdb-harness --update-baseline`; a commit that changes\n# this file says why.\n");
+        text.push_str(&names.join("\t"));
+        text.push_str("\tunit\n");
+        for (i, unit) in units.iter().enumerate() {
+            for v in first[i] {
+                text.push_str(&v.to_string());
+                text.push('\t');
+            }
+            text.push_str(unit);
+            text.push('\n');
+        }
+        std::fs::write(BASELINE, text).map_err(|e| format!("{}: {}", BASELINE, e))?;
+        println!("counters: {} written for {} units", BASELINE, units.len());
+        return Ok(ok);
+    }
+    let stored = std::fs::read_to_string(BASELINE).map_err(|e| format!("{}: {}", BASELINE, e))?;
+    let rows: Vec<&str> = stored.lines().filter(|l| !l.starts_with('#')).skip(1).collect();
+    if rows.len() != units.len() {
+        println!("FAIL  counters: {} has {} units and {} has {}", BASELINE, rows.len(), UNITS, units.len());
+        return Ok(false);
+    }
+    let (mut above, mut below) = (0, 0);
+    for (i, unit) in units.iter().enumerate() {
+        let cols: Vec<&str> = rows[i].splitn(12, '\t').collect();
+        if cols.len() != 12 || cols[11] != unit {
+            println!("FAIL  counters: line {} of {} is not for the unit: {}", i + 1, BASELINE, unit);
+            return Ok(false);
+        }
+        let mut lower = false;
+        for k in 0..ENFORCED {
+            let base: u64 = cols[k].parse().map_err(|_| format!("{}: not a number: {}", BASELINE, cols[k]))?;
+            if first[i][k] > base {
+                above += 1;
+                println!("FAIL  counters: {} is {}, above its baseline of {}: {}", names[k], first[i][k], base, unit);
+            }
+            lower |= first[i][k] < base;
+        }
+        below += lower as usize;
+    }
+    ok &= above == 0;
+    println!(
+        "counters: {} units run twice on the same database, {} with different counts; {} counts above the baseline{}",
+        units.len(),
+        differing,
+        above,
+        if below > 0 { format!("; {} units now use less than their baseline, which can be lowered with --update-baseline", below) } else { String::new() }
+    );
+    Ok(ok)
+}
+
 fn run() -> Result<bool, String> {
     let mut fixtures_dir = PathBuf::from("tests/fixtures");
     let mut files: Vec<PathBuf> = Vec::new();
@@ -1497,6 +1618,7 @@ fn run() -> Result<bool, String> {
     let mut verbose = false;
     let mut brief = false;
     let mut coverage_only = false;
+    let (mut counters_only, mut update_baseline) = (false, false);
     let mut generate: Option<String> = None;
     let mut count = 10_000usize;
     let mut index = true;
@@ -1514,6 +1636,8 @@ fn run() -> Result<bool, String> {
             "--seed" => seed = value("--seed")?.parse().map_err(|_| "--seed needs a number")?,
             "--list-failures" => brief = true,
             "--coverage" => coverage_only = true,
+            "--counters" => counters_only = true,
+            "--update-baseline" => update_baseline = true,
             "--gen" => generate = Some(value("--gen")?),
             "--count" => count = value("--count")?.parse().map_err(|_| "--count needs a number")?,
             "--no-index" => index = false,
@@ -1622,6 +1746,9 @@ fn run() -> Result<bool, String> {
         }
         return Ok(all_ok);
     }
+    if counters_only || update_baseline {
+        return counters(update_baseline);
+    }
     let default_run = files.is_empty() && fuzz == 0;
     if coverage_only {
         // Every case is read and none is run.
@@ -1699,7 +1826,9 @@ fn run() -> Result<bool, String> {
         }
     }
     println!("{} cases ({} steps), {}: {} passed, {} failed", passed + failed, steps, setup.describe(), passed, failed);
-    Ok(failed == 0 && covered)
+    // A whole run of the cases ends with the counter check.
+    let counted = if default_run && filter.is_none() && setup.mode == Mode::Memory { counters(false)? } else { true };
+    Ok(failed == 0 && covered && counted)
 }
 
 fn main() -> std::process::ExitCode {

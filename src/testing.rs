@@ -215,7 +215,7 @@ pub fn run_real(root: &Path, command: &str) -> Outcome {
     // What the data model has no fact for is fixed on the engine's side;
     // the owner and group of ls -l are made to agree here.
     let stdout = if command.contains("ls ") { mask_owner(&stdout) } else { stdout };
-    Outcome { stdout, stderr, code: out.status.code().unwrap_or(-1) }
+    Outcome { stdout, stderr, code: out.status.code().unwrap_or(-1), cost: Default::default() }
 }
 
 // ------------------------------------------------- real tools, for timing

@@ -94,6 +94,9 @@ pub struct Regex {
     sets: Vec<Set>,
     /// Work lists of the NFA simulation, kept between calls.
     scratch: RefCell<Scratch>,
+    /// The table-driven matcher, built when a span is first asked for;
+    /// `Some(None)` when the pattern cannot have one.
+    spans: RefCell<Option<Option<Box<dfa::Dfa>>>>,
     /// Warnings GNU grep prints for this pattern, without the program name.
     pub warnings: Vec<String>,
 }
@@ -817,7 +820,7 @@ impl Regex {
             icase: syn.icase,
             prog: c.prog,
             sets: c.sets,
-            scratch: RefCell::default(),
+            scratch: RefCell::default(), spans: RefCell::default(),
             warnings: p.warnings,
         })
     }
@@ -826,7 +829,7 @@ impl Regex {
         let mut c = Compiler { prog: Vec::new(), sets: Vec::new() };
         c.compile(&ast).ok()?;
         c.emit(Inst::Match).ok()?;
-        Some(Regex { ast, ngroups: 0, has_backref: false, icase, prog: c.prog, sets: c.sets, scratch: RefCell::default(), warnings: Vec::new() })
+        Some(Regex { ast, ngroups: 0, has_backref: false, icase, prog: c.prog, sets: c.sets, scratch: RefCell::default(), spans: RefCell::default(), warnings: Vec::new() })
     }
 
     /// The same pattern, matching only a whole line (`grep -x`) or only
@@ -839,7 +842,7 @@ impl Regex {
             c.compile(&ast)?;
             c.emit(Inst::Match)?;
         }
-        Ok(Regex { ast, prog: c.prog, sets: c.sets, scratch: RefCell::default(), ..self.clone() })
+        Ok(Regex { ast, prog: c.prog, sets: c.sets, scratch: RefCell::default(), spans: RefCell::default(), ..self.clone() })
     }
 
     /// One pattern that matches wherever any of `parts` does. None if one
@@ -1001,13 +1004,39 @@ impl Regex {
         }
     }
 
+    /// Where the leftmost-longest match starting at or after `start` lies.
+    pub fn find_span(&self, hay: &[u8], start: usize) -> Result<Option<(usize, usize)>, MatchError> {
+        if self.has_backref {
+            return Ok(self.backtrack_search(hay, start)?.map(|c| c[0].expect("the whole match")));
+        }
+        Ok(self.span(hay, start))
+    }
+
+    /// The same for a pattern without back-references: by the table-driven
+    /// matcher where it can be used, by the simulation otherwise.
+    fn span(&self, hay: &[u8], start: usize) -> Option<(usize, usize)> {
+        // The tables take a newline for the end of the line.
+        if crate::bytes::memchr(b'\n', &hay[start..]).is_none() {
+            let mut slot = self.spans.borrow_mut();
+            let dfa = slot.get_or_insert_with(|| dfa::Dfa::new(self).map(Box::new));
+            if let Some(dfa) = dfa {
+                match dfa.find(hay, start) {
+                    dfa::Found::Span(s, e) => return Some((s, e)),
+                    dfa::Found::Nothing => return None,
+                    dfa::Found::GaveUp => {}
+                }
+            }
+        }
+        self.pike(hay, start, false)
+    }
+
     /// The leftmost-longest match starting at or after `start`. Group spans
     /// are filled in only when `want_groups` is set.
     pub fn find_at(&self, hay: &[u8], start: usize, want_groups: bool) -> Result<Option<Caps>, MatchError> {
         if self.has_backref {
             return self.backtrack_search(hay, start);
         }
-        let (s, e) = match self.pike(hay, start, false) {
+        let (s, e) = match self.span(hay, start) {
             None => return Ok(None),
             Some(span) => span,
         };
@@ -1277,6 +1306,30 @@ impl<'a> Backtracker<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spans_agree_with_the_simulation() {
+        let patterns = [
+            "a", "[a-z]*ing", "ab|b+", "abcd|c", "a*", "a*b", "^a|b$", "x*$", "\\bfoo\\b", "\\<[a-c]+\\>", "(a|ab)(c|bcd)", "a{2,3}b?", "[^ ]+", "^$", "\\Ba", "(ab)*c|a",
+            "\\w+ing\\b", "b*$|^a", ".", "a.c|.b",
+        ];
+        let alphabet = b"abcing x_";
+        let mut seed = 12345u64;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize
+        };
+        for p in patterns {
+            let r = re(p, true);
+            for _ in 0..400 {
+                let n = next() % 14;
+                let hay: Vec<u8> = (0..n).map(|_| alphabet[next() % alphabet.len()]).collect();
+                for start in 0..=hay.len() {
+                    assert_eq!(r.span(&hay, start), r.pike(&hay, start, false), "pattern {:?} on {:?} from {}", p, String::from_utf8_lossy(&hay), start);
+                }
+            }
+        }
+    }
+
     use super::*;
 
     fn re(p: &str, extended: bool) -> Regex {

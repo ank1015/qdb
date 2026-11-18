@@ -26,6 +26,20 @@ const DEAD: u32 = 2;
 const NEXT_LINE: u32 = 3;
 const FIRST_STATE: u32 = 4;
 
+/// In the table of the anchored search: a match ends before this byte.
+const ENDS: u32 = 1 << 31;
+/// In the same table: no thread is left.
+const NONE_LEFT: u32 = 1;
+
+/// What `Dfa::find` came to.
+pub enum Found {
+    /// The leftmost match, the longest there.
+    Span(usize, usize),
+    Nothing,
+    /// Too much work was being repeated; ask the other matcher.
+    GaveUp,
+}
+
 /// Above this many states the cache is thrown away at the next line and
 /// built again.
 const MAX_STATES: usize = 4096;
@@ -56,6 +70,15 @@ pub struct Dfa {
     /// For a state that often leads back to itself: the bytes that do.
     /// Runs of them are skipped eight at a time. Built on first need.
     stay: Vec<Option<Box<[bool; 256]>>>,
+    /// The same for a search tied to its starting position, which is how
+    /// the place a match ends is found: `atable[state * stride + class]`
+    /// is the next state, with `ENDS` set when a match ends here.
+    atable: Vec<u32>,
+    akeys: Vec<Key>,
+    aids: HashMap<Key, u32>,
+    /// Start states: at the start of the line, after a word byte, after
+    /// any other byte. 0 until first needed.
+    astart: [u32; 3],
     // Scratch for building states.
     stack: Vec<u32>,
     seen: Vec<u32>,
@@ -106,6 +129,10 @@ impl Dfa {
             start: 0,
             uses_word,
             stay: Vec::new(),
+            atable: Vec::new(),
+            akeys: Vec::new(),
+            aids: HashMap::new(),
+            astart: [0; 3],
             stack: Vec::new(),
             seen: vec![0; n],
             stamp: 0,
@@ -201,24 +228,7 @@ impl Dfa {
         let next_word = !line_end && is_word(byte);
         let context = Some((key.at_line_start, key.after_word, next_word, line_end));
 
-        // Decide the assertions now that both sides are known.
-        self.new_stamp();
-        let mut here = Vec::new();
-        for &pc in &key.pcs {
-            match self.prog[pc as usize] {
-                Inst::Assert(_) => {
-                    // Re-enter the closure at the assertion itself.
-                    self.seen[pc as usize] = self.stamp.wrapping_sub(1);
-                    self.closure(pc, context, &mut here);
-                }
-                _ => {
-                    if self.seen[pc as usize] != self.stamp {
-                        self.seen[pc as usize] = self.stamp;
-                        here.push(pc);
-                    }
-                }
-            }
-        }
+        let here = self.decide(&key, context);
         let result = if here.iter().any(|pc| matches!(self.prog[*pc as usize], Inst::Match)) {
             MATCH
         } else if line_end {
@@ -246,6 +256,134 @@ impl Dfa {
         };
         self.table[state as usize + class] = result;
         result
+    }
+
+    /// The positions of a state once its assertions are decided, now that
+    /// both sides of the position are known.
+    fn decide(&mut self, key: &Key, context: Option<(bool, bool, bool, bool)>) -> Vec<u32> {
+        self.new_stamp();
+        let mut here = Vec::new();
+        for &pc in &key.pcs {
+            match self.prog[pc as usize] {
+                Inst::Assert(_) => {
+                    // Re-enter the closure at the assertion itself.
+                    self.seen[pc as usize] = self.stamp.wrapping_sub(1);
+                    self.closure(pc, context, &mut here);
+                }
+                _ => {
+                    if self.seen[pc as usize] != self.stamp {
+                        self.seen[pc as usize] = self.stamp;
+                        here.push(pc);
+                    }
+                }
+            }
+        }
+        here
+    }
+
+    fn aintern(&mut self, key: Key) -> u32 {
+        if let Some(id) = self.aids.get(&key) {
+            return *id;
+        }
+        if self.akeys.is_empty() {
+            // Entry 0 is not a state: 0 in the table means not yet known.
+            self.akeys.push(Key { pcs: Vec::new(), at_line_start: false, after_word: false });
+            self.atable.resize(self.stride, UNKNOWN);
+        }
+        let id = (self.akeys.len() * self.stride) as u32;
+        self.akeys.push(key.clone());
+        self.atable.resize(self.atable.len() + self.stride, UNKNOWN);
+        self.aids.insert(key, id);
+        id
+    }
+
+    /// One transition of the anchored search.
+    fn astep(&mut self, state: u32, class: usize) -> u32 {
+        let key = self.akeys[state as usize / self.stride].clone();
+        let byte = if class == self.stride - 1 { b'\n' } else { self.representative[class] };
+        let line_end = byte == b'\n';
+        let next_word = !line_end && is_word(byte);
+        let here = self.decide(&key, Some((key.at_line_start, key.after_word, next_word, line_end)));
+        let ends = if here.iter().any(|pc| matches!(self.prog[*pc as usize], Inst::Match)) { ENDS } else { 0 };
+        let mut next = Vec::new();
+        if !line_end {
+            self.new_stamp();
+            for &pc in &here {
+                if let Inst::Set(s) = self.prog[pc as usize] {
+                    if self.sets[s][byte as usize] {
+                        self.closure(pc + 1, None, &mut next);
+                    }
+                }
+            }
+        }
+        let to = if next.is_empty() {
+            NONE_LEFT
+        } else {
+            next.sort_unstable();
+            self.aintern(Key { pcs: next, at_line_start: false, after_word: self.uses_word && is_word(byte) })
+        };
+        self.atable[state as usize + class] = to | ends;
+        to | ends
+    }
+
+    /// The leftmost match in `line` that starts at or after `from`, and the
+    /// longest that starts there. `line` holds no newline. Each starting
+    /// position is tried in turn; a pattern and a line that make that
+    /// repeat too much work are handed back.
+    pub fn find(&mut self, line: &[u8], from: usize) -> Found {
+        let len = line.len();
+        let end_class = self.stride - 1;
+        if self.akeys.len() > MAX_STATES {
+            self.atable.clear();
+            self.akeys.clear();
+            self.aids.clear();
+            self.astart = [0; 3];
+        }
+        let budget = 16 * (len - from) + 1024;
+        let mut steps = 0;
+        for p in from..=len {
+            let ctx = if p == 0 {
+                0
+            } else if self.uses_word && is_word(line[p - 1]) {
+                1
+            } else {
+                2
+            };
+            if self.astart[ctx] == 0 {
+                let mut pcs = Vec::new();
+                self.new_stamp();
+                self.closure(0, None, &mut pcs);
+                pcs.sort_unstable();
+                self.astart[ctx] = self.aintern(Key { pcs, at_line_start: ctx == 0, after_word: ctx == 1 });
+            }
+            let mut state = self.astart[ctx];
+            let mut i = p;
+            let mut last = None;
+            loop {
+                let class = if i < len { self.class[line[i] as usize] as usize } else { end_class };
+                let mut e = self.atable[state as usize + class];
+                if e == UNKNOWN {
+                    e = self.astep(state, class);
+                }
+                if e & ENDS != 0 {
+                    last = Some(i);
+                }
+                let next = e & !ENDS;
+                if next == NONE_LEFT || i >= len {
+                    break;
+                }
+                state = next;
+                i += 1;
+            }
+            if let Some(end) = last {
+                return Found::Span(p, end);
+            }
+            steps += i - p + 1;
+            if steps > budget {
+                return Found::GaveUp;
+            }
+        }
+        Found::Nothing
     }
 
     /// Work out which bytes lead from a state back to itself.

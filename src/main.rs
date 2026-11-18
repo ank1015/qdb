@@ -6,6 +6,9 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[global_allocator]
+static ALLOC: qdb::mem::Counting = qdb::mem::Counting;
+
 const USAGE: &str = "\
 Usage: qdb [--db PATH] [--load DIR | --fixture FILE] [OPTIONS] [-c COMMAND]...
 
@@ -46,6 +49,11 @@ Runs bash command lines against a tree of text files.
   --compact        do all outstanding upkeep now: rewrite content so that
                    no space is wasted, save the index and the tree
   --dump DIR       when done, write the tree into the empty directory DIR
+  --cost           after each unit, print what it used on standard error,
+                   on one line: `cost` and then NAME=NUMBER fields. The
+                   fields up to `memory` are counts and repeat exactly;
+                   `cpu_us` and `elapsed_us` are measured; `status` is the
+                   unit's exit status
   -c COMMAND       run COMMAND; can be given more than once
 
 Each -c is one unit: all of what it changes is there after a crash, or
@@ -61,6 +69,7 @@ fn run() -> Result<i32, String> {
     let mut commands: Vec<String> = Vec::new();
     let mut dump: Option<PathBuf> = None;
     let (mut check, mut stats, mut compact) = (false, false, false);
+    let mut cost = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("{} needs a value", name));
@@ -93,6 +102,7 @@ fn run() -> Result<i32, String> {
                     other => return Err(format!("--index: {} is not `write` or `later`", other)),
                 }
             }
+            "--cost" => cost = true,
             "--check" => check = true,
             "--stats" => stats = true,
             "--compact" => compact = true,
@@ -171,6 +181,9 @@ fn run() -> Result<i32, String> {
         std::io::stdout().write_all(&out.stdout).ok();
         std::io::stdout().flush().ok();
         std::io::stderr().write_all(&out.stderr).ok();
+        if cost {
+            eprintln!("cost {} status={}", out.cost, out.code);
+        }
         code = out.code;
     };
     if !commands.is_empty() {

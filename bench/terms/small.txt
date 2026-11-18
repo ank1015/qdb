@@ -1,0 +1,17 @@
+# Values for the placeholders in bench/commands.txt, for the small dataset.
+# Chosen by qdb-bench from measured frequencies; delete this file to choose again.
+ABSENT=qdbzzabsentterm  # 0 of 205 files, 0.00%
+COMMON=kadifo  # 124 of 205 files, 60.49%
+DIR=src/mod_01  # holds 31 of 205 files, 15.12%
+EXT=c  # 97 files in the whole dataset
+EXT2=txt  # 30 files in the whole dataset
+FEW=cojokane  # 3 of 205 files, 1.46%
+FILE=src/main.c  # 11666 bytes
+GLOB=src/*.c  # 17 files
+GLOBDIR=src  # the folder of GLOB
+ONE=coincobu  # 1 of 205 files, 0.49%
+PREFIX=beunbe  # PREFIX_[a-z]+\( matches in 11 of 205 files, 5.37%
+RARE=bukadapa  # 2 of 205 files, 0.98%
+RAREUP=BUKADAPA  # the RARE term in capitals, for -i
+SMALLDIR=docs/mod_01/mod_02  # holds 3 of 205 files, 1.46%
+SOME=zealto  # 21 of 205 files, 10.24%

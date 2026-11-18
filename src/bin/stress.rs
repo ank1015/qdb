@@ -6,10 +6,9 @@
 use qdb::store;
 use qdb::testing::{helper, timed_real};
 use qdb::{Config, Db, SyncMode};
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "\
@@ -18,6 +17,7 @@ Usage: qdb-stress bigfile [OPTIONS]
        qdb-stress compare --dataset NAME --db DIR [OPTIONS]
        qdb-stress sync-cost --db DIR [--count N]
        qdb-stress codec --dataset NAME [--piece BYTES]
+       qdb-stress units --db DATABASE --reads N [--count N] [--seed N]
 
 bigfile: five commands on one generated file, on the real tools and on
 the engine: append a line, search for a rare term, wc -l, tail -n 5, and
@@ -27,6 +27,10 @@ compare: every setting of the three switches (sync always or in
 batches, index built at write or later, text plain or compressed) on
 three mixes of reads and writes; --count command lines each (default
 there: use --count 20000).
+
+units: print the command lines of one workload of the comparison, one a
+line, for the database directory DATABASE (which is opened and not
+changed): --reads in a hundred only read. qdb-replay runs such a file.
 
 writes: a long run of small writes mixed with occasional large ones on a
 loaded dataset, engine only, recording the time of every write.
@@ -51,41 +55,7 @@ loaded dataset, engine only, recording the time of every write.
 
 // ------------------------------------------------------ memory accounting
 
-struct Counting;
-
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let p = System.alloc(layout);
-        if !p.is_null() {
-            let live = LIVE.load(Relaxed) + layout.size();
-            LIVE.store(live, Relaxed);
-            if live > PEAK.load(Relaxed) {
-                PEAK.store(live, Relaxed);
-            }
-        }
-        p
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE.store(LIVE.load(Relaxed) - layout.size(), Relaxed);
-        System.dealloc(ptr, layout)
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let p = System.realloc(ptr, layout, new_size);
-        if !p.is_null() {
-            let live = LIVE.load(Relaxed) - layout.size() + new_size;
-            LIVE.store(live, Relaxed);
-            if live > PEAK.load(Relaxed) {
-                PEAK.store(live, Relaxed);
-            }
-        }
-        p
-    }
-}
+use qdb::mem::{Counting, LIVE, PEAK};
 
 #[global_allocator]
 static ALLOC: Counting = Counting;
@@ -151,6 +121,7 @@ struct Options {
     piece: usize,
     cap_mb: Option<usize>,
     upkeep: bool,
+    reads: usize,
 }
 
 fn ms(d: Duration) -> f64 {
@@ -340,6 +311,16 @@ fn bigfile(opts: &Options) -> Result<bool, String> {
         ("tr -s ' ' < big.txt | wc -c".into(), false),
         ("nl big.txt | tail -n 1".into(), false),
         ("grep -o '[a-z]*ing' big.txt | sort --parallel=1 | uniq -c | sort -rn | head".into(), false),
+        // Stage 5: matches reported one by one, and commands that take
+        // the whole of a large standard input.
+        ("grep -o '[a-z]*ing' big.txt | wc -l".into(), false),
+        ("sed 's/[a-z]*ing/X/g' big.txt | tail -n 2".into(), false),
+        ("cat big.txt | xargs echo | wc -c".into(), false),
+        ("xargs -s 100000 echo < big.txt | tail -c 40".into(), false),
+        ("rg -j 1 -c ing < big.txt".into(), false),
+        (format!("cat big.txt | rg -j 1 -n {}", RARE), false),
+        ("grep -c ing - < big.txt".into(), false),
+        ("cat big.txt | sort --parallel=1 - | tail -n 1".into(), false),
         ("echo 'one more line at the end' >> big.txt".into(), true),
         ("echo 'and a second one' >> big.txt".into(), true),
         ("echo 'and a third' >> big.txt".into(), true),
@@ -792,23 +773,14 @@ impl qdb::Sink for Count {
     }
 }
 
-/// One run of the comparison: a fresh import of the dataset with the
-/// given switches, then `count` command lines of which `reads` in a
-/// hundred only read. Returns the row of the table.
-fn mix_run(opts: &Options, folder: &str, sync: SyncMode, later: bool, compress: bool, reads: usize) -> Result<String, String> {
-    let dir = opts.db.as_ref().ok_or("compare needs --db DIR")?.join(format!("compare-{}", opts.dataset));
-    let _ = std::fs::remove_dir_all(&dir);
-    let cfg = Config { index: opts.index, piece: opts.piece, sync: SyncMode::Batch, compress, index_later: later, ..Config::default() };
-    PEAK.store(LIVE.load(Relaxed), Relaxed);
-    let base = LIVE.load(Relaxed);
-    let t = Instant::now();
-    let (mut db, _) = Db::open_dir(&dir, cfg)?;
-    store::load_into_db(&mut db, &opts.data.join(folder)).map_err(|e| e.to_string())?;
-    db.sync();
-    let load = t.elapsed();
-    unsafe { libc::sync() };
-    db.set_sync(sync);
-    let files = dataset_files(&db);
+const MIX_SETUP: &str = "mkdir -p stress/d0 stress/d1 stress/d2 stress/d3 stress/small";
+
+/// The command lines of one comparison workload, `reads` in a hundred of
+/// them only reading: (only reads, command). They are run after
+/// `MIX_SETUP`. The list depends on the dataset, the seed and the count,
+/// and on nothing that running it changes.
+fn mix_commands(db: &Db, opts: &Options, reads: usize) -> Result<Vec<(bool, String)>, String> {
+    let files = dataset_files(db);
     let mut rng = Rng(opts.seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
     let vocab = vocabulary(&mut rng, 5_000);
     let mut dirs: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
@@ -833,11 +805,9 @@ fn mix_run(opts: &Options, folder: &str, sync: SyncMode, later: bool, compress: 
             words.push(String::from_utf8_lossy(found[rng.below(found.len())]).into_owned());
         }
     }
-    qdb::execute(&mut db, b"mkdir -p stress/d0 stress/d1 stress/d2 stress/d3 stress/small");
     let mut own: Vec<String> = Vec::new();
     let mut next = 0usize;
-    let (mut read_ns, mut write_ns): (Vec<u64>, Vec<u64>) = (Vec::new(), Vec::new());
-    let started = Instant::now();
+    let mut commands = Vec::with_capacity(opts.count);
     for _ in 0..opts.count {
         let is_read = rng.below(100) < reads;
         let roll = rng.below(100);
@@ -878,6 +848,46 @@ fn mix_run(opts: &Options, folder: &str, sync: SyncMode, later: bool, compress: 
                 _ => format!("echo '{}' >> {}", sentence(&mut rng, &vocab, 8, 1), file),
             }
         };
+        commands.push((is_read, command));
+    }
+    Ok(commands)
+}
+
+/// Print one workload of the comparison for an existing database.
+fn units(opts: &Options) -> Result<bool, String> {
+    let dir = opts.db.as_ref().ok_or("units needs --db DATABASE")?;
+    let (db, _) = Db::open_dir(dir, Config::default())?;
+    let mut text = format!("# {} command lines, {} in a hundred only reading, seed {}\n{}\n", opts.count, opts.reads, opts.seed, MIX_SETUP);
+    for (_, c) in mix_commands(&db, opts, opts.reads)? {
+        text.push_str(&c);
+        text.push('\n');
+    }
+    db.close()?;
+    print!("{}", text);
+    Ok(true)
+}
+
+/// One run of the comparison: a fresh import of the dataset with the
+/// given switches, then `count` command lines of which `reads` in a
+/// hundred only read. Returns the row of the table.
+fn mix_run(opts: &Options, folder: &str, sync: SyncMode, later: bool, compress: bool, reads: usize) -> Result<String, String> {
+    let dir = opts.db.as_ref().ok_or("compare needs --db DIR")?.join(format!("compare-{}", opts.dataset));
+    let _ = std::fs::remove_dir_all(&dir);
+    let cfg = Config { index: opts.index, piece: opts.piece, sync: SyncMode::Batch, compress, index_later: later, ..Config::default() };
+    PEAK.store(LIVE.load(Relaxed), Relaxed);
+    let base = LIVE.load(Relaxed);
+    let t = Instant::now();
+    let (mut db, _) = Db::open_dir(&dir, cfg)?;
+    store::load_into_db(&mut db, &opts.data.join(folder)).map_err(|e| e.to_string())?;
+    db.sync();
+    let load = t.elapsed();
+    unsafe { libc::sync() };
+    db.set_sync(sync);
+    let commands = mix_commands(&db, opts, reads)?;
+    qdb::execute(&mut db, MIX_SETUP.as_bytes());
+    let (mut read_ns, mut write_ns): (Vec<u64>, Vec<u64>) = (Vec::new(), Vec::new());
+    let started = Instant::now();
+    for (is_read, command) in &commands {
         let mut out = Count::default();
         let mut err = Vec::new();
         let t = Instant::now();
@@ -886,7 +896,7 @@ fn mix_run(opts: &Options, folder: &str, sync: SyncMode, later: bool, compress: 
         if code > 1 {
             return Err(format!("failed: {}\n{}", command, String::from_utf8_lossy(&err)));
         }
-        if is_read {
+        if *is_read {
             read_ns.push(nanos);
         } else {
             write_ns.push(nanos);
@@ -1129,6 +1139,7 @@ fn run() -> Result<bool, String> {
         piece: 64 * 1024,
         cap_mb: None,
         upkeep: true,
+        reads: 50,
     };
     while let Some(a) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("{} needs a value", name));
@@ -1152,6 +1163,7 @@ fn run() -> Result<bool, String> {
             }
             "--piece" => opts.piece = value("--piece")?.parse().map_err(|_| "--piece needs a number")?,
             "--no-upkeep" => opts.upkeep = false,
+            "--reads" => opts.reads = value("--reads")?.parse().map_err(|_| "--reads needs a number")?,
             "--cap" => opts.cap_mb = Some(value("--cap")?.parse().map_err(|_| "--cap needs a number of MB")?),
             other => return Err(format!("unknown argument {}\n{}", other, USAGE)),
         }
@@ -1162,6 +1174,7 @@ fn run() -> Result<bool, String> {
         "compare" => compare(&opts),
         "sync-cost" => sync_cost(&opts),
         "codec" => codec(&opts),
+        "units" => units(&opts),
         _ => {
             println!("{}", USAGE);
             Ok(mode == "--help" || mode == "-h")
