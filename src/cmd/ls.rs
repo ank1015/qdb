@@ -105,8 +105,8 @@ pub fn ls(args: Vec<Vec<u8>>) -> Result<Runner, String> {
                     io.err_line(format!("ls: cannot access {}: {}", quote(name), e.msg()));
                     status = 2;
                 }
-                Ok(id) if db.is_dir(id) && !flags.dirs => dirs.push(Entry { name: name.clone(), id }),
-                Ok(id) => files.push(Entry { name: name.clone(), id }),
+                Ok(id) if db.is_dir(id) && !flags.dirs => dirs.push(Entry { name: name.as_slice().into(), id }),
+                Ok(id) => files.push(Entry { name: name.as_slice().into(), id }),
             }
         }
         sort(db, &flags, &mut files);
@@ -123,13 +123,15 @@ pub fn ls(args: Vec<Vec<u8>>) -> Result<Runner, String> {
     }))
 }
 
-struct Entry {
-    name: Vec<u8>,
+struct Entry<'a> {
+    name: std::borrow::Cow<'a, [u8]>,
     id: NodeId,
 }
 
 fn sort(db: &Db, flags: &Flags, entries: &mut [Entry]) {
     match flags.order {
+        // A folder's entries come in this order already.
+        Order::Name if entries.windows(2).all(|w| w[0].name <= w[1].name) => {}
         Order::Name => entries.sort_by(|a, b| a.name.cmp(&b.name)),
         Order::Size => entries.sort_by(|a, b| bytes_of(db, b.id).cmp(&bytes_of(db, a.id)).then_with(|| a.name.cmp(&b.name))),
         Order::Time => entries.sort_by(|a, b| db.mtime(b.id).cmp(&db.mtime(a.id)).then_with(|| a.name.cmp(&b.name))),
@@ -197,11 +199,11 @@ fn list_dir(db: &Db, flags: &Flags, path: &[u8], id: NodeId, header: bool, first
         .children(id)
         .iter()
         .filter(|(name, _)| flags.hidden != Hidden::No || name[0] != b'.')
-        .map(|(name, child)| Entry { name: name.clone(), id: *child })
+        .map(|(name, child)| Entry { name: name.as_slice().into(), id: *child })
         .collect();
     if flags.hidden == Hidden::All {
-        entries.push(Entry { name: b".".to_vec(), id });
-        entries.push(Entry { name: b"..".to_vec(), id: db.parent(id).unwrap_or(id) });
+        entries.push(Entry { name: b".".as_slice().into(), id });
+        entries.push(Entry { name: b"..".as_slice().into(), id: db.parent(id).unwrap_or(id) });
     }
     sort(db, flags, &mut entries);
     if flags.long {
@@ -209,11 +211,11 @@ fn list_dir(db: &Db, flags: &Flags, path: &[u8], id: NodeId, header: bool, first
         let total = if flags.human { when::human(blocks * 1024) } else { blocks.to_string() };
         io.put(format!("total {}\n", total).as_bytes());
     }
-    let ids: Vec<NodeId> = entries.iter().map(|e| e.id).collect();
+    let ids: Vec<NodeId> = if flags.long { entries.iter().map(|e| e.id).collect() } else { Vec::new() };
     print(db, flags, &entries, &ids, io);
     if flags.recursive {
         for e in &entries {
-            if db.is_dir(e.id) && e.name != b"." && e.name != b".." {
+            if db.is_dir(e.id) && &*e.name != b"." && &*e.name != b".." {
                 list_dir(db, flags, &join(path, &e.name), e.id, true, first, io);
             }
         }
