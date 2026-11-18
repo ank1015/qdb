@@ -34,6 +34,7 @@ use crate::disk::{self, damage, Damage, Packed, PackedWriter, Piece, Reader, Seg
 use crate::index::{self, Index, Lists, Postings};
 pub use crate::index::{IndexStats, IndexWork};
 use crate::query::{Query, Trigram};
+use std::rc::Rc;
 use crate::vfs::{MemFs, RealFs, Vfs};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -242,12 +243,23 @@ pub struct Config {
     /// Save the tree once the log written since the last save is longer
     /// than this, and longer than twice the saved tree.
     pub checkpoint: u64,
+    /// Output on its way to a file is held in memory up to this many
+    /// bytes; more than that waits in a scratch file.
+    pub spool: usize,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        Config { piece: 64 * 1024, segment: 128 << 20, sync: SyncMode::Always, batch_lines: 64, batch_bytes: 4 << 20, index: true, checkpoint: 1 << 20 }
+        Config { piece: 64 * 1024, segment: 128 << 20, sync: SyncMode::Always, batch_lines: 64, batch_bytes: 4 << 20, index: true, checkpoint: 1 << 20, spool: 8 << 20 }
     }
+}
+
+/// A place for scratch files, and how much may be held in memory before
+/// one is used. Without a place, everything is held in memory.
+#[derive(Clone)]
+pub struct Scratch {
+    pub vfs: Option<Rc<dyn Vfs>>,
+    pub limit: usize,
 }
 
 /// What opening a database found and did.
@@ -353,7 +365,7 @@ pub struct Db {
     nodes: Nodes,
     root: NodeId,
     next_id: NodeId,
-    vfs: Box<dyn Vfs>,
+    vfs: Rc<dyn Vfs>,
     /// The files are in memory and there is no log.
     volatile: bool,
     cfg: Config,
@@ -487,6 +499,7 @@ impl Db {
     }
 
     fn blank(vfs: Box<dyn Vfs>, cfg: Config) -> Db {
+        let vfs: Rc<dyn Vfs> = Rc::from(vfs);
         let mut nodes = Nodes::default();
         nodes.insert(Node { id: 0, name: Vec::new(), parent: None, kind: NodeKind::Folder(BTreeMap::new()), aux: 0 });
         let volatile = vfs.volatile();
@@ -1050,6 +1063,16 @@ impl Db {
 
     /// A storage failure, if there has been one. After a failure nothing
     /// more is written, and what commands report is not to be relied on.
+    /// Where output bound for a file may wait: see `engine::Spool`.
+    pub fn scratch(&self) -> Scratch {
+        Scratch { vfs: if self.volatile { None } else { Some(self.vfs.clone()) }, limit: self.cfg.spool }
+    }
+
+    /// A scratch file could not be written: the storage has failed.
+    pub fn scratch_failed(&mut self, e: io::Error) {
+        self.fail(e);
+    }
+
     pub fn failure(&self) -> Option<&str> {
         self.failed.as_deref()
     }

@@ -8,7 +8,8 @@
 use crate::cmd;
 use crate::glob;
 use crate::shell::{self, ParseError, RedirOp, Word};
-use crate::tree::{is_valid_text, Db, Errno, NodeId};
+use crate::tree::{is_valid_text, Db, Errno, NodeId, Scratch};
+use crate::vfs::VFile;
 use crate::util::lossy;
 
 /// What a command line produced.
@@ -33,6 +34,139 @@ impl Sink for Vec<u8> {
     fn write(&mut self, data: &[u8]) -> bool {
         self.extend_from_slice(data);
         true
+    }
+}
+
+/// Output on its way to a file. It is checked as it arrives (a file holds
+/// valid text only) and stored when the command has ended, so that a
+/// command whose output is refused changes nothing. Up to the scratch
+/// limit it waits in memory, beyond that in a scratch file, so that output
+/// of any size takes a fixed amount of memory.
+pub struct Spool {
+    scratch: Scratch,
+    /// All of the output, or with a file the part not yet written to it.
+    mem: Vec<u8>,
+    file: Option<(String, Box<dyn VFile>)>,
+    len: u64,
+    valid: bool,
+    /// The start of a character whose other bytes have not arrived.
+    carry: Vec<u8>,
+    error: Option<std::io::Error>,
+}
+
+/// With a scratch file, this much is gathered between writes to it.
+const SPOOL_WRITE: usize = 1 << 20;
+
+static SPOOLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+impl Spool {
+    pub fn new(scratch: Scratch) -> Spool {
+        Spool { scratch, mem: Vec::new(), file: None, len: 0, valid: true, carry: Vec::new(), error: None }
+    }
+
+    fn nowhere() -> Spool {
+        Spool::new(Scratch { vfs: None, limit: 0 })
+    }
+
+    /// Check the next bytes: no NUL, and UTF-8 across the joins.
+    fn check(&mut self, mut data: &[u8]) {
+        if memchr::memchr(0, data).is_some() {
+            self.valid = false;
+            return;
+        }
+        if !self.carry.is_empty() {
+            let whole = match self.carry[0] {
+                0xC2..=0xDF => 2,
+                0xE0..=0xEF => 3,
+                _ => 4,
+            };
+            let take = (whole - self.carry.len()).min(data.len());
+            self.carry.extend_from_slice(&data[..take]);
+            data = &data[take..];
+            match std::str::from_utf8(&self.carry) {
+                Ok(_) => self.carry.clear(),
+                Err(e) if e.error_len().is_none() => return,
+                Err(_) => {
+                    self.valid = false;
+                    return;
+                }
+            }
+        }
+        if let Err(e) = std::str::from_utf8(data) {
+            if e.error_len().is_none() {
+                self.carry.extend_from_slice(&data[e.valid_up_to()..]);
+            } else {
+                self.valid = false;
+            }
+        }
+    }
+
+    fn to_file(&mut self) {
+        if self.file.is_none() {
+            let vfs = self.scratch.vfs.as_ref().expect("a place for scratch files");
+            let name = format!("spool-{}.tmp", SPOOLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+            match vfs.create(&name, 1 << 38) {
+                Ok(f) => self.file = Some((name, f)),
+                Err(e) => {
+                    self.error = Some(e);
+                    return;
+                }
+            }
+        }
+        let (_, f) = self.file.as_mut().unwrap();
+        if let Err(e) = f.write_at(self.len - self.mem.len() as u64, &self.mem) {
+            self.error = Some(e);
+        }
+        self.mem.clear();
+    }
+
+    /// The output has ended. True if it is valid text.
+    fn end(&mut self) -> bool {
+        if self.file.is_some() && !self.mem.is_empty() && self.error.is_none() {
+            self.to_file();
+        }
+        self.valid && self.carry.is_empty()
+    }
+
+    /// Up to `max` bytes of the output from offset `at`. After `end`.
+    fn read(&self, at: u64, max: usize) -> &[u8] {
+        let n = ((self.len - at) as usize).min(max);
+        match &self.file {
+            None => &self.mem[at as usize..at as usize + n],
+            // Safety: the file holds `len` bytes and is not changed again.
+            Some((_, f)) => unsafe { std::slice::from_raw_parts(f.base().add(at as usize), n) },
+        }
+    }
+}
+
+impl Sink for Spool {
+    fn write(&mut self, data: &[u8]) -> bool {
+        if self.valid {
+            self.check(data);
+        }
+        if !self.valid || self.error.is_some() {
+            // Nothing will be stored; the command runs on as it would.
+            self.mem = Vec::new();
+            return true;
+        }
+        self.mem.extend_from_slice(data);
+        self.len += data.len() as u64;
+        let limit = if self.file.is_some() { SPOOL_WRITE } else { self.scratch.limit };
+        if self.mem.len() > limit && self.scratch.vfs.is_some() {
+            self.to_file();
+        }
+        true
+    }
+}
+
+impl Drop for Spool {
+    fn drop(&mut self) {
+        if let Some((name, f)) = self.file.take() {
+            drop(f);
+            if let Some(vfs) = &self.scratch.vfs {
+                let _ = vfs.remove(&name);
+            }
+        }
     }
 }
 
@@ -240,7 +374,7 @@ fn run_line(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) ->
     // input, the write is refused and the commands before it stop.
     let mut stages = stages.into_iter();
     let first = stages.next().expect("a pipeline has a command");
-    let mut later: Vec<Later> = stages.map(Later::new).collect();
+    let mut later: Vec<Later> = stages.map(|s| Later::new(s, db.scratch())).collect();
     let mut stderr = Vec::new();
     let mut buf = Vec::new();
     let mut code = run_whole(db, first.prepared.run, &first.redirects, &[], &mut Rest { stages: &mut later, last: out }, &mut buf, &mut stderr);
@@ -262,7 +396,7 @@ struct Later {
     /// Output on its way to the next stage.
     buf: Vec<u8>,
     /// Output on its way to a file, when standard output is redirected.
-    to_file: Vec<u8>,
+    to_file: Spool,
     err: Vec<u8>,
 }
 
@@ -276,13 +410,13 @@ enum State {
 }
 
 impl Later {
-    fn new(stage: Stage) -> Later {
+    fn new(stage: Stage, scratch: Scratch) -> Later {
         let state = match stage.prepared.input {
             Input::Stream(f) => State::Streaming(f),
             Input::Whole => State::Gathering(Vec::new()),
             Input::Unused => State::Closed(None),
         };
-        Later { state, redirects: stage.redirects, run: Some(stage.prepared.run), buf: Vec::new(), to_file: Vec::new(), err: Vec::new() }
+        Later { state, redirects: stage.redirects, run: Some(stage.prepared.run), buf: Vec::new(), to_file: Spool::new(scratch), err: Vec::new() }
     }
 
     fn push(&mut self, data: &[u8], down: &mut dyn Sink) -> bool {
@@ -339,7 +473,7 @@ impl Later {
         let code = filter.finish(&mut io);
         io.flush();
         stderr.extend_from_slice(&self.err);
-        commit_redirect(db, target, undo, std::mem::take(&mut self.to_file), code, stderr)
+        commit_redirect(db, target, undo, std::mem::replace(&mut self.to_file, Spool::nowhere()), code, stderr)
     }
 }
 
@@ -446,7 +580,7 @@ fn run_whole(
         Some(target) => {
             // Output bound for a file is checked as a whole before any of
             // it is stored, so it is gathered first.
-            let mut gathered = Vec::new();
+            let mut gathered = Spool::new(db.scratch());
             let mut io = Io { stdin, out: &mut gathered, buf, stopped: false, err: stderr, out_file: Some(target.1) };
             let code = run(db, &mut io);
             io.flush();
@@ -457,9 +591,15 @@ fn run_whole(
 
 /// Store redirected output in its file, or undo the redirection if the
 /// result would not be valid text.
-fn commit_redirect(db: &mut Db, target: Target, undo: Vec<Undo>, out: Vec<u8>, mut code: i32, stderr: &mut Vec<u8>) -> i32 {
+fn commit_redirect(db: &mut Db, target: Target, undo: Vec<Undo>, mut out: Spool, mut code: i32, stderr: &mut Vec<u8>) -> i32 {
     let (op, id, path) = target;
-    if !is_valid_text(&out) {
+    let valid = out.end();
+    if let Some(e) = out.error.take() {
+        // Reported when the command line ends, like any failure to store.
+        db.scratch_failed(e);
+        return code;
+    }
+    if !valid {
         // Text only: reject the write and leave the data as it was.
         for u in undo.into_iter().rev() {
             match u {
@@ -475,23 +615,55 @@ fn commit_redirect(db: &mut Db, target: Target, undo: Vec<Undo>, out: Vec<u8>, m
     }
     // The command may have removed or replaced the file it was writing to;
     // the output then goes nowhere, as it would with an unlinked file.
-    if db.exists(id) && !db.is_dir(id) && !out.is_empty() {
-        if op == RedirOp::Append {
+    if db.exists(id) && !db.is_dir(id) && out.len > 0 {
+        // How much of the output is handed to storage at a time: 4 MB
+        // with pieces of the usual size.
+        let step = db.config().piece * 64;
+        if op == RedirOp::Append || db.size(id) == 0 {
             // Valid text added to valid text is valid text.
-            db.append(id, &out);
+            let mut at = 0;
+            let mut first = op == RedirOp::Write;
+            if out.len as usize <= step {
+                let all = out.read(0, step);
+                if first {
+                    db.set_content(id, all);
+                } else {
+                    db.append(id, all);
+                }
+                return code;
+            }
+            if first {
+                // What the file held is still known: pieces at its start
+                // that the output repeats are kept.
+                db.set_content_stream(id, &mut |_, buf| {
+                    let part = out.read(at, step / 4);
+                    buf.extend_from_slice(part);
+                    at += part.len() as u64;
+                    !part.is_empty()
+                });
+                first = false;
+            }
+            while !first && at < out.len {
+                // In whole lines where there are any.
+                let mut part = out.read(at, step);
+                if at + (part.len() as u64) < out.len {
+                    if let Some(nl) = memchr::memrchr(b'\n', part) {
+                        part = &part[..nl + 1];
+                    }
+                }
+                db.append(id, part);
+                at += part.len() as u64;
+            }
             return code;
         }
+        // The command itself wrote to the file its output goes to. The
+        // output starts at offset 0 of what is there now.
         let mut content = db.content(id).into_owned();
-        match op {
-            RedirOp::Append => unreachable!(),
-            RedirOp::Write => {
-                // Writing starts at offset 0 of the emptied file.
-                if out.len() >= content.len() {
-                    content = out;
-                } else {
-                    content[..out.len()].copy_from_slice(&out);
-                }
-            }
+        let out = out.read(0, usize::MAX);
+        if out.len() >= content.len() {
+            content = out.to_vec();
+        } else {
+            content[..out.len()].copy_from_slice(out);
         }
         if is_valid_text(&content) {
             db.set_content(id, &content);

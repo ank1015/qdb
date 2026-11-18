@@ -971,7 +971,7 @@ fn crash_point(image: MemFs, cfg: &Config, history: &History, rng: &mut Rng, cou
 fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool) -> Result<bool, String> {
     use std::cell::RefCell;
     use std::rc::Rc;
-    let cfg = Config { piece: 512, segment: 96 << 10, sync, batch_lines: 8, batch_bytes: 24 << 10, index, checkpoint: 12 << 10 };
+    let cfg = Config { piece: 512, segment: 96 << 10, sync, batch_lines: 8, batch_bytes: 24 << 10, index, checkpoint: 12 << 10, spool: 300 };
     let mut gen = Gen::new(seed);
     let mut rng = Rng(seed.wrapping_mul(0xD1B54A32D192ED03) | 1);
     let counts: Rc<RefCell<CrashCounts>> = Default::default();
@@ -1344,7 +1344,14 @@ fn run() -> Result<bool, String> {
                     other => return Err(format!("--sync: {} is not always or batch", other)),
                 }
             }
-            "--piece" => setup.cfg.piece = value("--piece")?.parse().map_err(|_| "--piece needs a number")?,
+            "--piece" => {
+                setup.cfg.piece = value("--piece")?.parse().map_err(|_| "--piece needs a number")?;
+                // Small pieces come with a small limit on redirected
+                // output held in memory, so that scratch files are used.
+                if setup.cfg.piece < 4096 {
+                    setup.cfg.spool = setup.cfg.piece * 4;
+                }
+            }
             "--segment" => setup.cfg.segment = value("--segment")?.parse().map_err(|_| "--segment needs a number")?,
             "--diff" => diff = value("--diff")?.parse().map_err(|_| "--diff needs a number")?,
             "--crash" => crash = value("--crash")?.parse().map_err(|_| "--crash needs a number")?,
