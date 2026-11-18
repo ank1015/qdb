@@ -280,6 +280,18 @@ impl Opts {
     fn head(&self, line: &[u8]) -> (u64, u32, u32) {
         match self.keys.first() {
             None => (prefix(line), 0, line.len() as u32),
+            // A whole number of up to eighteen digits is kept as a
+            // number (marked by the 1); anything else is read again at
+            // every comparison.
+            Some(k) if k.o.numeric && !k.o.human => {
+                let (neg, int, frac) = number(self.field(line, k));
+                if frac.is_empty() && int.len() <= 18 {
+                    let v = int.iter().fold(0i64, |v, d| v * 10 + i64::from(d - b'0'));
+                    ((if neg { -v } else { v }) as u64 ^ (1 << 63), 1, 0)
+                } else {
+                    (0, 0, 0)
+                }
+            }
             Some(k) if self.bytes_first() => {
                 let f = self.field(line, k);
                 let off = f.as_ptr() as usize - line.as_ptr() as usize;
@@ -296,11 +308,15 @@ impl Opts {
             let ord = ha.0.cmp(&hb.0).then_with(|| a.cmp(b));
             return if self.reverse { ord.reverse() } else { ord };
         }
-        if !self.bytes_first() {
-            return self.compare(a, b);
-        }
         let k = &self.keys[0];
-        let ord = ha.0.cmp(&hb.0).then_with(|| a[ha.1 as usize..(ha.1 + ha.2) as usize].cmp(&b[hb.1 as usize..(hb.1 + hb.2) as usize]));
+        let ord = if !self.bytes_first() {
+            if !(k.o.numeric && !k.o.human && ha.1 == 1 && hb.1 == 1) {
+                return self.compare(a, b);
+            }
+            ha.0.cmp(&hb.0)
+        } else {
+            ha.0.cmp(&hb.0).then_with(|| a[ha.1 as usize..(ha.1 + ha.2) as usize].cmp(&b[hb.1 as usize..(hb.1 + hb.2) as usize]))
+        };
         if ord != Ordering::Equal {
             return if k.o.reverse { ord.reverse() } else { ord };
         }
@@ -336,6 +352,85 @@ fn prefix(line: &[u8]) -> u64 {
     u64::from_be_bytes(b)
 }
 
+/// Sort by a string of bytes in each line: the whole line, or its first
+/// key. Lines that begin alike are common (indented text, numbered
+/// lines, a key with few values), and a comparison sort reads the shared
+/// start again at every comparison. This one looks at each string eight
+/// bytes at a time: it splits a group three ways on those eight bytes,
+/// and only the strings equal there go on to their next eight.
+///
+/// On entry every `prefix` holds the first eight bytes of its string.
+/// `tie` orders two lines whose strings are equal.
+fn by_bytes(ents: &mut [Ent], buf: &[u8], whole: bool, tie: &dyn Fn(&Ent, &Ent) -> Ordering) {
+    let text = |e: &Ent| -> &[u8] {
+        let from = e.off as usize + if whole { 0 } else { e.koff as usize };
+        &buf[from..from + if whole { e.len } else { e.klen } as usize]
+    };
+    let size = |e: &Ent| if whole { e.len } else { e.klen } as usize;
+    // Two strings equal in their first `depth` bytes, and all that follows.
+    let full = |a: &Ent, b: &Ent, depth: usize| {
+        a.prefix.cmp(&b.prefix).then_with(|| {
+            let (x, y) = (text(a), text(b));
+            x[depth.min(x.len())..].cmp(&y[depth.min(y.len())..]).then_with(|| tie(a, b))
+        })
+    };
+    // (start, end, bytes already known to be equal within the group)
+    let mut todo: Vec<(usize, usize, usize)> = vec![(0, ents.len(), 0)];
+    while let Some((start, end, depth)) = todo.pop() {
+        let part = &mut ents[start..end];
+        let n = part.len();
+        if n <= 32 {
+            part.sort_unstable_by(|a, b| full(a, b, depth));
+            continue;
+        }
+        let pivot = {
+            let (a, b, c) = (part[n / 4].prefix, part[n / 2].prefix, part[n - 1 - n / 4].prefix);
+            a.max(b).min(a.min(b).max(c))
+        };
+        let (mut less, mut i, mut more) = (0, 0, n);
+        while i < more {
+            match part[i].prefix.cmp(&pivot) {
+                Ordering::Less => {
+                    part.swap(less, i);
+                    less += 1;
+                    i += 1;
+                }
+                Ordering::Greater => {
+                    more -= 1;
+                    part.swap(i, more);
+                }
+                Ordering::Equal => i += 1,
+            }
+        }
+        if less > 1 {
+            todo.push((start, start + less, depth));
+        }
+        if n - more > 1 {
+            todo.push((start + more, end, depth));
+        }
+        // The strings equal on these eight bytes. Those that end within
+        // them come first, the shorter before the longer; the others go
+        // on to their next eight.
+        let same = &mut part[less..more];
+        let mut ended = 0;
+        for i in 0..same.len() {
+            if size(&same[i]) <= depth + 8 {
+                same.swap(i, ended);
+                ended += 1;
+            }
+        }
+        same[..ended].sort_unstable_by(|a, b| size(a).cmp(&size(b)).then_with(|| tie(a, b)));
+        for e in &mut same[ended..] {
+            let from = e.off as usize + if whole { 0 } else { e.koff as usize };
+            let to = from + if whole { e.len } else { e.klen } as usize;
+            e.prefix = prefix(&buf[from + depth + 8..to]);
+        }
+        if same.len() - ended > 1 {
+            todo.push((start + less + ended, start + more, depth + 8));
+        }
+    }
+}
+
 static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 struct Sorter {
@@ -349,6 +444,8 @@ struct Sorter {
     scratch: Option<Scratch>,
     written: u64,
     failed: Option<std::io::Error>,
+    /// No line of the run in hand has come before one it belongs after.
+    in_order: bool,
 }
 
 /// With somewhere to write runs, a run is this many times what output
@@ -357,7 +454,7 @@ const RUN_SPOOLS: usize = 12;
 
 impl Sorter {
     fn new(o: Opts) -> Sorter {
-        Sorter { o, buf: Vec::new(), ents: Vec::new(), lines: LineBuf::default(), runs: Vec::new(), file: None, scratch: None, written: 0, failed: None }
+        Sorter { o, buf: Vec::new(), ents: Vec::new(), lines: LineBuf::default(), runs: Vec::new(), file: None, scratch: None, written: 0, failed: None, in_order: true }
     }
 
     fn add(&mut self, line: &[u8]) {
@@ -366,20 +463,49 @@ impl Sorter {
             self.spill();
         }
         let (prefix, koff, klen) = self.o.head(text);
+        if self.in_order {
+            if let Some(last) = self.ents.last() {
+                let before = &self.buf[last.off as usize..last.off as usize + last.len as usize];
+                self.in_order = self.o.compare_headed(before, (last.prefix, last.koff, last.klen), text, (prefix, koff, klen)) != Ordering::Greater;
+            }
+        }
         self.ents.push(Ent { prefix, off: self.buf.len() as u32, len: text.len() as u32, koff, klen });
         self.buf.extend_from_slice(text);
     }
 
     fn sort_run(&mut self) {
+        // Input that came in order is common (a file sorted before, or
+        // numbered lines), and was seen to be as it came.
+        if self.in_order {
+            return;
+        }
         let buf = &self.buf;
         let o = &self.o;
         let text = |e: &Ent| &buf[e.off as usize..e.off as usize + e.len as usize];
         if o.keys.is_empty() {
+            by_bytes(&mut self.ents, buf, true, &|_, _| Ordering::Equal);
             if o.reverse {
-                self.ents.sort_unstable_by(|a, b| b.prefix.cmp(&a.prefix).then_with(|| text(b).cmp(text(a))));
-            } else {
-                self.ents.sort_unstable_by(|a, b| a.prefix.cmp(&b.prefix).then_with(|| text(a).cmp(text(b))));
+                self.ents.reverse();
             }
+        } else if o.bytes_first() && !o.keys[0].o.reverse {
+            // Lines with the same first key: by the other keys, then as
+            // they came (for -s and -u) or by the whole line.
+            let tie = |a: &Ent, b: &Ent| {
+                let (x, y) = (text(a), text(b));
+                let ord = o.by_keys_from(x, y, 1);
+                if ord != Ordering::Equal {
+                    ord
+                } else if o.unique || o.stable {
+                    // An empty line starts where the line after it does,
+                    // and came first.
+                    a.off.cmp(&b.off).then(a.len.cmp(&b.len))
+                } else if o.reverse {
+                    y.cmp(x)
+                } else {
+                    x.cmp(y)
+                }
+            };
+            by_bytes(&mut self.ents, buf, false, &tie);
         } else {
             self.ents.sort_by(|a, b| o.compare_headed(text(a), (a.prefix, a.koff, a.klen), text(b), (b.prefix, b.koff, b.klen)));
         }
@@ -422,6 +548,7 @@ impl Sorter {
         self.runs.push((start, self.written));
         self.buf.clear();
         self.ents.clear();
+        self.in_order = true;
     }
 
     fn feed(&mut self, data: &[u8], io: &Io) {
@@ -477,38 +604,78 @@ impl Sorter {
         // Safety: the file holds `written` bytes and is not changed again
         // while `all` is in use.
         let all: &[u8] = unsafe { std::slice::from_raw_parts(f.base(), self.written as usize) };
-        // The next line of each run, and the lines after it.
         let o = self.o.clone();
-        let headed = |h: Option<(&'static [u8], &'static [u8])>| h.map(|(line, rest)| (line, rest, o.head(line)));
         // Safety: as above; the slices do not outlive this call.
         let all: &'static [u8] = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(all) };
-        let mut heads: Vec<Option<(&[u8], &[u8], (u64, u32, u32))>> = self
-            .runs
-            .iter()
-            .map(|(s, e)| {
-                let run = &all[*s as usize..*e as usize];
-                headed(next_line(run))
-            })
-            .collect();
-        let mut last: Vec<u8> = Vec::new();
-        let mut any = false;
-        loop {
-            // The least head; of equal ones, that of the earliest run.
-            let mut best: Option<usize> = None;
-            for (i, h) in heads.iter().enumerate() {
-                if let Some((line, _, hd)) = h {
-                    match best {
-                        Some(b) if {
-                            let (bl, _, bh) = heads[b].unwrap();
-                            o.compare_headed(bl, bh, line, *hd) != Ordering::Greater
-                        } => {}
-                        _ => best = Some(i),
-                    }
+        // Runs that follow one another in order are one run: input that
+        // came in order is passed on as it was written.
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for (s, e) in self.runs.iter().map(|(s, e)| (*s as usize, *e as usize)).filter(|(s, e)| e > s) {
+            if let Some(prev) = runs.last_mut() {
+                let body = &all[prev.0..prev.1 - 1];
+                let last_line = &body[memchr::memrchr(b'\n', body).map_or(0, |i| i + 1)..];
+                let first_line = next_line(&all[s..e]).map_or(&b""[..], |l| l.0);
+                if o.compare(last_line, first_line) != Ordering::Greater {
+                    prev.1 = e;
+                    continue;
                 }
             }
-            let Some(b) = best else { break };
+            runs.push((s, e));
+        }
+        if runs.len() == 1 && !o.unique {
+            for chunk in all[runs[0].0..runs[0].1].chunks(1 << 16) {
+                io.put(chunk);
+                if io.stopped() {
+                    break;
+                }
+            }
+            return 0;
+        }
+        // The next line of each run, and the lines after it.
+        type Head = Option<(&'static [u8], &'static [u8], (u64, u32, u32))>;
+        let headed = |h: Option<(&'static [u8], &'static [u8])>| -> Head { h.map(|(line, rest)| (line, rest, o.head(line))) };
+        let mut heads: Vec<Head> = runs.iter().map(|(s, e)| headed(next_line(&all[*s..*e]))).collect();
+        // A heap of the runs by their next line; of equal lines, the one
+        // of the earliest run first.
+        let before = |heads: &[Head], i: usize, j: usize| -> bool {
+            let ((a, _, ha), (b, _, hb)) = (heads[i].unwrap(), heads[j].unwrap());
+            match o.compare_headed(a, ha, b, hb) {
+                Ordering::Less => true,
+                Ordering::Greater => false,
+                Ordering::Equal => i < j,
+            }
+        };
+        let sift = |heap: &mut [usize], heads: &[Head], mut at: usize| loop {
+            let left = 2 * at + 1;
+            if left >= heap.len() {
+                break;
+            }
+            let mut least = left;
+            if left + 1 < heap.len() && before(heads, heap[left + 1], heap[left]) {
+                least = left + 1;
+            }
+            if !before(heads, heap[least], heap[at]) {
+                break;
+            }
+            heap.swap(least, at);
+            at = least;
+        };
+        let mut heap: Vec<usize> = (0..heads.len()).filter(|i| heads[*i].is_some()).collect();
+        for at in (0..heap.len() / 2).rev() {
+            sift(&mut heap, &heads, at);
+        }
+        let mut last: Vec<u8> = Vec::new();
+        let mut any = false;
+        while let Some(&b) = heap.first() {
             let (line, rest, _) = heads[b].unwrap();
             heads[b] = headed(next_line(rest));
+            if heads[b].is_none() {
+                let moved = heap.pop().unwrap();
+                if !heap.is_empty() {
+                    heap[0] = moved;
+                }
+            }
+            sift(&mut heap, &heads, 0);
             if self.o.unique {
                 if any && self.o.compare(&last, line) == Ordering::Equal {
                     continue;

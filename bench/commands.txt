@@ -216,7 +216,7 @@ mut: sort {FILE} > bench_out/sorted.txt
 mut: sort -u {FILE} >> bench_out/sorted.txt
 mut: cat qdb_no_such_file &> bench_out/both.txt
 mut: cat qdb_no_such_file 2>> bench_out/both.txt
-mut: find {SMALLDIR} -name '*.{EXT}' | xargs cat > bench_out/joined.txt
+mut: find {SMALLDIR} -name '*.{EXT}' | sort | xargs cat > bench_out/joined.txt
 mut: cp bench_out/joined.txt bench_out/joined2.txt
 mut: sed -i '1d' bench_out/joined2.txt
 mut: wc -c bench_out/joined.txt bench_out/joined2.txt bench_out/tee.txt bench_out/sorted.txt

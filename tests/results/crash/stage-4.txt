@@ -1,0 +1,37 @@
+# Stage 4: power cuts, kills and index on against index off, with copies
+# that share content and with modification times. In the generated steps a
+# cp is followed by edits to either copy. Times are part of the tree that
+# must come back after a power cut. The kill test compares trees without
+# times (the tree to compare with is made by another process, by another
+# reading of the clock) and checks that every time lies inside the test.
+
+seed 1 sync always: 10000 power cuts over 4034 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 5009 while a command line was running, 2204 while an index file was being written, 1652 while the tree was being saved, 1985 during recovery itself; 48 times the run went on from a crash image, 18 of those after the disk failed
+    recovery cut an unfinished tail off the log 3240 times and built an index again 8527 times; 0 command lines that had returned were lost in all (none may be); 986 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 32 times and compacted it 30 times, with power cuts during those too
+
+seed 2 sync batch (8 lines): 10000 power cuts over 3941 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 3878 while a command line was running, 2863 while an index file was being written, 1758 while the tree was being saved, 2042 during recovery itself; 45 times the run went on from a crash image, 13 of those after the disk failed
+    recovery cut an unfinished tail off the log 4116 times and built an index again 7575 times; 7041 command lines that had returned were lost in all (at most 7 per power cut may be); 1070 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 35 times and compacted it 38 times, with power cuts during those too
+
+seed 3 sync always: 10000 power cuts over 4450 command lines, every one recovered to the tree after a whole number of command lines and passed every check
+    of them: 5011 while a command line was running, 2166 while an index file was being written, 1574 while the tree was being saved, 1986 during recovery itself; 64 times the run went on from a crash image, 22 of those after the disk failed
+    recovery cut an unfinished tail off the log 3293 times and built an index again 8424 times; 0 command lines that had returned were lost in all (none may be); 992 recovered databases were written to, checked, closed and reopened
+    the run also closed and reopened the database 32 times and compacted it 29 times, with power cuts during those too
+
+seed 1 sync always: 1000 kills (SIGKILL) of a qdb process over 20238 command lines, 653 of them without waiting for the last line's answer; every one recovered to the tree after a whole number of command lines, with every answered line present, and passed every check
+    recovery applied 17637 command lines from the log in all, cut an unfinished tail off 26 times, built an index again 961 times; 0 answered lines lost
+
+seed 2 sync batch: 1000 kills (SIGKILL) of a qdb process over 20273 command lines, 675 of them without waiting for the last line's answer; every one recovered to the tree after a whole number of command lines, with every answered line present, and passed every check
+    recovery applied 17966 command lines from the log in all, cut an unfinished tail off 20 times, built an index again 962 times; 0 answered lines lost
+
+seed 1: 10000 steps (4938 searches, 5062 writes), same results from the engine under test (on disk, sync always, pieces of 65536 bytes, index on) and one in memory with no index; 7179 greps selected something, 130 commands stopped by the shell layer (a missing folder for a redirection)
+    on disk: 14293 command lines logged, 14321 syncs, 6 saves of the tree, 32615439 bytes written, closed and reopened 0 times
+    steps by kind: append 537, cp -r 290, cp, edit 211, create 966, grow 291, mv 482, overwrite 707, rm -r 481, same 313, search 4938, sed -i 784
+    index work: 11879 documents added, 10795 retired, 6082304 bytes of lists rewritten by sweeps, 0 rebuilds; at every check the maintained index equals one built afresh, list by list
+
+seed 2: 10000 steps (5002 searches, 4998 writes), same results from the engine under test (in memory, pieces of 65536 bytes, index on) and one in memory with no index; 7146 greps selected something, 157 commands stopped by the shell layer (a missing folder for a redirection)
+    steps by kind: append 446, cp -r 292, cp, edit 194, create 1014, grow 295, mv 524, overwrite 684, rm -r 463, same 308, search 5002, sed -i 778
+    index work: 12670 documents added, 11192 retired, 7283415 bytes of lists rewritten by sweeps, 0 rebuilds; at every check the maintained index equals one built afresh, list by list
+

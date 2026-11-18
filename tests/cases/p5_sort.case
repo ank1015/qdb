@@ -152,3 +152,5 @@ $ seq 1 9000 > a; seq 1 9000 >> a; sort -n a | uniq -c | sort -u -k1,1
 $ seq 1 9000 > a; seq 1 9000 >> a; sort -k1.2 a | sed -n '1p;777p;$p'
 $ seq 1 9000 > a; seq 1 9000 >> a; sort -s -k1.1,1.1 a | sed -n '1p;5000p;$p'
 $ seq 1 30000 | sort -r > out; head -2 out; wc -l out
+$ printf 'b x\n\na x\n\nc\n' | sort -s -k2,2
+$ printf 'b x\n\na x\n\nc\n' | sort -u -k2,2

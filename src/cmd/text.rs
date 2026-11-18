@@ -512,12 +512,54 @@ struct Tr {
     out: Vec<u8>,
 }
 
+impl Tr {
+    /// When all the map does is move one run of bytes by a fixed amount
+    /// (a-z to A-Z, say): the run and the amount. Such a map needs no
+    /// table, and a loop without one is done many bytes at a time.
+    fn shift(&self) -> Option<(u8, u8, u8)> {
+        let lo = (0..=255u8).find(|c| self.map[*c as usize] != *c)?;
+        let hi = (0..=255u8).rev().find(|c| self.map[*c as usize] != *c)?;
+        let by = self.map[lo as usize].wrapping_sub(lo);
+        (lo..=hi).all(|c| self.map[c as usize] == c.wrapping_add(by)).then_some((lo, hi - lo, by))
+    }
+}
+
 impl Filter for Tr {
     fn push(&mut self, data: &[u8], io: &mut Io) -> bool {
+        let identity = self.map.iter().enumerate().all(|(i, c)| i == *c as usize);
+        let deletes = self.delete.iter().any(|d| *d);
+        let squeezes = self.squeeze.iter().any(|s| *s);
+        let shift = if self.plain { self.shift() } else { None };
         for chunk in data.chunks(1 << 15) {
             self.out.clear();
-            if self.plain {
+            if let Some((lo, span, by)) = shift {
+                self.out.extend(chunk.iter().map(|&c| if c.wrapping_sub(lo) <= span { c.wrapping_add(by) } else { c }));
+            } else if self.plain {
                 self.out.extend(chunk.iter().map(|c| self.map[*c as usize]));
+            } else if identity && !squeezes {
+                // Deleting only. Every byte is written, and the place to
+                // write moves on only past one that is kept.
+                self.out.resize(chunk.len(), 0);
+                let mut j = 0;
+                for &c in chunk {
+                    // Safety: j counts bytes kept, never more than seen.
+                    unsafe { *self.out.get_unchecked_mut(j) = c };
+                    j += usize::from(!self.delete[c as usize]);
+                }
+                self.out.truncate(j);
+            } else if identity && !deletes {
+                // Squeezing only.
+                self.out.resize(chunk.len(), 0);
+                let mut j = 0;
+                let mut last: u32 = self.last.map_or(256, u32::from);
+                for &c in chunk {
+                    // Safety: as above.
+                    unsafe { *self.out.get_unchecked_mut(j) = c };
+                    j += usize::from(!(self.squeeze[c as usize] & (u32::from(c) == last)));
+                    last = u32::from(c);
+                }
+                self.out.truncate(j);
+                self.last = u8::try_from(last).ok();
             } else {
                 // No branch per byte: every byte is written, and the place
                 // to write only moves on past one that is kept.
@@ -613,10 +655,12 @@ pub fn tr(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         let mut s2 = expand(set2, s1.len().saturating_sub(fixed));
         if translating {
             for (i, (_, class)) in s2.iter().enumerate() {
-                if class.is_some() && !matches!(s1.get(i), Some((_, Some(Class::Upper | Class::Lower)))) {
+                // Against a complemented set a class is only its characters.
+                if !comp && class.is_some() && !matches!(s1.get(i), Some((_, Some(Class::Upper | Class::Lower)))) {
                     return stop("misaligned [:upper:] and/or [:lower:] construct".into());
                 }
             }
+            let whole_set1 = s1.len();
             if s2.len() < s1.len() {
                 if truncate {
                     s1.truncate(s2.len());
@@ -630,6 +674,9 @@ pub fn tr(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                     let last = (s2[s2.len() - 1].0, None);
                     s2.resize(s1.len(), last);
                 }
+            }
+            if comp && set1.iter().any(|e| matches!(e, Elem::Class(_))) && !(s2.len() == whole_set1 && s2.iter().all(|(c, _)| *c == s2[0].0)) {
+                return stop("when translating with complemented character classes,\nstring2 must map all characters in the domain to one".into());
             }
             for ((from, _), (to, _)) in s1.iter().zip(&s2) {
                 t.map[*from as usize] = *to;

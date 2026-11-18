@@ -484,11 +484,36 @@ impl Filter for TailFromFilter {
     }
 }
 
-/// `tail -n N` on a stream: keep only the last N lines seen.
+/// `tail -n N` on a stream: keep only the bytes of the last N lines
+/// seen. Input is appended to one buffer, and the buffer is cut back from
+/// the end whenever it has doubled since the last cut.
 struct TailFilter {
     keep: usize,
-    lines: VecDeque<Vec<u8>>,
-    buf: LineBuf,
+    tail: Vec<u8>,
+    cut_at: usize,
+}
+
+impl TailFilter {
+    fn new(keep: usize) -> TailFilter {
+        TailFilter { keep, tail: Vec::new(), cut_at: 1 << 16 }
+    }
+
+    /// Drop everything before the last `keep` lines.
+    fn cut(&mut self) {
+        let mut pos = self.tail.len();
+        if self.tail.last() == Some(&b'\n') {
+            pos -= 1;
+        }
+        let mut seen = 0;
+        while let Some(i) = crate::bytes::memrchr(b'\n', &self.tail[..pos]) {
+            seen += 1;
+            if seen == self.keep {
+                self.tail.drain(..i + 1);
+                return;
+            }
+            pos = i;
+        }
+    }
 }
 
 impl Filter for TailFilter {
@@ -496,25 +521,18 @@ impl Filter for TailFilter {
         if self.keep == 0 {
             return false;
         }
-        let (keep, lines) = (self.keep, &mut self.lines);
-        self.buf.feed(data, |line| {
-            if lines.len() == keep {
-                lines.pop_front();
-            }
-            lines.push_back(line.to_vec());
-            true
-        })
+        self.tail.extend_from_slice(data);
+        if self.tail.len() >= self.cut_at {
+            self.cut();
+            self.cut_at = (self.tail.len() * 2).max(1 << 16);
+        }
+        true
     }
 
     fn finish(mut self: Box<Self>, io: &mut Io) -> i32 {
-        if let Some(last) = self.buf.rest() {
-            if self.lines.len() == self.keep {
-                self.lines.pop_front();
-            }
-            self.lines.push_back(last);
-        }
-        for line in self.lines.iter().take(self.keep) {
-            io.put(line);
+        if self.keep > 0 {
+            self.cut();
+            io.put(&self.tail);
         }
         0
     }
@@ -673,7 +691,7 @@ fn head_or_tail(cmd: &'static str, mut args: Vec<Vec<u8>>) -> Result<Prepared, S
             (true, true, Some(b'-')) => Box::new(LastBytes { keep: count.n, held: VecDeque::new(), pass: true }),
             (true, true, _) => Box::new(HeadBytes { left: count.n }),
             (false, false, Some(b'+')) => Box::new(TailFromFilter { skip: count.n.saturating_sub(1) }),
-            (false, false, _) => Box::new(TailFilter { keep: count.n, lines: VecDeque::new(), buf: LineBuf::default() }),
+            (false, false, _) => Box::new(TailFilter::new(count.n)),
             (false, true, Some(b'+')) => Box::new(SkipBytes { skip: count.n.saturating_sub(1) }),
             (false, true, _) => Box::new(LastBytes { keep: count.n, held: VecDeque::new(), pass: false }),
         };
@@ -741,15 +759,28 @@ pub fn tail(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     head_or_tail("tail", args)
 }
 
-#[derive(Default)]
 struct Counter {
     counts: [usize; 3],
     in_word: bool,
+    /// What is asked for: words need every byte looked at, lines only
+    /// the newlines found, bytes nothing.
+    words: bool,
+    lines: bool,
 }
 
 impl Counter {
+    fn new(show: [bool; 4]) -> Counter {
+        Counter { counts: [0; 3], in_word: false, words: show[1], lines: show[0] }
+    }
+
     fn add(&mut self, data: &[u8]) {
         self.counts[2] += data.len();
+        if !self.words {
+            if self.lines {
+                self.counts[0] += memchr::memchr_iter(b'\n', data).count();
+            }
+            return;
+        }
         for &c in data {
             if c == b'\n' {
                 self.counts[0] += 1;
@@ -815,7 +846,7 @@ pub fn wc(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     let input = if from_stdin {
         // Standard input is not a regular file, so the columns are at
         // least 7 wide unless there is only one.
-        Input::Stream(Box::new(WcFilter { show, width: if fields == 1 { 1 } else { 7 }, counter: Counter::default() }))
+        Input::Stream(Box::new(WcFilter { show, width: if fields == 1 { 1 } else { 7 }, counter: Counter::new(show) }))
     } else if p.operands.iter().any(|f| f == b"-") {
         Input::Whole
     } else {
@@ -848,7 +879,7 @@ pub fn wc(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                 status = 1;
                 continue;
             }
-            let mut counter = Counter::default();
+            let mut counter = Counter::new(show);
             let data: &[u8] = match open(db, if f == b"-" { io.take_stdin() } else { b"" }, f) {
                 Source::Data(d) => d,
                 Source::File(id) => {

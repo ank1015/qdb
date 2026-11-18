@@ -369,3 +369,6 @@ $ [ a = b -o c = c ] && echo yes
 $ [ a = b -o c = d ] || echo no
 ! seq -f %a 3 ## seq -f with %a
 $ seq -f %%a%g 2
+$ seq -f 'n%gx' 9.2 -0.25 5.2
+$ seq -f %g 0 0.000001 0.000003
+$ seq -f %G 0.3 0.3 0.9

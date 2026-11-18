@@ -162,3 +162,13 @@ $ tee f; cat f; ls
 $ echo x | tee --append f; cat f
 $ echo x | tee -i f
 $ seq 5 | tee f | head -2; cat f | wc -l
+
+# A class in the second set against a complemented first set.
+$ echo abcXYZ | tr -c a '[:upper:]'
+$ echo abcXYZ | tr -c 'a' 'x[:upper:]y'
+$ echo abcXYZ | tr -ct a '[:upper:]'
+$ echo abcXYZ | tr -c '[:lower:]' '[:upper:]x'
+$ echo abcXYZ | tr -c '[:lower:]' 'xy'
+$ echo abcXYZ | tr -c '[:lower:]\n' 'x'
+$ echo abcXYZ | tr -c 'a-y' '[:upper:]*'
+$ echo abcXYZ | tr -ct '[:lower:]' 'xx'

@@ -1064,7 +1064,20 @@ pub fn seq(args: Vec<Vec<u8>>) -> Result<Runner, String> {
             if (step.v > 0.0 && x > last.v) || (step.v < 0.0 && x < last.v) {
                 // The sum can overshoot by a rounding error: what prints
                 // the same as the limit is still in.
-                let same = fixed && format.is_none() && format!("{:.*}", decimals, x) == format!("{:.*}", decimals, last.v) && last.decimals <= decimals;
+                let same = match (&format, directive) {
+                    // With a format of the caller's: what prints as the
+                    // limit, and not as the number before it, is in.
+                    (Some(f), Some((start, end, conv))) if k > 0 => {
+                        let spec = &f[start + 1..end - 1];
+                        let flags = spec.iter().take_while(|c| b"-+ #0'".contains(c)).count();
+                        let p: Option<usize> = lossy(&spec[flags..]).split_once('.').map(|(_, p)| p.parse().unwrap_or(0));
+                        let shown = |v: f64| format!("{}{}", if v.is_sign_negative() { "-" } else { "" }, float_digits(v, conv, p, spec[..flags].contains(&b'#')));
+                        let before = first.v + (k - 1) as f64 * step.v;
+                        shown(x).parse::<f64>().is_ok_and(|v| v == last.v) && shown(x) != shown(if k == 1 { first.v } else { before })
+                    }
+                    (Some(_), _) => false,
+                    _ => fixed && format!("{:.*}", decimals, x) == format!("{:.*}", decimals, last.v) && last.decimals <= decimals,
+                };
                 if !same {
                     break;
                 }

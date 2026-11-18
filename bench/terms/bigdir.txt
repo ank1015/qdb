@@ -1,0 +1,8 @@
+# Values for the placeholders in bench/commands.txt, for the bigdir dataset.
+# Chosen by qdb-bench from measured frequencies; delete this file to choose again.
+ABSENT=qdbzzabsentterm  # 0 of 1 files, 0.00%
+COMMON=aajoyjankb  # 1 of 1 files, 100.00%
+EXT=txt  # 1 files in the whole dataset
+FILE=big.txt  # 67108895 bytes
+GLOB=*.txt  # 1 files
+ONE=aajoyjankb  # 1 of 1 files, 100.00%
