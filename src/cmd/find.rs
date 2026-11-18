@@ -1,7 +1,7 @@
 //! find, by name only: -name, -type f/d and -maxdepth. Results come out
 //! depth first with each folder's children in byte order.
 
-use crate::engine::Runner;
+use crate::engine::{Io, Runner};
 use crate::glob::{self, Tok};
 use crate::tree::{Db, NodeId};
 use crate::util::{basename, join, lossy, quote};
@@ -67,31 +67,32 @@ pub fn find(args: Vec<Vec<u8>>) -> Result<Runner, String> {
             return 1;
         }
         let mut status = 0;
-        let mut out = Vec::new();
         for start in &starts {
             match db.resolve(start) {
                 Err(e) => {
                     io.err_line(format!("find: {}: {}", quote(start), e.msg()));
                     status = 1;
                 }
-                Ok(id) => visit(db, &expr, start, basename(start), id, 0, &mut out),
+                Ok(id) => visit(db, &expr, start, basename(start), id, 0, io),
             }
         }
-        io.out = out;
         status
     }))
 }
 
-fn visit(db: &Db, expr: &Expr, path: &[u8], name: &[u8], id: NodeId, depth: usize, out: &mut Vec<u8>) {
+fn visit(db: &Db, expr: &Expr, path: &[u8], name: &[u8], id: NodeId, depth: usize, io: &mut Io) {
+    if io.stopped() {
+        return;
+    }
     let is_dir = db.is_dir(id);
     let kind = if is_dir { b'd' } else { b'f' };
     if expr.types.iter().all(|t| *t == kind) && expr.names.iter().all(|n| glob::matches(n, name)) {
-        out.extend_from_slice(path);
-        out.push(b'\n');
+        io.put(path);
+        io.put(b"\n");
     }
     if is_dir && expr.maxdepth.map_or(true, |m| depth < m) {
         for (child_name, child) in db.children(id) {
-            visit(db, expr, &join(path, child_name), child_name, *child, depth + 1, out);
+            visit(db, expr, &join(path, child_name), child_name, *child, depth + 1, io);
         }
     }
 }

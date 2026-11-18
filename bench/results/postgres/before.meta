@@ -1,0 +1,13 @@
+source=PostgreSQL 16.15 source tree, from the Ubuntu source package postgresql-16_16.15.orig.tar.gz (sha256 4f200ca23dfb120ff9838f13ce06014aad1d3c432d16ee9f93ab2000c0eeef7b). Skipped on import: 0 symbolic links, 63 files that are not valid text, 0 other
+files=8419
+folders=611
+bytes=161175531
+index=on
+load_ms=109.3
+load_with_index_ms=109.3
+heap_after_load=163535163
+rss_after_load=258457600
+startup_ms=7.147
+trees_agree=true
+all_agree=true
+tools=GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); grep (GNU grep) 3.11; sed (GNU sed) 4.9; ls (GNU coreutils) 9.4; find (GNU findutils) 4.9.0; ripgrep 14.1.0

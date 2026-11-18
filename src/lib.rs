@@ -21,5 +21,5 @@ pub mod testing;
 pub mod tree;
 pub mod util;
 
-pub use engine::{execute, Outcome};
+pub use engine::{execute, execute_to, Outcome, Sink};
 pub use tree::Db;

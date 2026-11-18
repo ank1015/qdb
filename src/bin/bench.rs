@@ -314,14 +314,62 @@ fn engine_facts(_db: &Db) -> Vec<(String, String)> {
     Vec::new()
 }
 
-fn engine_run(db: &mut Db, command: &str, _keep_output: bool) -> EngineRun {
+/// Counts output and throws it away.
+#[derive(Default)]
+struct Discard {
+    bytes: usize,
+}
+
+impl qdb::Sink for Discard {
+    fn write(&mut self, data: &[u8]) -> bool {
+        self.bytes += data.len();
+        true
+    }
+}
+
+/// Keeps output in a file, so that holding it does not count as the
+/// engine's memory.
+struct ToFile {
+    file: std::io::BufWriter<std::fs::File>,
+    bytes: usize,
+}
+
+impl qdb::Sink for ToFile {
+    fn write(&mut self, data: &[u8]) -> bool {
+        use std::io::Write;
+        self.bytes += data.len();
+        self.file.write_all(data).expect("writing engine output");
+        true
+    }
+}
+
+/// Run a command on the engine through its streaming entry point. Output
+/// is kept (for comparing with the real tools) only when asked for.
+fn engine_run(db: &mut Db, command: &str, keep_output: bool) -> EngineRun {
+    let mut stderr: Vec<u8> = Vec::new();
+    if !keep_output {
+        let mut out = Discard::default();
+        let base = LIVE.load(Relaxed);
+        PEAK.store(base, Relaxed);
+        let t = Instant::now();
+        let code = qdb::execute_to(db, command.as_bytes(), &mut out, &mut stderr);
+        let time = t.elapsed();
+        let peak = PEAK.load(Relaxed) - base;
+        return EngineRun { time, peak, code, out_bytes: out.bytes, stdout: Vec::new(), stderr };
+    }
+    let path = std::env::temp_dir().join(format!("qdb-bench-out-{}", std::process::id()));
+    let mut out = ToFile { file: std::io::BufWriter::new(std::fs::File::create(&path).expect("creating a file for engine output")), bytes: 0 };
     let base = LIVE.load(Relaxed);
     PEAK.store(base, Relaxed);
     let t = Instant::now();
-    let out = qdb::execute(db, command.as_bytes());
+    let code = qdb::execute_to(db, command.as_bytes(), &mut out, &mut stderr);
     let time = t.elapsed();
     let peak = PEAK.load(Relaxed) - base;
-    EngineRun { time, peak, code: out.code, out_bytes: out.stdout.len(), stdout: out.stdout, stderr: out.stderr }
+    let bytes = out.bytes;
+    drop(out);
+    let stdout = std::fs::read(&path).expect("reading engine output back");
+    let _ = std::fs::remove_file(&path);
+    EngineRun { time, peak, code, out_bytes: bytes, stdout, stderr }
 }
 
 // -------------------------------------------------------- real datasets

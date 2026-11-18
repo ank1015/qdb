@@ -1,7 +1,7 @@
 //! grep with -r -i -n -l -v -c -E -F.
 
-use super::options;
-use crate::engine::{Io, Runner};
+use super::{options, LineBuf};
+use crate::engine::{Filter, Input, Io, Prepared, Runner};
 use crate::regex::{Flavor, Regex, Syntax};
 use crate::tree::{Db, NodeId};
 use crate::util::{lines, lossy};
@@ -48,6 +48,7 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     (0..=hay.len() - needle.len()).any(|i| hay[i] == first && &hay[i..i + needle.len()] == needle)
 }
 
+#[derive(Clone, Copy)]
 struct Opts {
     recursive: bool,
     line_numbers: bool,
@@ -56,19 +57,166 @@ struct Opts {
     count: bool,
 }
 
+/// What the command line asked for, before the pattern is compiled.
+/// Pattern errors are grep's own, reported when the command runs.
+#[derive(Clone)]
+struct Plan {
+    opts: Opts,
+    icase: bool,
+    conflicting: bool,
+    mode: Option<u8>,
+    pattern: Option<Vec<u8>>,
+}
+
+impl Plan {
+    /// Compile the pattern. The error is the exit status, with the message
+    /// already written.
+    fn matcher(&self, io: &mut Io) -> Result<Matcher, i32> {
+        let pattern = match &self.pattern {
+            Some(p) => p,
+            None => {
+                io.err_line("Usage: grep [OPTION]... PATTERNS [FILE]...");
+                io.err_line("Try 'grep --help' for more information.");
+                return Err(2);
+            }
+        };
+        if self.conflicting {
+            io.err_line("grep: conflicting matchers specified");
+            return Err(2);
+        }
+        // A newline in the pattern separates alternative patterns.
+        let parts: Vec<&[u8]> = pattern.split(|c| *c == b'\n').collect();
+        let matcher = if self.mode == Some(b'F') {
+            let needles = parts.iter().map(|p| if self.icase { p.to_ascii_lowercase() } else { p.to_vec() }).collect();
+            Matcher::Fixed(needles, self.icase)
+        } else {
+            let syn = Syntax { extended: self.mode == Some(b'E'), icase: self.icase, flavor: Flavor::Grep };
+            let mut res = Vec::new();
+            for part in &parts {
+                match Regex::new(part, syn) {
+                    Ok(re) => {
+                        for w in &re.warnings {
+                            io.err_line(format!("grep: {}", w));
+                        }
+                        res.push(re);
+                    }
+                    Err(e) => {
+                        io.err_line(format!("grep: {}", e));
+                        return Err(2);
+                    }
+                }
+            }
+            Matcher::Regex(res)
+        };
+        // GNU grep sees that nothing can be selected and stops at once.
+        if self.opts.invert && pattern.is_empty() {
+            return Err(1);
+        }
+        Ok(matcher)
+    }
+}
+
 struct Run<'a> {
     opts: &'a Opts,
     matcher: &'a Matcher,
     with_filename: bool,
-    out: Vec<u8>,
     selected: bool,
     error: bool,
 }
 
-pub fn grep(args: Vec<Vec<u8>>) -> Result<Runner, String> {
+/// grep reading its standard input in pieces.
+struct GrepFilter {
+    plan: Plan,
+    /// Compiled when the first input arrives.
+    matcher: Option<Result<Matcher, i32>>,
+    lines: LineBuf,
+    line_no: usize,
+    count: usize,
+    error: bool,
+}
+
+impl GrepFilter {
+    fn start(&mut self, io: &mut Io) -> bool {
+        if self.matcher.is_none() {
+            self.matcher = Some(self.plan.matcher(io));
+        }
+        matches!(self.matcher, Some(Ok(_)))
+    }
+
+    /// One line, with or without its newline. Returns false when no more
+    /// input is needed.
+    fn line(&mut self, line: &[u8], io: &mut Io) -> bool {
+        let o = self.plan.opts;
+        let text = line.strip_suffix(b"\n").unwrap_or(line);
+        self.line_no += 1;
+        let hit = match self.matcher.as_ref().unwrap().as_ref().ok().unwrap().is_match(text) {
+            Ok(h) => h,
+            Err(()) => {
+                io.err_line("qdb: grep: (standard input): pattern too complex for the backtracking matcher");
+                self.error = true;
+                return false;
+            }
+        };
+        if hit == o.invert {
+            return true;
+        }
+        self.count += 1;
+        if o.list {
+            return false;
+        }
+        if !o.count {
+            if o.line_numbers {
+                io.put(format!("{}:", self.line_no).as_bytes());
+            }
+            io.put(text);
+            io.put(b"\n");
+        }
+        true
+    }
+}
+
+impl Filter for GrepFilter {
+    fn push(&mut self, data: &[u8], io: &mut Io) -> bool {
+        if !self.start(io) || self.error {
+            return false;
+        }
+        let mut lines = std::mem::take(&mut self.lines);
+        let more = lines.feed(data, |line| self.line(line, io));
+        self.lines = lines;
+        more
+    }
+
+    fn finish(mut self: Box<Self>, io: &mut Io) -> i32 {
+        if !self.start(io) {
+            return self.matcher.unwrap().err().unwrap();
+        }
+        if !self.error && !(self.plan.opts.list && self.count > 0) {
+            if let Some(last) = self.lines.rest() {
+                self.line(&last, io);
+            }
+        }
+        let o = self.plan.opts;
+        if o.list {
+            if self.count > 0 {
+                io.put(b"(standard input)\n");
+            }
+        } else if o.count {
+            io.put(format!("{}\n", self.count).as_bytes());
+        }
+        if self.error {
+            2
+        } else if self.count > 0 {
+            0
+        } else {
+            1
+        }
+    }
+}
+
+pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     let p = match options("grep", &args, b"rinlvcEF", b"", 2)? {
         Ok(p) => p,
-        Err(r) => return Ok(r),
+        Err(r) => return Ok(r.into()),
     };
     let opts = Opts {
         recursive: p.has(b'r'),
@@ -83,53 +231,25 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Runner, String> {
     let mut operands = p.operands.into_iter();
     let pattern = operands.next();
     let files: Vec<Vec<u8>> = operands.collect();
+    let plan = Plan { opts, icase, conflicting, mode, pattern };
 
-    Ok(Box::new(move |db, io| {
-        let pattern = match pattern {
-            Some(p) => p,
-            None => {
-                io.err_line("Usage: grep [OPTION]... PATTERNS [FILE]...");
-                io.err_line("Try 'grep --help' for more information.");
-                return 2;
-            }
-        };
-        if conflicting {
-            io.err_line("grep: conflicting matchers specified");
-            return 2;
-        }
-        // A newline in the pattern separates alternative patterns.
-        let parts: Vec<&[u8]> = pattern.split(|c| *c == b'\n').collect();
-        let matcher = if mode == Some(b'F') {
-            let needles = parts.iter().map(|p| if icase { p.to_ascii_lowercase() } else { p.to_vec() }).collect();
-            Matcher::Fixed(needles, icase)
-        } else {
-            let syn = Syntax { extended: mode == Some(b'E'), icase, flavor: Flavor::Grep };
-            let mut res = Vec::new();
-            for part in &parts {
-                match Regex::new(part, syn) {
-                    Ok(re) => {
-                        for w in &re.warnings {
-                            io.err_line(format!("grep: {}", w));
-                        }
-                        res.push(re);
-                    }
-                    Err(e) => {
-                        io.err_line(format!("grep: {}", e));
-                        return 2;
-                    }
-                }
-            }
-            Matcher::Regex(res)
-        };
-        // GNU grep sees that nothing can be selected and stops at once.
-        if opts.invert && pattern.is_empty() {
-            return 1;
-        }
+    let input = if files.is_empty() && !opts.recursive {
+        Input::Stream(Box::new(GrepFilter { plan: plan.clone(), matcher: None, lines: LineBuf::default(), line_no: 0, count: 0, error: false }))
+    } else if files.iter().any(|f| f == b"-") {
+        Input::Whole
+    } else {
+        Input::Unused
+    };
 
+    let run: Runner = Box::new(move |db, io| {
+        let matcher = match plan.matcher(io) {
+            Ok(m) => m,
+            Err(code) => return code,
+        };
         let implicit_dot = files.is_empty() && opts.recursive;
         let single_dir = files.len() == 1 && db.resolve(&files[0]).is_ok_and(|id| db.is_dir(id));
         let with_filename = files.len() > 1 || opts.recursive && (implicit_dot || single_dir);
-        let mut run = Run { opts: &opts, matcher: &matcher, with_filename, out: Vec::new(), selected: false, error: false };
+        let mut run = Run { opts: &opts, matcher: &matcher, with_filename, selected: false, error: false };
         if implicit_dot {
             run.walk(db, io, db.root(), b"");
         } else if files.is_empty() {
@@ -137,6 +257,9 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Runner, String> {
             run.search(io, b"(standard input)", data, None);
         }
         for f in &files {
+            if io.stopped() {
+                break;
+            }
             if f == b"-" {
                 let data = io.take_stdin();
                 run.search(io, b"(standard input)", data, None);
@@ -170,7 +293,6 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Runner, String> {
                 Ok(id) => run.search(io, f, db.content(id), Some(id)),
             }
         }
-        io.out = run.out;
         if run.error {
             2
         } else if run.selected {
@@ -178,7 +300,8 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         } else {
             1
         }
-    }))
+    });
+    Ok(Prepared { run, input })
 }
 
 impl Run<'_> {
@@ -186,6 +309,9 @@ impl Run<'_> {
     /// `prefix` is what goes in front of each child's name.
     fn walk(&mut self, db: &Db, io: &mut Io, dir: NodeId, prefix: &[u8]) {
         for (name, child) in db.children(dir) {
+            if io.stopped() {
+                return;
+            }
             let mut path = prefix.to_vec();
             path.extend_from_slice(name);
             if db.is_dir(*child) {
@@ -226,29 +352,32 @@ impl Run<'_> {
                 continue;
             }
             if self.with_filename {
-                self.out.extend_from_slice(label);
-                self.out.push(b':');
+                io.put(label);
+                io.put(b":");
             }
             if o.line_numbers {
-                self.out.extend_from_slice(format!("{}:", idx + 1).as_bytes());
+                io.put(format!("{}:", idx + 1).as_bytes());
             }
-            self.out.extend_from_slice(text);
-            self.out.push(b'\n');
+            io.put(text);
+            io.put(b"\n");
         }
         if count > 0 {
             self.selected = true;
+            // Hand the lines on now: a reader that wants only a few
+            // can then stop the search after this file.
+            io.flush();
         }
         if o.list {
             if count > 0 {
-                self.out.extend_from_slice(label);
-                self.out.push(b'\n');
+                io.put(label);
+                io.put(b"\n");
             }
         } else if o.count {
             if self.with_filename {
-                self.out.extend_from_slice(label);
-                self.out.push(b':');
+                io.put(label);
+                io.put(b":");
             }
-            self.out.extend_from_slice(format!("{}\n", count).as_bytes());
+            io.put(format!("{}\n", count).as_bytes());
         }
     }
 }

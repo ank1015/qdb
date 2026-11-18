@@ -2,7 +2,7 @@
 //! order, no columns and no colours.
 
 use super::options;
-use crate::engine::Runner;
+use crate::engine::{Io, Runner};
 use crate::tree::{Db, NodeId};
 use crate::util::{join, quote};
 
@@ -35,29 +35,30 @@ pub fn ls(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         }
         files.sort();
         dirs.sort();
-        let mut out = Vec::new();
         for f in &files {
-            out.extend_from_slice(f);
-            out.push(b'\n');
+            io.put(f);
+            io.put(b"\n");
         }
         let headers = operands.len() > 1 || flags.recursive;
         let mut first = files.is_empty();
         for (name, id) in dirs {
-            list_dir(db, &flags, name, id, headers, &mut first, &mut out);
+            list_dir(db, &flags, name, id, headers, &mut first, io);
         }
-        io.out = out;
         status
     }))
 }
 
-fn list_dir(db: &Db, flags: &Flags, path: &[u8], id: NodeId, header: bool, first: &mut bool, out: &mut Vec<u8>) {
+fn list_dir(db: &Db, flags: &Flags, path: &[u8], id: NodeId, header: bool, first: &mut bool, io: &mut Io) {
+    if io.stopped() {
+        return;
+    }
     if !*first {
-        out.push(b'\n');
+        io.put(b"\n");
     }
     *first = false;
     if header {
-        out.extend_from_slice(path);
-        out.extend_from_slice(b":\n");
+        io.put(path);
+        io.put(b":\n");
     }
     let mut entries: Vec<(&[u8], bool)> = db
         .children(id)
@@ -71,16 +72,16 @@ fn list_dir(db: &Db, flags: &Flags, path: &[u8], id: NodeId, header: bool, first
         entries.sort();
     }
     for (name, is_dir) in &entries {
-        out.extend_from_slice(name);
+        io.put(name);
         if flags.slash && *is_dir {
-            out.push(b'/');
+            io.put(b"/");
         }
-        out.push(b'\n');
+        io.put(b"\n");
     }
     if flags.recursive {
         for (name, child) in db.children(id) {
             if db.is_dir(*child) && (flags.all || name[0] != b'.') {
-                list_dir(db, flags, &join(path, name), *child, true, first, out);
+                list_dir(db, flags, &join(path, name), *child, true, first, io);
             }
         }
     }

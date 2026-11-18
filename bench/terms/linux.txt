@@ -1,0 +1,17 @@
+# Values for the placeholders in bench/commands.txt, for the linux dataset.
+# Chosen by qdb-bench from measured frequencies; delete this file to choose again.
+ABSENT=qdbzzabsentterm  # 0 of 83405 files, 0.00%
+COMMON=define  # 48558 of 83405 files, 58.22%
+DIR=Documentation  # holds 9699 of 83405 files, 11.63%
+EXT=h  # 24213 files in the whole dataset
+EXT2=c  # 33556 files in the whole dataset
+FEW=separately  # 834 of 83405 files, 1.00%
+FILE=include/linux/kernfs.h  # 19937 bytes
+GLOB=include/linux/*.h  # 1432 files
+GLOBDIR=include/linux  # the folder of GLOB
+ONE=ausgabenspezifisches  # 1 of 83405 files, 0.00%
+PREFIX=atomic  # PREFIX_[a-z]+\( matches in 3036 of 83405 files, 3.64%
+RARE=mispredicted  # 84 of 83405 files, 0.10%
+RAREUP=MISPREDICTED  # the RARE term in capitals, for -i
+SMALLDIR=drivers/usb  # holds 851 of 83405 files, 1.02%
+SOME=conditions  # 8460 of 83405 files, 10.14%

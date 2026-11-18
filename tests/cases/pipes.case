@@ -1,0 +1,163 @@
+# Pipelines whose later stages stop reading early. Output is passed on in
+# pieces; when a stage needs no more input, the stages before it stop.
+# Standard output and exit status must still match bash exactly.
+#
+# What a cut-off stage prints on standard error depends on the size of
+# the pipe buffer in real bash, so lines where an earlier stage reports an
+# error use `$~`, which does not compare standard error.
+@fixture basic
+
+# head ends the stages before it
+$ cat data/long.txt | head -n 1
+$ cat data/long.txt | head -n 3
+$ cat data/long.txt | head -n 0
+$ cat data/long.txt | head -n 1000
+$ cat data/long.txt data/numbers.txt | head -n 2
+$ cat data/numbers.txt data/long.txt | head -n 25
+$ cat -n data/long.txt | head -n 4
+$ cat data/one.txt | head -n 5
+$ cat data/blank.txt | head -n 1
+$ cat notes.txt | head -n 3
+$ cat notes.txt | head -n 4
+$ ls | head -n 2
+$ ls -a | head -n 3
+$ ls -R | head -n 6
+$ ls -R src | head -n 1
+$ echo one | head -n 1
+$ echo -n one | head -n 1
+$ grep -n e README.md | head -n 2
+$ grep -c e README.md notes.txt | head -n 1
+$ sed 's/e/E/g' data/long.txt | head -n 2
+$ wc -l README.md notes.txt Makefile | head -n 2
+$ head -n 20 data/long.txt | head -n 2
+$ tail -n 20 data/long.txt | head -n 2
+
+# several stages
+$ cat data/long.txt | cat | head -n 2
+$ cat data/long.txt | cat -n | head -n 2
+$ cat data/long.txt | grep -n a | head -n 2
+$ cat data/long.txt | grep -v a | head -n 2
+$ cat data/long.txt | sed 's/a/A/' | head -n 3
+$ cat data/long.txt | sed -E 's/(.)(.)/\2\1/g' | head -n 1
+$ cat data/long.txt | tail -n +3 | head -n 2
+$ cat data/long.txt | head -n 10 | tail -n 2
+$ cat data/long.txt | head -n 10 | head -n 3 | head -n 1
+$ cat data/long.txt | head -n 5 | wc -l
+$ cat data/long.txt | head -n 5 | wc
+$ cat data/long.txt | head -n 5 | grep -c a
+$ cat data/long.txt | tail -n 3
+$ cat data/long.txt | tail -n 0
+$ cat data/long.txt | tail -n +59
+$ cat data/long.txt | tail -n 1 | head -n 1
+$ cat notes.txt | tail -n 1
+$ cat notes.txt | tail -n 2 | head -n 1
+$ cat notes.txt | grep -n last
+$ cat notes.txt | sed 's/last/LAST/' | tail -n 1
+$ cat notes.txt notes.txt | sed 's/note/NOTE/'
+$ cat notes.txt | wc
+$ cat notes.txt | wc -l
+$ cat notes.txt | wc -lc
+$ cat notes.txt | cat -n
+$ cat data/long.txt | grep -l a
+$ cat data/long.txt | grep -l a | head -n 1
+$ cat data/long.txt | grep -c a | head -n 1
+$ cat data/long.txt | grep -lv zzzz
+$ cat data/long.txt | grep -n zzzz | head -n 1
+$ cat data/long.txt | grep zzzz | wc -l
+$ cat data/unicode.txt | head -n 2 | wc -c
+$ cat data/unicode.txt | grep -i a | head -n 1
+$ ls -R | grep -n c | head -n 3
+$ ls -R | sed 's/^/> /' | head -n 3
+$ ls -R | tail -n 3
+$ ls -R | wc -l
+
+# a stage that does not read its input at all
+$ cat data/long.txt | ls
+$ cat data/long.txt | echo done
+$ cat data/long.txt | head -n 1 README.md
+$ cat data/long.txt | cat README.md | head -n 1
+$ cat data/long.txt | wc -l notes.txt
+$ ls -R | grep -c e README.md
+$~ cat nope | ls
+$~ cat nope | echo done
+$~ ls nope | cat README.md | head -n 1
+
+# forms that need the whole input
+$ cat data/long.txt | head -n -57
+$ cat data/long.txt | head -n -1000
+$ cat notes.txt | cat README.md - | head -n 8
+$ cat notes.txt | cat - README.md | head -n 4
+$ cat notes.txt | head -n 1 - README.md
+$ cat notes.txt | tail -n 1 - README.md
+$ cat notes.txt | wc -l - README.md
+$ cat notes.txt | wc -l -
+$ cat notes.txt | grep -n note - README.md
+$ cat notes.txt | grep -c note -
+$ cat notes.txt | sed 's/note/NOTE/' - README.md | head -n 4
+
+# errors from a stage that ran to the end are still reported
+$ cat nope notes.txt | wc -l
+$ cat notes.txt nope | wc -l
+$ cat notes.txt | grep '['
+$ cat notes.txt | grep -n note | wc -l nope
+$ ls nope | wc -l
+$ cat notes.txt | head -n 1 nope
+$ cat notes.txt | grep -E 'a{1' | head -n 1
+$ cat notes.txt | sed 's/a/b' | head -n 1
+$ cat notes.txt | head -n x | head -n 1
+
+# errors from a stage that was cut off: only standard output is compared
+$~ cat data/long.txt nope | head -n 1
+$~ cat nope data/long.txt | head -n 1
+$~ cat data/long.txt src | head -n 2
+$~ grep -n e README.md nope | head -n 1
+$~ sed 's/a/A/' data/long.txt nope | head -n 1
+$~ ls -R . nope | head -n 2
+$~ wc -l README.md nope | head -n 1
+
+# the exit status is the last stage's
+$ cat nope | head -n 1
+$ cat data/long.txt | grep zzzz
+$ cat data/long.txt | grep zzzz | head -n 1
+$ cat data/long.txt | head -n 1 | grep zzzz
+$ cat data/long.txt | head -n 1 | grep -c zzzz
+
+# writes always finish, whatever follows them
+$ sed -i 's/note/NOTE/' notes.txt | head -n 0
++ cat notes.txt
+$ cp -r src copy | head -n 1
++ ls -R copy
+$ mkdir -p a/b/c | ls nope
++ ls -R a
+$ rm -r deep | head -n 0
++ ls
+$ mv notes.txt moved.txt | cat README.md | head -n 1
++ ls
+$ echo text > made.txt | head -n 0
++ cat made.txt
+$ touch t1 t2 t3 | head -n 0
++ ls
+
+# redirection after a stream
+$ cat data/long.txt | head -n 2 > out.txt
++ cat out.txt
+$ cat data/long.txt | grep -n a | head -n 2 >> notes.txt
++ cat notes.txt
+$ cat data/long.txt | head -n 2 > out.txt | cat
++ cat out.txt
+$ cat data/long.txt | sed 's/a/A/' > out.txt
++ wc out.txt
+$ cat data/long.txt | wc -l > out.txt
++ cat out.txt
+$ cat data/long.txt | tail -n 2 > out.txt
++ cat out.txt
+$ cat data/long.txt | head -n 1 > src
+$ cat data/long.txt | head -n 1 > nope/out.txt
+$ cat data/long.txt > out.txt | head -n 1
++ wc -l out.txt
+
+# anything unsupported is still refused before any stage runs
+! cat data/long.txt | head -n 1 | awk 1 ## command: awk
+! mkdir made | head --lines=1 ## long options
+! echo x > made.txt | tail -5 ## tail -5
+! rm notes.txt | grep -o a ## grep -o

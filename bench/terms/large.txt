@@ -1,0 +1,16 @@
+# Values for the placeholders in bench/commands.txt, for the large dataset.
+# Chosen by qdb-bench from measured frequencies; delete this file to choose again.
+ABSENT=qdbzzabsentterm  # 0 of 12005 files, 0.00%
+COMMON=werefo  # 8100 of 12005 files, 67.47%
+DIR=tests  # holds 1787 of 12005 files, 14.89%
+EXT=c  # 5435 files in the whole dataset
+EXT2=h  # 2187 files in the whole dataset
+FEW=enpaze  # 509 of 12005 files, 4.24%
+FILE=src/main.c  # 25437 bytes
+GLOB=src/*.c  # 786 files
+GLOBDIR=src  # the folder of GLOB
+PREFIX=neze  # PREFIX_[a-z]+\( matches in 281 of 12005 files, 2.34%
+RARE=enpaze  # 509 of 12005 files, 4.24%
+RAREUP=ENPAZE  # the RARE term in capitals, for -i
+SMALLDIR=tests/mod_05  # holds 121 of 12005 files, 1.01%
+SOME=lefijo  # 1175 of 12005 files, 9.79%

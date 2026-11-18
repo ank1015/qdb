@@ -1,8 +1,8 @@
 //! sed with one substitution command: `s/old/new/` with the optional `g`
 //! flag, and the options -i and -E.
 
-use super::options;
-use crate::engine::Runner;
+use super::{options, LineBuf};
+use crate::engine::{Filter, Input, Io, Prepared, Runner};
 use crate::regex::{Flavor, MatchError, Regex, Syntax};
 use crate::tree::is_valid_text;
 use crate::util::{lines, lossy};
@@ -287,9 +287,6 @@ impl Subst {
     /// newline stays missing.
     fn apply_all(&self, data: &[u8], out: &mut Vec<u8>) -> Result<(), MatchError> {
         for line in lines(data) {
-            if !out.is_empty() && !out.ends_with(b"\n") {
-                out.push(b'\n');
-            }
             let text = line.strip_suffix(b"\n").unwrap_or(line);
             out.extend_from_slice(&self.apply(text)?);
             if line.ends_with(b"\n") {
@@ -300,7 +297,74 @@ impl Subst {
     }
 }
 
-pub fn sed(args: Vec<Vec<u8>>) -> Result<Runner, String> {
+/// The output of sed over several inputs: a line that ended without a
+/// newline gets one if anything follows it.
+#[derive(Default)]
+struct Joined {
+    /// Something has been written and it did not end with a newline.
+    open: bool,
+}
+
+impl Joined {
+    fn line(&mut self, subst: &Subst, line: &[u8], io: &mut Io) -> Result<(), MatchError> {
+        let text = line.strip_suffix(b"\n").unwrap_or(line);
+        let new = subst.apply(text)?;
+        if self.open {
+            io.put(b"\n");
+            self.open = false;
+        }
+        io.put(&new);
+        if line.ends_with(b"\n") {
+            io.put(b"\n");
+        } else if !new.is_empty() {
+            self.open = true;
+        }
+        Ok(())
+    }
+}
+
+const TOO_COMPLEX: &str = "pattern too complex for the backtracking matcher";
+
+/// sed reading its standard input in pieces.
+struct SedFilter {
+    subst: std::rc::Rc<Subst>,
+    lines: LineBuf,
+    joined: Joined,
+    failed: bool,
+}
+
+impl SedFilter {
+    fn line(&mut self, line: &[u8], io: &mut Io) -> bool {
+        if self.joined.line(&self.subst, line, io).is_err() {
+            io.err_line(format!("qdb: sed: -: {}", TOO_COMPLEX));
+            self.failed = true;
+        }
+        !self.failed
+    }
+}
+
+impl Filter for SedFilter {
+    fn push(&mut self, data: &[u8], io: &mut Io) -> bool {
+        if self.failed {
+            return false;
+        }
+        let mut lines = std::mem::take(&mut self.lines);
+        let more = lines.feed(data, |line| self.line(line, io));
+        self.lines = lines;
+        more
+    }
+
+    fn finish(mut self: Box<Self>, io: &mut Io) -> i32 {
+        if !self.failed {
+            if let Some(last) = self.lines.rest() {
+                self.line(&last, io);
+            }
+        }
+        i32::from(self.failed)
+    }
+}
+
+pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     // GNU reads anything attached to -i as a backup suffix.
     for a in args.iter().take_while(|a| a.as_slice() != b"--") {
         if a.len() > 2 && a[0] == b'-' && a[1] != b'-' {
@@ -313,7 +377,7 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Runner, String> {
     }
     let p = match options("sed", &args, b"iE", b"", 1)? {
         Ok(p) => p,
-        Err(r) => return Ok(r),
+        Err(r) => return Ok(r.into()),
     };
     let in_place = p.has(b'i');
     let extended = p.has(b'E');
@@ -321,10 +385,11 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Runner, String> {
     let script = match operands.next() {
         Some(s) => s,
         None => {
-            return Ok(Box::new(|_, io| {
+            let usage: Runner = Box::new(|_, io| {
                 io.err_line("Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...");
                 1
-            }))
+            });
+            return Ok(usage.into());
         }
     };
     let files: Vec<Vec<u8>> = operands.collect();
@@ -332,14 +397,25 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         Ok(s) => s,
         Err(Unsupported(what)) => return Err(what),
         Err(Gnu(pos, m)) => {
-            return Ok(Box::new(move |_, io| {
+            let bad: Runner = Box::new(move |_, io| {
                 io.err_line(format!("sed: -e expression #1, char {}: {}", pos, m));
                 1
-            }))
+            });
+            return Ok(bad.into());
         }
     };
-    Ok(Box::new(move |db, io| {
-        let too_complex = "pattern too complex for the backtracking matcher";
+    let subst = std::rc::Rc::new(subst);
+    let input = if in_place {
+        Input::Unused
+    } else if files.is_empty() {
+        Input::Stream(Box::new(SedFilter { subst: subst.clone(), lines: LineBuf::default(), joined: Joined::default(), failed: false }))
+    } else if files.iter().any(|f| f == b"-") {
+        Input::Whole
+    } else {
+        Input::Unused
+    };
+    let run: Runner = Box::new(move |db, io| {
+        let too_complex = TOO_COMPLEX;
         let mut status = 0;
         if in_place {
             if files.is_empty() {
@@ -373,9 +449,12 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Runner, String> {
             }
             return status;
         }
-        let mut out = Vec::new();
+        let mut joined = Joined::default();
         let inputs = if files.is_empty() { vec![b"-".to_vec()] } else { files };
         for f in &inputs {
+            if io.stopped() {
+                break;
+            }
             let data: &[u8] = if f == b"-" {
                 io.take_stdin()
             } else {
@@ -388,18 +467,20 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Runner, String> {
                     Ok(id) if db.is_dir(id) => {
                         // Fatal in GNU sed: later files are not read.
                         io.err_line(format!("sed: read error on {}: Is a directory", lossy(f)));
-                        io.out = out;
                         return 4;
                     }
                     Ok(id) => db.content(id),
                 }
             };
-            if subst.apply_all(data, &mut out).is_err() {
-                io.err_line(format!("qdb: sed: {}: {}", lossy(f), too_complex));
-                status = status.max(1);
+            for line in lines(data) {
+                if joined.line(&subst, line, io).is_err() {
+                    io.err_line(format!("qdb: sed: {}: {}", lossy(f), too_complex));
+                    status = status.max(1);
+                    break;
+                }
             }
         }
-        io.out = out;
         status
-    }))
+    });
+    Ok(Prepared { run, input })
 }
