@@ -234,9 +234,10 @@ pub fn format(ns: i64, fmt: &[u8]) -> Result<Vec<u8>, String> {
         // Flags: `-` no padding, `_` pad with spaces, `0` pad with zeros,
         // `^` upper case.
         let (mut pad, mut upper) = (None, false);
-        while i < fmt.len() && matches!(fmt[i], b'-' | b'_' | b'0' | b'^') {
+        while i < fmt.len() && matches!(fmt[i], b'-' | b'_' | b'0' | b'^' | b'#' | b'+') {
             match fmt[i] {
-                b'^' => upper = true,
+                b'^' | b'#' => upper = true,
+                b'+' => {}
                 f => pad = Some(f),
             }
             i += 1;
@@ -249,8 +250,18 @@ pub fn format(ns: i64, fmt: &[u8]) -> Result<Vec<u8>, String> {
         if i == fmt.len() {
             return Err("an unfinished % conversion".into());
         }
-        let conv = fmt[i];
+        let mut conv = fmt[i];
         i += 1;
+        // %:z and %::z
+        let mut colons = 0;
+        while conv == b':' && i < fmt.len() {
+            colons += 1;
+            conv = fmt[i];
+            i += 1;
+        }
+        if colons > 0 && (conv != b'z' || colons > 2) {
+            return Err("%:".into());
+        }
         let num = |n: i64, w: usize, fill: u8| -> String {
             let w = width.unwrap_or(w);
             match pad.unwrap_or(fill) {
@@ -296,7 +307,8 @@ pub fn format(ns: i64, fmt: &[u8]) -> Result<Vec<u8>, String> {
             b'p' => if c.hour < 12 { "AM" } else { "PM" }.into(),
             b'P' => if c.hour < 12 { "am" } else { "pm" }.into(),
             b'Z' => "UTC".into(),
-            b'z' => "+0000".into(),
+            b'z' => ["+0000", "+00:00", "+00:00:00"][colons].into(),
+            b'q' => ((c.month - 1) / 3 + 1).to_string(),
             b'G' => num(iso_year, 1, b'0'),
             b'g' => num(iso_year % 100, 2, b'0'),
             b'V' => num(iso_wk as i64, 2, b'0'),

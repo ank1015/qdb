@@ -294,8 +294,9 @@ struct Sorter {
     failed: Option<std::io::Error>,
 }
 
-/// With somewhere to write runs, a run is this many bytes of lines.
-const RUN_BYTES: usize = 96 << 20;
+/// With somewhere to write runs, a run is this many times what output
+/// bound for a file may hold in memory: 96 MB as the engine is set up.
+const RUN_SPOOLS: usize = 12;
 
 impl Sorter {
     fn new(o: Opts) -> Sorter {
@@ -304,7 +305,7 @@ impl Sorter {
 
     fn add(&mut self, line: &[u8]) {
         let text = line.strip_suffix(b"\n").unwrap_or(line);
-        if self.buf.len() + text.len() > u32::MAX as usize || (self.buf.len() + self.ents.len() * 16 >= RUN_BYTES && self.scratch.as_ref().is_some_and(|s| s.vfs.is_some())) {
+        if self.buf.len() + text.len() > u32::MAX as usize || self.scratch.as_ref().is_some_and(|s| s.vfs.is_some() && self.buf.len() + self.ents.len() * 16 >= s.limit.saturating_mul(RUN_SPOOLS)) {
             self.spill();
         }
         self.ents.push(Ent { prefix: if self.o.keys.is_empty() { prefix(text) } else { 0 }, off: self.buf.len() as u32, len: text.len() as u32 });

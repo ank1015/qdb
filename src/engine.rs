@@ -187,6 +187,13 @@ impl<'a> Io<'a> {
         self.piped
     }
 
+    /// Standard input from here on is empty and not a pipe, as it is for
+    /// the commands xargs runs.
+    pub fn close_stdin(&mut self) {
+        self.stdin = &[];
+        self.piped = false;
+    }
+
     /// Read standard input. It is a stream: the first reader gets all of
     /// it and later readers get nothing, as `cat - -` shows.
     pub fn take_stdin(&mut self) -> &'a [u8] {

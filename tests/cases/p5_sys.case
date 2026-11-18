@@ -1,0 +1,213 @@
+# Stage 4, part 5.
+@fixture empty
+
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -a d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -b d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du --apparent-size d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -ab d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -sh d
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -sm d
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -sk d d/f
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -c d/f d/e
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -d 0 d
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -s -d 1 d
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -s -d 0 d
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -a -s d
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du nope d/f
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du --exclude='*.x' --exclude=e -a d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -a --exclude='d/e' d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -a --exclude='e/big' d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -d x d
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -h --apparent-size -a d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -a d d/e | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -a | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -s
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -s .
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du d/ | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -d 1 | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -ad 1 | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du --max-depth=1 --all . | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du --summarize --human-readable --total d d/f
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du --bytes --total d/e d/f
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -x -k d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -hc d/e/big d/f
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -d
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du --max-depth
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -bk d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -kb d | sort
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -hb d | sort
+! mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -B 512 d ## du -B
+! mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -0 d ## du -0
+! mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -L d ## du -L
+! mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du --time d ## du --time
+! mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -S d ## du -S
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -s d/e d
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -s d d/e
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du -a d/e d/e/big
+$ mkdir -p d/e; printf 'x\n' > d/f; printf '%05000d' 0 > d/e/big; printf '' > d/empty; du d/f d/f
+$ date -u -d '2024-02-29 13:04:05'
+$ date -d '2024-02-29 13:04:05' -R
+$ date -d '2024-02-29 13:04:05' -I
+$ date -d '2024-02-29 13:04:05' -Iseconds
+$ date -d '2024-02-29 13:04:05' -Ihours
+$ date -d '2024-02-29 13:04:05' -Iminutes
+$ date -d '2024-02-29 13:04:05' -Ins
+$ date -d '2024-02-29 13:04:05' -Idate
+$ date -d '2024-02-29 13:04:05' -Ifoo
+$ date -d '2024-02-29 13:04:05' --iso-8601=seconds
+$ date -d '2024-02-29 13:04:05' --iso-8601
+$ date -d '2024-02-29 13:04:05' --rfc-email
+$ date -d '2024-02-29 13:04:05' --rfc-3339=seconds
+$ date -d foo
+$ date -d '2024-02-29 13:04:05' +%Y x
+$ date -d '2024-02-29 13:04:05' x
+$ date -d '2024-02-29 13:04:05' '+%Y-%m-%d %H:%M:%S %s %j %a %A %b %B %e %y %C %D %F %T %R %Z %z %:z %::z %u %w %N %p %P %I %l %k %h %c|%x|%X|%U|%V|%G|%g|%W|%r|%n|%t|%%|%q|%10Y|%-d|%_m|%^a|%#b|%3N|%-j|%05d'
+$ date -d @86400 +%s
+$ date -d '@1.5' +%s.%N
+$ date -d '2024-01-01 +1 day' +%F
+$ date -d '2024-03-01T10:00:00Z' +%s
+$ date -d '2024-03-01 10:00' -R -I
+$ date -R +%s -d '2024-02-29 13:04:05'
+$ date -I -I -d '2024-02-29 13:04:05'
+$ date -u -u -d '2024-02-29 13:04:05' +%Z
+$ date -d '2024-01-01 10:00:00.5' +%N
+$ date -d '2024-02-29 13:04:05' +
+$ date -d '2024-13-01'
+$ date -d '2024-01-31 +1 month' +%F
+$ date -d '2024-01-31 1 month ago' +%F
+$ date -d '2024-03-31 -1 month' +%F
+$ date -d '2024-02-29 +1 year' +%F
+$ date -d '2024-02-29 2 years ago' +%F
+$ date -d '2024-01-01 3 days ago' +%F
+$ date -d '2024-01-01 +2 weeks' '+%F %T'
+$ date -d '2024-01-01 12:00 +90 minutes' '+%F %T'
+$ date -d '2024-01-01 12:00 -30 seconds' '+%F %T'
+$ date -d '2024-01-01 12:00 2 hours' '+%F %T'
+$ date -d '2024-01-01 12:00 1 hour ago' '+%F %T'
+$ date -d '2024-01-01 day' '+%F %T'
+$ date -d '2024-01-01 1 fortnight' '+%F'
+$ date -d '2024-01-01 +1 day +1 month' '+%F'
+$ date -d '2024-01-01 1 day 2 hours ago' '+%F %T'
+$ date -d '2024-01-01 UTC' '+%F %T'
+$ date -d '2024-01-01 10:00 UTC' '+%F %T'
+$ date -d '2024-01-01 +1day' '+%F'
+$ date -d '2024-01-01 3days ago' '+%F'
+$ date -d '2024-01-01 - 1 day' '+%F'
+$ date --date='2024-06-15' +%j
+$ date --date '2024-06-15' --utc +%A
+$ date --universal -d @0
+$ date -d @0 --rfc-2822
+$ date -d '2024-12-30' '+%G-W%V-%u %U %W'
+$ date -d '2021-01-03' '+%G-W%V-%u %U %W'
+$ date -d '2024-06-15 00:00:00' '+%I %l %p'
+$ date -d @-1 '+%F %T'
+$ date -d '1999-12-31 23:59:59' '+%y %C %e'
+$ date -d
+$ date -d '' +%T
+$ printf 'a b\n c  d\n' | xargs
+$ printf 'a b\nc d\n' | xargs -n 3
+$ printf 'a b\nc d\n' | xargs -L 1
+$ printf 'a b \nc d\ne\n' | xargs -L 1
+$ printf 'a b\nc d\n' | xargs -l
+$ printf 'a b\n  c d\n\n' | xargs -I {} echo '<{}>' '{}{}'
+$ printf 'a b\n' | xargs -i echo '[{}]'
+$ printf 'a b\n' | xargs -iX echo '[X]'
+$ printf "a 'b c' \"d e\" f\\ g\n" | xargs -n 1
+$ printf "a 'b\n" | xargs
+$ printf 'a "b\n' | xargs
+$ printf 'a\\' | xargs
+$ printf 'a\0b c\0' | xargs -0 -n 1
+$ printf 'a,b c,d\n' | xargs -d , -n 1
+$ printf 'a,b' | xargs -d ab
+$ printf 'a\tb' | xargs -d '\t' -n1
+$ printf '' | xargs
+$ printf '' | xargs -r
+$ printf '' | xargs echo x
+$ printf 'a b\n' | xargs -t
+$ printf 'a b\n' | xargs -t -n 1 echo x
+$ printf 'a b c\n' | xargs -n 2 -x
+$ printf 'aaaa bbbb cccc\n' | xargs -s 12
+$ printf 'aaaa bbbb cccc\n' | xargs -s 10
+$ printf 'aaaa bbbb cccc\n' | xargs -s 15 -x
+$ printf 'aaaaaaaaaaaaaaaaaaaaaaa\n' | xargs -s 10
+$ printf 'a b\n' | xargs -P 1 -n 1
+$ printf 'a b\n' | xargs -n 0
+$ printf 'a b\n' | xargs -n x
+$ printf 'a b\n' | xargs -L 0
+$ printf 'a\nb\n' | xargs false
+$ printf 'a b\n' | xargs -I{} -n 1 echo {}
+$ printf 'a b\n' | xargs -n 1 -I{} echo {}
+$ printf 'a b\nc\n' | xargs -L 1 -n 1 echo
+$ printf 'a b\nc\n' | xargs -n 1 -L 1 echo
+$ printf 'a b\n' | xargs -I{} -L 1 echo {} x
+$ printf 'x\n' | xargs -I {} echo {} {} '{'
+$ printf 'a b\n' | xargs -t -I{} echo '{} x'
+$ printf 'a_b\n_\nc\n' | xargs
+$ printf 'a b\n' | xargs --max-args=1 --verbose
+$ printf 'a\n' | xargs --replace echo '{}'
+$ printf 'a\n' | xargs --replace=R echo 'R'
+$ printf 'a\n' | xargs --max-lines echo
+$ printf 'a\n' | xargs --delimiter=x --null --no-run-if-empty --max-chars=100 --exit --max-procs=1
+$ printf 'a\n' | xargs -d '\x61'
+$ printf 'a\n' | xargs -d '\141'
+$ printf 'a\n' | xargs -d ''
+$ printf 'aaaa bbbb\n' | xargs -s 9
+$ printf 'aaaa bbbb cccc\n' | xargs -s 14 -x
+$ printf 'a\n\nb\n' | xargs -L 2
+$ printf 'a\n\n\nb\nc\n' | xargs -I{} echo '[{}]'
+$ printf "a 'b\nc'\n" | xargs -I{} echo '[{}]'
+$ printf 'a b\n' | xargs -n1 -t false
+$ printf 'a\nb\n' | xargs -L1 -t echo
+$ printf '  a  \n' | xargs -I{} echo '[{}]'
+$ printf 'aaaa bbbb cccc\n' | xargs -n 2 -x -s 14
+$ printf 'aaaa\n' | xargs -I{} -s 12 echo {}{}
+$ printf 'a b\nc d\n' | xargs -L 1 -x -s 9
+$ echo x > f; echo y > g; echo f g | xargs cat
+$ echo x > f; echo y > g; ls | xargs -n 1 wc -l
+$ echo x > f; echo y > g; ls | xargs grep -l x
+$ echo x > f; echo y > g; echo f g | xargs rm; ls
+$ echo d1 d2 | xargs mkdir; ls
+$ echo x > f; echo f | xargs -I{} cp {} {}.bak; ls
+$ echo x > f; find . -type f | xargs wc -c
+$ echo x > f; find . -type f -print0 | xargs -0 cat
+$ echo a b c | xargs -n 2 echo pre
+$ echo nope | xargs cat
+$ echo nope | xargs ls
+$ printf 'a\nb\n' | xargs -n 1 test a =
+! echo a | xargs nosuchcmd ## nosuchcmd
+! echo a | xargs -E x ## xargs -E
+! echo a | xargs -p ## xargs -p
+! echo a | xargs -a f ## xargs -a
+! echo a | xargs -P 2 ## xargs -P with more than one process
+$ xargs
+$ echo 'a   b' | xargs -d ' '
+$ printf '1\n2\n3\n' | xargs -n 2
+$ printf '1\n2\n3\n' | xargs -L 2
+$ printf '1 2\n3\n' | xargs -L 1 -t echo
+$ printf 'a b\n' | xargs -0
+$ printf 'a\ b c\n' | xargs -n 1
+$ printf '"a b" c\n' | xargs -I % echo '%'
+
+# with the engine's clock
+$ date +%Y
+$ date -u '+%Y %Z'
+$ date -d now +%Y
+$ date -d today +%Y
+$ date -d '1 hour ago' +%Y
+# through find and pipelines
+$ printf 'b\na\n' > f; printf 'd\nc\n' > g; find . -type f -exec sort {} \;
+$ printf 'b\na\n' > f; printf 'd\nc\n' > g; find . -type f -exec sort {} + | head -3
+$ printf 'b\na\n' > f; find . -name f | xargs sort -r
+$ printf 'x 1\ny 2\n' > f; find . -name f -exec cut -d ' ' -f 2 {} \;
+$ mkdir d; echo hi > d/f; find . -type d -exec du -s {} \; | sort
+$ printf 'a\nb\na\nc\na\nb\n' | sort | uniq -c | sort -rn | head -2
+$ printf 'a\nb\na\nc\na\nb\n' | sort | uniq -c | sort -k1,1nr -k2 | nl
+$ printf 'k1 v1\nk2 v2\n' | cut -d ' ' -f 2 | tr a-z A-Z | tee out | nl; cat out
+$ seq 1 20 | xargs -n 5 | nl -w 2 -s '. '
+$ seq 1 2000 | sort -rn | head -3
+$ seq 1 2000 | sort | tail -2
+$ seq 1 300 | tr '\n' ' ' | wc -w
+$ printf 'b\na\n' | sort > out; cat out
+$ printf 'b\na\n' | tee f | sort > g; cat f g

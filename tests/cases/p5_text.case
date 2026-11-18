@@ -1,0 +1,164 @@
+# Stage 4, part 5.
+@fixture empty
+
+$ printf 'a:b:c\nxyz\n' | cut -d: -f2
+$ printf 'a:b:c\nxyz\n' | cut -d: -f1,3 --output-delimiter=--
+$ printf 'abcdef\n' | cut -b 1-2,4- --output-delimiter=_
+$ printf 'abcdef\n' | cut -b 1-2,3-4 --output-delimiter=_
+$ printf 'abcdef\n' | cut -c 3,1-2,2
+$ printf 'a:b:c\n' | cut -d: --complement -f2
+$ printf 'a:b:c\nq\n' | cut -d: -s -f2-
+$ printf 'a:b:c\n' | cut -d: -f5
+$ printf 'a:b:c\n' | cut -d: -f2-3,1
+$ printf 'a:b:c\n' | cut -d: -f-2
+$ printf 'a\tb\tc\n' | cut -f2
+$ printf 'a b\n' | cut -d '' -f1
+$ printf 'abc' | cut -c2
+$ printf 'a:b\nc:d' > f; cut -d: -f1 f f
+$ cut
+$ cut -b 1 -c 2
+$ cut -d : -b 1
+$ cut -s -b 1
+$ cut -d ab -f 1
+$ cut -f 0
+$ cut -b 0
+$ cut -f x
+$ cut -b x
+$ cut -f 3-2
+$ cut -f -
+$ cut -f 1,
+$ cut -f1 nope
+$ mkdir d; cut -f1 d
+$ printf 'héllo\n' | cut -c 1-2
+$ printf 'a:b:c\n' | cut -d: -f1,3 --complement
+$ printf 'abcdef\n' | cut --complement -b 2-3 --output-delimiter=X
+$ printf 'a:b:c:d\n' | cut -d: -f1-2,4 --output-delimiter=' | '
+$ printf 'a,b,c\n' | cut --delimiter=, --fields=2 --only-delimited
+$ printf 'abc\n' | cut --bytes=1 
+$ printf 'abc\n' | cut --characters=2-
+$ printf 'abc\n' | cut -n -b 1
+$ printf ':a::b:\n' | cut -d: -f1,2,3,5
+$ echo abc | tr abc 'x[:upper:]'
+$ echo abc | tr 'a-c' '[:upper:]'
+$ echo abc | tr z-a x
+$ echo abc | tr abc ''
+$ echo abc | tr '[:foo:]' x
+$ echo aabbcc | tr -s ab
+$ echo aabbcc | tr -s ab xy
+$ echo aabbcc | tr -ds a bc
+$ echo aabbcc | tr -c 'a\n' x
+$ echo aabbcc | tr -cd 'a\n'
+$ echo aabbcc | tr -Cd 'a\n'
+$ echo abcdef | tr -t abcdef xy
+$ echo abcdef | tr abcdef xy
+$ echo abc | tr '[a*2]c' xyz
+$ echo abc | tr abc '[x*]'
+$ echo abc | tr abc '[x*2]y'
+$ echo 'a\b' | tr '\\' /
+$ echo abc | tr 'a\' x
+$ echo abc | tr '[=a=]' x
+$ echo Hello | tr '[:lower:]' '[:upper:]'
+$ echo Hello | tr '[:upper:]' '[:lower:]'
+$ echo Hello | tr 'a-z' '[:upper:]'
+$ echo Hello | tr '[:lower:]' 'A-Z'
+$ echo Hello | tr '[:alpha:]' '[:upper:]'
+$ echo abc | tr -c abc
+$ echo abc | tr '\141' x
+$ echo abc | tr '[:digit:]' '[:alpha:]'
+$ echo a-c | tr a- xy
+$ echo abc | tr 'a\q' x
+$ echo abc | tr a x extra
+$ echo ab | tr -d -c 'a'
+$ echo abc | tr '[b*3]' x
+$ echo abc | tr 'a[:' x
+$ echo abc | tr x '[:lower:]'
+$ echo abc12 | tr -s '[:alpha:]' '[:digit:]'
+$ tr
+$ tr a
+$ tr -d
+$ tr -d a b
+$ tr a b c
+$ tr -s a b c
+$ tr -ds a
+$ echo 'a  b   c' | tr -s ' '
+$ echo 'a b c' | tr ' ' '\n'
+$ echo 'hello world' | tr -d 'lo'
+$ echo 'hello 123' | tr -d '[:digit:]'
+$ echo 'hello 123' | tr -cd '[:digit:]\n'
+$ echo 'Hello World' | tr '[:upper:][:lower:]' '[:lower:][:upper:]'
+$ echo 'a1b2' | tr '[:alpha:]' x
+$ echo 'a.b,c' | tr '[:punct:]' ' '
+$ echo 'path/to/file' | tr / '\n'
+$ echo abc | tr --delete a
+$ echo aab | tr --squeeze-repeats a
+$ echo abc | tr --complement --delete 'a\n'
+$ echo abc | tr --truncate-set1 abc x
+$ echo abc | tr a-c A-C
+$ echo abc | tr abc '\060-\062'
+$ echo 'a\tb' | tr '\t' ' '
+$ echo abc | tr 'a-' 'x'
+$ echo abc | tr -- '-a' 'xy'
+$ echo abcabc | tr -s abc x
+$ echo 'x[y]' | tr '[]' '()'
+$ echo abc | tr a '[x*0]'
+$ echo abc | tr abc '[x*010]'
+$ echo abc | tr '[a*]' x
+$ echo abc | tr abc '[x*][y*]'
+$ echo abc | tr -t abc ''
+$ echo abc | tr '[:lower:]b' '[:upper:]'
+$ echo abc | tr 'ab' '[=x=]'
+$ echo abc | tr -ds a '[x*]'
+$ printf 'a\na\nb\n' | uniq - out extra
+$ printf 'a\nA\nb\n' | uniq -ci
+$ printf 'a\na\nb\nc\nc\n' | uniq -d
+$ printf 'a\na\nb\nc\nc\n' | uniq -u
+$ printf 'a\na\nb\n' | uniq -du
+$ printf '1 a\n2 a\n3 b\n' | uniq -f 1
+$ printf 'xa\nya\nzb\n' | uniq -s 1 -c
+$ printf 'a\n' | uniq -f x
+$ printf 'a\n' | uniq -s x
+$ printf 'ab\nac\n' | uniq -w 1
+$ uniq nope
+$ mkdir d; uniq d
+$ printf 'a\na' | uniq -c
+$ printf ' 1  a\n2 a\n' | uniq -f1 -s1
+$ printf 'a\na\nb\n' | uniq
+$ printf 'a\na\nb\n' > f; uniq -c f
+$ printf 'a\na\nb\n' | uniq -
+$ printf 'a\na\nb\na\n' | uniq --count --repeated
+$ printf 'a\nb\n' | uniq --unique --ignore-case --skip-fields=0 --skip-chars=0
+$ printf '' | uniq -c
+$ printf '\n\n' | uniq -c
+$ printf 'a\n\\:\\:\\:\nh\n\\:\\:\nc\n\\:\nf\nlast' | nl
+$ printf 'a\n\nb\n' | nl -b a -n rz -w 3 -s :
+$ printf 'a\n\nb\n' | nl -b t
+$ printf 'a\n\nb\n' | nl -b n
+$ printf 'a\n\nb\n' | nl -n ln
+$ printf 'a\n\nb\n' | nl -n rn -w 2
+$ printf 'a\nb\n' | nl -v 10 -i 5
+$ printf 'a\nb\n' | nl -v -3
+$ printf 'a\nb\n' | nl -n rz -v -3
+$ printf 'a\nb\n' | nl -s ') '
+$ nl -b x
+$ nl -n xx
+$ nl -v x
+$ nl -w 0
+$ nl -w x
+$ printf 'a\n' > f; mkdir d; nl nope d f
+$ printf 'a\n' > f; printf 'b' > g; nl f g f
+$ printf 'a\n\\:\\:\\:\nh\n\\:\\:\nc\n\\:\nf\n' | nl -h a -f a
+$ printf 'a\nb\n' | nl --body-numbering=a --number-width=2 --number-separator=- --number-format=ln --starting-line-number=4
+$ printf 'a\nb\n' | nl -w 1 -v 9
+! printf 'a\n' | nl -b pa ## nl -b pREGEX
+$ echo hi | tee f; cat f
+$ echo hi | tee f g; cat f g
+$ echo a > f; echo b | tee -a f; cat f
+$ echo a > f; echo b | tee f; cat f
+$ echo x | tee
+$ mkdir d; echo x | tee d f; cat f
+$ echo x | tee nope/f
+$ echo x | tee f | tr x y; cat f
+$ tee f; cat f; ls
+$ echo x | tee --append f; cat f
+$ echo x | tee -i f
+$ seq 5 | tee f | head -2; cat f | wc -l
