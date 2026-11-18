@@ -327,6 +327,11 @@ impl Segment {
         &self.name
     }
 
+    /// Give up the data file: its name and the file itself.
+    pub fn into_file(self) -> (String, Box<dyn VFile>) {
+        (self.name, self.file)
+    }
+
     /// Bytes of the file, without any check.
     #[inline]
     pub fn bytes(&self, off: u64, len: usize) -> &[u8] {
@@ -748,7 +753,13 @@ pub struct PackedWriter {
     next: usize,
     old_at: u32,
     table: Vec<u64>,
+    synced_to: u64,
+    /// Syncs done so far.
+    pub syncs: u64,
 }
+
+/// A file written in steps is synced every so many bytes.
+const SYNC_EVERY: u64 = 1 << 20;
 
 pub fn idx_tmp(seg: u32) -> String {
     format!("{}.tmp", idx_name(seg))
@@ -770,7 +781,7 @@ impl PackedWriter {
             }
         }
         let file = vfs.create(&idx_tmp(seg), 0)?;
-        let mut w = PackedWriter { seg, file, buf: Vec::new(), flushed: 0, sums: Vec::new(), keys, next: 0, old_at: 0, table: Vec::new() };
+        let mut w = PackedWriter { seg, file, buf: Vec::new(), flushed: 0, sums: Vec::new(), keys, next: 0, old_at: 0, table: Vec::new(), synced_to: 0, syncs: 0 };
         w.buf.extend_from_slice(IDX_MAGIC);
         w.buf.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
         w.buf.extend_from_slice(&seg.to_le_bytes());
@@ -793,6 +804,12 @@ impl PackedWriter {
         self.file.write_at(self.flushed, &self.buf[..whole])?;
         self.flushed += whole as u64;
         self.buf.drain(..whole);
+        // Synced as it grows, so that the sync at the end is a small one.
+        if self.flushed - self.synced_to >= SYNC_EVERY {
+            self.file.sync()?;
+            self.synced_to = self.flushed;
+            self.syncs += 1;
+        }
         Ok(())
     }
 
@@ -888,6 +905,8 @@ pub struct CheckpointWriter {
     block: Vec<u8>,
     blocks: u64,
     pub number: u32,
+    synced_to: u64,
+    pub syncs: u64,
 }
 
 const CKP_BLOCK: usize = 64 * 1024;
@@ -906,7 +925,7 @@ impl CheckpointWriter {
         let c = crc(&h);
         h.extend_from_slice(&c.to_le_bytes());
         file.write_at(0, &h)?;
-        Ok(CheckpointWriter { file, at: h.len() as u64, block: Vec::new(), blocks: 0, number })
+        Ok(CheckpointWriter { file, at: h.len() as u64, block: Vec::new(), blocks: 0, number, synced_to: 0, syncs: 0 })
     }
 
     /// Where the next entry goes. End the entry with `entry_done`.
@@ -934,6 +953,11 @@ impl CheckpointWriter {
         self.at += 8 + self.block.len() as u64;
         self.block.clear();
         self.blocks += 1;
+        if self.at - self.synced_to >= SYNC_EVERY {
+            self.file.sync()?;
+            self.synced_to = self.at;
+            self.syncs += 1;
+        }
         Ok(())
     }
 

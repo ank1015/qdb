@@ -431,7 +431,14 @@ pub struct Db {
     mark: u64,
     /// Bytes of text written and not yet indexed (`index_later`).
     waiting: u64,
+    /// Files that are no longer part of the database and are being
+    /// removed: cut shorter a step at a time, since removing a large
+    /// file in one go takes the operating system a long moment.
+    dying: Vec<(String, Box<dyn crate::vfs::VFile>)>,
 }
+
+/// How much shorter a file being removed gets per step.
+const DYING_STEP: u64 = 1 << 20;
 
 struct IdxJob {
     seg: u32,
@@ -636,6 +643,7 @@ impl Db {
             clean_credit: 0,
             mark: 0,
             waiting: 0,
+            dying: Vec::new(),
         }
     }
 
@@ -1119,7 +1127,10 @@ impl Db {
             let _ = self.vfs.remove(&disk::idx_tmp(id));
             return Ok(());
         };
-        if !job.w.step(seg.packed.as_ref(), seg.dynamic.as_ref(), budget)? {
+        let before = job.w.syncs;
+        let done = job.w.step(seg.packed.as_ref(), seg.dynamic.as_ref(), budget)?;
+        self.io.syncs += job.w.syncs - before;
+        if !done {
             self.idx_job = Some(job);
             return Ok(());
         }
@@ -1234,6 +1245,7 @@ impl Db {
     fn ckp_step(&mut self, budget: u64) -> io::Result<()> {
         let Some(mut job) = self.ckp_job.take() else { return Ok(()) };
         let start = job.w.bytes();
+        let synced = job.w.syncs;
         loop {
             let ids = self.nodes.ids_from(job.cursor, 64);
             if ids.is_empty() {
@@ -1245,6 +1257,7 @@ impl Db {
                 job.cursor = id + 1;
             }
             if job.w.bytes() - start >= budget {
+                self.io.syncs += job.w.syncs - synced;
                 self.ckp_job = Some(job);
                 return Ok(());
             }
@@ -1272,6 +1285,26 @@ impl Db {
         self.drop_empty()
     }
 
+    /// Cut `bytes` off the files being removed; one that is empty is
+    /// removed.
+    fn dying_step(&mut self, mut bytes: u64) -> io::Result<()> {
+        while bytes > 0 {
+            let Some((name, file)) = self.dying.last_mut() else { break };
+            let len = file.len();
+            let cut = len.min(bytes);
+            if cut > 0 {
+                file.truncate(len - cut)?;
+                bytes -= cut;
+            }
+            if len == cut {
+                let name = name.clone();
+                self.dying.pop();
+                self.vfs.remove(&name)?;
+            }
+        }
+        Ok(())
+    }
+
     /// The steps of upkeep that the command line just ended pays for:
     /// `wrote` is how many bytes it wrote.
     fn upkeep(&mut self, wrote: u64) -> io::Result<()> {
@@ -1283,6 +1316,9 @@ impl Db {
         }
         if self.volatile {
             return Ok(());
+        }
+        if !self.dying.is_empty() {
+            self.dying_step(DYING_STEP)?;
         }
         if self.ckp_job.is_none() {
             let active = self.active;
@@ -1315,65 +1351,77 @@ impl Db {
         }
         let factor = if dead > live * 6 / 10 + slack { 16 } else { 4 };
         self.clean_credit = (self.clean_credit + wrote * factor).min(64 << 20);
-        if self.clean.is_none() {
-            // The data file with the largest share of unused bytes. If
-            // that is the one being written, it is finished here and a
-            // new one started, so that it can be emptied.
-            let share = |s: &Segment| (s.end - SEG_HEADER - s.live_bytes) as f64 / (s.end - SEG_HEADER).max(1) as f64;
-            let active = self.active;
-            let best = self.segs.iter().flatten().filter(|s| s.id != active && s.live_pieces > 0).map(|s| (share(s), s.id)).fold((0.0, 0), |a, b| if b.0 > a.0 { b } else { a });
-            let own = self.seg(active);
-            let own_dead = own.end - SEG_HEADER - own.live_bytes;
-            let victim = if own_dead > slack && share(own) > best.0 {
-                if let Err(e) = self.roll(0) {
-                    self.fail(e);
+        // What the next piece to move needs, when the credit is short.
+        let mut short = 0u64;
+        for _ in 0..8 {
+            if self.clean.is_none() {
+                // The data file with the largest share of unused bytes.
+                // If that is the one being written, it is finished here
+                // and a new one started, so that it can be emptied.
+                let share = |s: &Segment| (s.end - SEG_HEADER - s.live_bytes) as f64 / (s.end - SEG_HEADER).max(1) as f64;
+                let active = self.active;
+                let best = self.segs.iter().flatten().filter(|s| s.id != active && s.live_pieces > 0).map(|s| (share(s), s.id)).fold((0.0, 0), |a, b| if b.0 > a.0 { b } else { a });
+                let own = self.seg(active);
+                let own_dead = own.end - SEG_HEADER - own.live_bytes;
+                let victim = if own_dead > slack && share(own) > best.0 {
+                    if let Err(e) = self.roll(0) {
+                        self.fail(e);
+                        return;
+                    }
+                    active
+                } else {
+                    best.1
+                };
+                if victim == 0 {
+                    break;
+                }
+                self.clean = Some((victim, 0));
+            }
+            while let Some((id, mut ord)) = self.clean {
+                let Some(seg) = self.segs[id as usize].as_ref() else {
+                    self.clean = None;
+                    break;
+                };
+                while (ord as usize) < seg.owners.len() && seg.owners[ord as usize] == DEAD {
+                    ord += 1;
+                }
+                if ord as usize >= seg.owners.len() {
+                    self.clean = None;
+                    break;
+                }
+                let owner = seg.owners[ord as usize];
+                let found = match self.nodes.get(owner) {
+                    Some(Node { kind: NodeKind::File(t), .. }) => t.pieces.iter().position(|q| q.seg == id && q.ord == ord).map(|i| (i, t.pieces[i].clone())),
+                    _ => None,
+                };
+                // Not found: taken out of its file by this command line.
+                let Some((pos, piece)) = found else {
+                    self.clean = Some((id, ord + 1));
+                    continue;
+                };
+                if self.clean_credit < piece.len as u64 {
+                    self.clean = Some((id, ord));
+                    short = piece.len as u64;
+                    break;
+                }
+                self.clean_credit -= piece.len as u64;
+                let text = self.text_of(&piece).into_owned();
+                let new = self.store(owner, &text);
+                if self.failed.is_some() {
                     return;
                 }
-                active
-            } else {
-                best.1
-            };
-            if victim == 0 {
-                return;
-            }
-            self.clean = Some((victim, 0));
-        }
-        while let Some((id, mut ord)) = self.clean {
-            let Some(seg) = self.segs[id as usize].as_ref() else {
-                self.clean = None;
-                break;
-            };
-            while (ord as usize) < seg.owners.len() && seg.owners[ord as usize] == DEAD {
-                ord += 1;
-            }
-            if ord as usize >= seg.owners.len() {
-                self.clean = None;
-                break;
-            }
-            let owner = seg.owners[ord as usize];
-            let found = match self.nodes.get(owner) {
-                Some(Node { kind: NodeKind::File(t), .. }) => t.pieces.iter().position(|q| q.seg == id && q.ord == ord).map(|i| (i, t.pieces[i].clone())),
-                _ => None,
-            };
-            // Not found: taken out of its file by this command line.
-            let Some((pos, piece)) = found else {
+                self.io.moved_bytes += text.len() as u64;
+                self.splice(owner, pos, 1, new);
                 self.clean = Some((id, ord + 1));
-                continue;
-            };
-            if self.clean_credit < piece.len as u64 {
-                self.clean = Some((id, ord));
+            }
+            if self.clean.is_some() {
                 break;
             }
-            self.clean_credit -= piece.len as u64;
-            let text = self.text_of(&piece).into_owned();
-            let new = self.store(owner, &text);
-            if self.failed.is_some() {
-                return;
-            }
-            self.io.moved_bytes += text.len() as u64;
-            self.splice(owner, pos, 1, new);
-            self.clean = Some((id, ord + 1));
         }
+        // Credit is spent by the command line that earned it: what is
+        // carried over is no more than the next piece takes, so that a
+        // small write never pays for a large one before it.
+        self.clean_credit = self.clean_credit.min(short.max(2 * self.cfg.piece as u64));
     }
 
     /// Remove data files that hold nothing any file uses and that the log
@@ -1383,8 +1431,9 @@ impl Db {
         for id in 1..limit.min(self.segs.len() as u32) {
             if self.segs[id as usize].as_ref().is_some_and(|s| s.live_pieces == 0 && s.sealed) {
                 let seg = self.segs[id as usize].take().unwrap();
-                let had_index = seg.packed.is_some();
-                drop(seg);
+                let mut seg = seg;
+                let had_index = seg.packed.take().is_some();
+                seg.dynamic = None;
                 if self.idx_job.as_ref().is_some_and(|j| j.seg == id) {
                     self.idx_job = None;
                     let _ = self.vfs.remove(&disk::idx_tmp(id));
@@ -1392,9 +1441,19 @@ impl Db {
                 if self.clean.is_some_and(|c| c.0 == id) {
                     self.clean = None;
                 }
-                self.vfs.remove(&disk::seg_name(id))?;
-                if had_index {
-                    self.vfs.remove(&disk::idx_name(id))?;
+                if self.volatile {
+                    drop(seg);
+                    self.vfs.remove(&disk::seg_name(id))?;
+                    if had_index {
+                        self.vfs.remove(&disk::idx_name(id))?;
+                    }
+                } else {
+                    self.dying.push(seg.into_file());
+                    if had_index {
+                        let name = disk::idx_name(id);
+                        let file = self.vfs.open(&name, 0)?;
+                        self.dying.push((name, file));
+                    }
                 }
             }
         }
@@ -1421,7 +1480,8 @@ impl Db {
                 self.index_backlog()?;
                 self.save_index(self.active)?;
             }
-            self.checkpoint()
+            self.checkpoint()?;
+            self.dying_step(u64::MAX)
         })();
         r.map_err(|e: io::Error| e.to_string())
     }
@@ -2698,7 +2758,8 @@ impl Db {
                 self.index_backlog()?;
                 self.save_index(self.active)?;
             }
-            self.checkpoint()
+            self.checkpoint()?;
+            self.dying_step(u64::MAX)
         })();
         r.map_err(|e| e.to_string())?;
         match &self.failed {

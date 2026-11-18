@@ -838,6 +838,12 @@ fn pick_terms(db: &Db, root: &Path) -> Terms {
     terms
 }
 
+/// Have the operating system forget the file content it holds in memory.
+fn drop_caches() -> Result<(), String> {
+    unsafe { libc::sync() };
+    std::fs::write("/proc/sys/vm/drop_caches", "3").map_err(|e| format!("dropping the file cache: {}", e))
+}
+
 /// The same lines, in any order.
 fn same_lines(a: &[u8], b: &[u8]) -> bool {
     if CAPPED.load(Relaxed) {
@@ -903,6 +909,9 @@ struct Options {
     sync: SyncMode,
     piece: usize,
     cap_mb: Option<usize>,
+    /// Before every read-only command: close the database, have the
+    /// operating system forget every file it holds in memory, open again.
+    cold: bool,
 }
 
 /// How many more timed runs a command gets after its first one.
@@ -1100,7 +1109,7 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // On disk there is a second pass: the commands that only read, on the
     // database as the writes of the first pass left it.
-    let passes = if opts.db.is_some() && opts.filter.is_none() { 2 } else { 1 };
+    let passes = if opts.db.is_some() && opts.filter.is_none() && !opts.cold { 2 } else { 1 };
     for pass in 0..passes {
     let label = if pass == 0 { opts.label.clone() } else { format!("{}-after", opts.label) };
     if pass == 1 {
@@ -1126,6 +1135,9 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         check_safe(&command, &root)?;
         let unordered = order_is_unspecified(&command);
 
+        if opts.cold && !mutating {
+            drop_caches()?;
+        }
         // The real tools.
         let (first, real_code, real_stdout, real_stderr) = real_run(&root, &command);
         let mut real_times = vec![first];
@@ -1147,6 +1159,13 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         };
 
         // The engine.
+        if let Some(dir) = opts.db.as_ref().filter(|_| opts.cold && !mutating) {
+            // Closed and opened again, so that nothing of the files is
+            // in this process either.
+            db.close()?;
+            drop_caches()?;
+            db = Db::open_dir(dir, Config { index: opts.index, piece: opts.piece, sync: opts.sync, ..Config::default() })?.0;
+        }
         let work_before = engine_work(&db);
         let first = engine_run(&mut db, &command, true);
         let index_work = match (work_before, engine_work(&db)) {
@@ -1314,12 +1333,11 @@ fn have_rg() -> bool {
 
 /// The runs a table shows, in order: label, column heading.
 const LABELS: &[(&str, &str)] = &[
-    ("before", "Stage 1"),
-    ("part2", "Part 2"),
-    ("part3", "Part 3, no index"),
-    ("part4-noindex", "Part 4, index off"),
-    ("part4", "Part 4, index on"),
-    ("s3p1", "Stage 3 part 1"),
+    ("part4", "Stage 2, in memory"),
+    ("s3-mem", "Stage 3, in memory"),
+    ("s3-disk", "On disk, settled"),
+    ("s3-disk-after", "On disk, after the writes"),
+    ("s3-disk-cold", "On disk, cold"),
 ];
 
 struct Stored {
@@ -1500,6 +1518,7 @@ fn run() -> Result<bool, String> {
         sync: SyncMode::Always,
         piece: Config::default().piece,
         cap_mb: None,
+        cold: false,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -1527,6 +1546,7 @@ fn run() -> Result<bool, String> {
                 }
             }
             "--piece" => opts.piece = value("--piece")?.parse().map_err(|_| "--piece needs a number")?,
+            "--cold" => opts.cold = true,
             "--cap" => opts.cap_mb = Some(value("--cap")?.parse().map_err(|_| "--cap needs a number of MB")?),
             "-h" | "--help" => {
                 println!("{}", USAGE);

@@ -17,16 +17,21 @@ A *checksum* is CRC-32 (the IEEE polynomial, as computed by the
 |---|---|---|
 | `LOCK` | Empty. An exclusive `flock` on it is held while the database is open, so a second process is refused. | never |
 | `MANIFEST` | Which checkpoint is current. 20 bytes. | replaced whole |
-| `tree-NNNNNNNN.ckp` | A checkpoint: the folder tree as of one position in the log. | written once |
+| `tree-NNNNNNNN.ckp` | A checkpoint: the folder tree, and the position in the log from which the log has to be applied to it. | written once |
 | `NNNNNNNN.seg` | A data file: file content and the log. `NNNNNNNN` is its number in decimal, from 1. | at its end only |
 | `NNNNNNNN.idx` | The search index for the pieces in data file `NNNNNNNN`. | written once, replaced whole |
-| `*.tmp` | A file being written that has not yet been given its name. Removed at open. | |
+| `*.tmp` | A file being written that has not yet been given its name, or (`spool-N.tmp`) output of a command on its way into a file. Removed at open. | |
 
 Nothing is ever changed in place. A data file only grows at its end (and
 after a crash is cut back to its last whole command line). Every other
 file is written under a `.tmp` name, synced, renamed to its real name, and
 the directory is synced; a reader sees the old file or the new one, never
 part of one.
+
+A data file or index file that is no longer needed is not removed in one
+go but cut shorter a megabyte at a time and removed when empty (removing a
+large file at once stalls the write that does it). Such a file belongs to
+nothing; if the process ends first, the next open removes it.
 
 Every file starts with an 8-byte magic and a 4-byte format version.
 A version higher than the reader knows is refused ("written by a newer
@@ -52,8 +57,8 @@ eight numbers:
 | `slen` | number of stored bytes |
 | `len` | number of bytes of text |
 | `lines` | number of newline bytes in the text |
-| `crc` | checksum of the stored bytes |
-| `enc` | encoding marker: how the stored bytes become text. `0`: they are the text (UTF-8 without NUL bytes). Other values are reserved for compression codecs; a reader that meets a value it does not know reports an error naming the file. |
+| `crc` | checksum of the stored bytes (of the compressed bytes, for a compressed piece) |
+| `enc` | encoding marker: how the stored bytes become text. `0`: they are the text (UTF-8 without NUL bytes). `1`: they are one LZ4 block (the block format, no frame) that unpacks to exactly `len` bytes of text; written with `--compress` for a piece that comes out smaller that way. A database may hold pieces of both kinds. A reader that meets a value it does not know reports an error naming the file. |
 
 When a piece is written into a checkpoint or a log record it is eight
 varints in this order: `seg ord off slen len lines crc enc`.
@@ -124,7 +129,11 @@ then   changes, to the end of the record, each starting with a varint:
 | 5 rename | varint id, varint parent id, string name | the node keeps its id |
 
 Only command lines that change the tree are numbered and logged. A read,
-or a write that leaves everything as it was, writes nothing.
+or a write that leaves everything as it was, writes nothing. A record
+may also hold splices that move a file's content from one data file to
+another without changing it (upkeep: see below); they ride in the record
+of the command line during which they were done. `--compact` and
+`--load` write records of their own, numbered like command lines.
 
 Every file has a version, 0 when it is made, one higher with every
 splice. Applying a splice whose version is not above the file's version
@@ -162,6 +171,17 @@ with a varint tag:
 The position entry comes first, in a block of its own. The root folder has
 id 0. Entries are in ascending order of id; a folder's children are found
 by their parent ids.
+
+A checkpoint written while the database is in use is written a few
+kilobytes at a time, as command lines end. The position entry is the place
+the log had reached when the writing began; each node is written as it is
+when its turn comes, so a node may already include changes logged after
+that position, and a node made after it may be missing or present. That
+is sound because applying the log is idempotent (versions, above): the log
+from the position on, applied to such a tree, gives the tree as of the end
+of the log. Before the checkpoint is made current, the log is synced up
+to where it stood when the last node was written, so the checkpoint never
+holds a change that the log on disk does not.
 
 Node ids are never reused: a node keeps its id through moves and
 restarts, and the id of a removed node is not given out again.
@@ -220,12 +240,18 @@ marks where the parts meet.)
 
 A list may name pieces that no file uses any more; a reader drops them by
 looking the piece up. A list never lacks a piece that is in use and has
-the trigram.
+the trigram. "In use" is by the log on disk: the log is synced before an
+index file is given its name, so that an index file never reflects a
+change that a power cut could still undo.
 
-The index file of a finished data file covers all its pieces. The data
-file still being written may have an index file that covers only its
-first `ndocs` pieces; the rest are indexed in memory as they are written,
-and after a crash from their content.
+The index file of a finished data file covers all its pieces, once it is
+written: that happens a step at a time over the command lines after the
+data file is finished, and until then (and after a crash in between) the
+file is missing or covers only the first `ndocs` pieces. The data file
+still being written may likewise have an index file that covers only its
+first `ndocs` pieces. The rest are indexed in memory as they are written
+(or later in bulk, with `--index later`), and after a crash from their
+content.
 
 ## Opening, and recovery
 
@@ -236,6 +262,10 @@ and after a crash from their content.
 3. Read the log from the position the checkpoint gives: record after
    record, following next-file records from one data file to the next.
    Only record headers and command line records are read, not content.
+   A data file is synced before the next one is made; if a data file
+   names a next one that is missing or has no whole header, the power went
+   in between, the next one is made now, and this file is treated as the
+   last one in step 4.
 4. In the last data file the records after the last sync that is known
    (the largest synced offset carried by a command line record) may be
    there only in part. The content records among them are checked against
@@ -243,7 +273,9 @@ and after a crash from their content.
    before the first record that is not whole, is out of sequence, or has
    content that does not match; the data file is cut back to there and
    synced. This is the only place where damage is treated as "did not
-   happen" rather than as an error.
+   happen" rather than as an error. If nothing had to be cut but command
+   lines were applied, the file is synced all the same: what was read may
+   never have been, and what recovery writes next is made from it.
 5. Apply the command line records up to there to the tree, in order.
 6. Remove files that belong to nothing: `*.tmp`, data and index files
    that no piece or log position refers to, checkpoints other than the
@@ -257,10 +289,28 @@ Opening reads no file content unless an index has to be built or step 4
 has records to check. Its cost follows the number of nodes and pieces (the
 checkpoint) and the length of the log since the checkpoint.
 
-A checkpoint is written when the database is closed, when `--compact`
-runs, and when the log since the last one is longer than 1 MB and longer
-than twice the last checkpoint. Before the checkpoint names a position in
-the log, the data file is synced up to it.
+A checkpoint is written when the database is closed and when `--compact`
+runs (in one go), and in steps, as described above, when the log since
+the last one is longer than 1 MB and longer than twice the last
+checkpoint, or when a data file has become empty and could be removed.
+
+## Upkeep
+
+Nothing in the format needs upkeep to stay correct; upkeep keeps space
+and recovery time bounded. All of it is done in bounded steps at the end
+of command lines that write, each step sized by what that command line
+wrote, and `--compact` does all of it at once.
+
+- **Space.** When the bytes of data files that no file uses pass 30% of
+  the bytes in use (plus 4 MB), content is moved out of the data file
+  with the largest unused share into the one being written: a content
+  record for the piece, and a splice in the command line's record. A
+  command line moves at most 4 times the bytes it wrote (16 times once
+  unused space passes 60%). A data file that holds nothing in use, and
+  that the log from the current checkpoint does not run through, is
+  removed after the next checkpoint.
+- **Index files** and **checkpoints** are written in steps as said above.
+- **Lists in memory** drop pieces no longer in use a little at a time.
 
 ## What is checked, and when
 

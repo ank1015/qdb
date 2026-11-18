@@ -15,10 +15,17 @@ use std::time::{Duration, Instant};
 const USAGE: &str = "\
 Usage: qdb-stress bigfile [OPTIONS]
        qdb-stress writes --dataset NAME [OPTIONS]
+       qdb-stress compare --dataset NAME --db DIR [OPTIONS]
+       qdb-stress sync-cost --db DIR [--count N]
 
 bigfile: five commands on one generated file, on the real tools and on
 the engine: append a line, search for a rare term, wc -l, tail -n 5, and
 a sed -i that changes one line.
+
+compare: every setting of the three switches (sync always or in
+batches, index built at write or later, text plain or compressed) on
+three mixes of reads and writes; --count command lines each (default
+there: use --count 20000).
 
 writes: a long run of small writes mixed with occasional large ones on a
 loaded dataset, engine only, recording the time of every write.
@@ -600,7 +607,8 @@ fn writes(opts: &Options) -> Result<bool, String> {
             let at = rng.below(copies.len());
             (13, format!("rm -r {}", copies.swap_remove(at)))
         };
-        let syncs_before = db.io_stats().syncs;
+        let io_before = db.io_stats();
+        let syncs_before = io_before.syncs;
         let t = Instant::now();
         let out = qdb::execute(&mut db, command.as_bytes());
         let nanos = t.elapsed().as_nanos() as u64;
@@ -621,7 +629,16 @@ fn writes(opts: &Options) -> Result<bool, String> {
         }
         times.push((kind as u8, nanos));
         if KINDS[kind].1 && slowest.last().map_or(true, |s| nanos > s.0 || slowest.len() < 10) {
-            slowest.push((nanos, n + 1, command.chars().take(100).collect()));
+            let io = db.io_stats();
+            let what = format!(
+                "{} syncs; bytes: {} content, {} of it moved, {} index files, {} tree",
+                io.syncs - io_before.syncs,
+                io.content_bytes - io_before.content_bytes,
+                io.moved_bytes - io_before.moved_bytes,
+                io.index_bytes - io_before.index_bytes,
+                io.tree_bytes - io_before.tree_bytes
+            );
+            slowest.push((nanos, n + 1, format!("{}` {}", command.chars().take(60).collect::<String>(), what)));
             slowest.sort_by(|a, b| b.0.cmp(&a.0));
             slowest.truncate(10);
         }
@@ -670,10 +687,10 @@ fn writes(opts: &Options) -> Result<bool, String> {
         line(name, times.iter().filter(|t| t.0 as usize == k).map(|t| t.1).collect());
     }
     let _ = writeln!(md, "\nThe ten slowest small writes:\n");
-    let _ = writeln!(md, "| ms | Write number | Command |");
+    let _ = writeln!(md, "| ms | Write number | Command, and what was written to disk during it |");
     let _ = writeln!(md, "|---:|---:|---|");
     for (nanos, n, command) in &slowest {
-        let _ = writeln!(md, "| {} | {} | `{}` |", show_ms(*nanos as f64 / 1e6), n, command.replace('|', "\\|"));
+        let _ = writeln!(md, "| {} | {} | `{} |", show_ms(*nanos as f64 / 1e6), n, command.replace('|', "\\|"));
     }
     if let Some(dir) = &db_dir {
         let io = db.io_stats();
@@ -738,6 +755,266 @@ fn writes(opts: &Options) -> Result<bool, String> {
     Ok(true)
 }
 
+// ------------------------------------------------------- the comparison
+
+/// Counts output and throws it away.
+#[derive(Default)]
+struct Count(usize);
+
+impl qdb::Sink for Count {
+    fn write(&mut self, data: &[u8]) -> bool {
+        self.0 += data.len();
+        true
+    }
+}
+
+/// One run of the comparison: a fresh import of the dataset with the
+/// given switches, then `count` command lines of which `reads` in a
+/// hundred only read. Returns the row of the table.
+fn mix_run(opts: &Options, folder: &str, sync: SyncMode, later: bool, compress: bool, reads: usize) -> Result<String, String> {
+    let dir = opts.db.as_ref().ok_or("compare needs --db DIR")?.join(format!("compare-{}", opts.dataset));
+    let _ = std::fs::remove_dir_all(&dir);
+    let cfg = Config { index: opts.index, piece: opts.piece, sync: SyncMode::Batch, compress, index_later: later, ..Config::default() };
+    PEAK.store(LIVE.load(Relaxed), Relaxed);
+    let base = LIVE.load(Relaxed);
+    let t = Instant::now();
+    let (mut db, _) = Db::open_dir(&dir, cfg)?;
+    store::load_into_db(&mut db, &opts.data.join(folder)).map_err(|e| e.to_string())?;
+    db.sync();
+    let load = t.elapsed();
+    db.set_sync(sync);
+    let files = dataset_files(&db);
+    let mut rng = Rng(opts.seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
+    let vocab = vocabulary(&mut rng, 5_000);
+    let mut dirs: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for f in &files {
+        if let Some((d, _)) = f.rsplit_once('/') {
+            *dirs.entry(d).or_default() += 1;
+        }
+    }
+    let dirs: Vec<&str> = dirs.into_iter().filter(|(_, n)| (20..=400).contains(n)).map(|(d, _)| d).collect();
+    if dirs.is_empty() || files.len() < 100 {
+        return Err("the dataset is too small for this run".into());
+    }
+    // Words to search for: one long word from each of 300 files, so that
+    // most are in few files and some are in many.
+    let mut words: Vec<String> = Vec::new();
+    while words.len() < 300 {
+        let id = db.resolve(files[rng.below(files.len())].as_bytes()).map_err(|e| e.msg().to_string())?;
+        let Some(piece) = db.pieces(id).first().cloned() else { continue };
+        let text = db.text_of(&piece);
+        let found: Vec<&[u8]> = text.split(|c| !c.is_ascii_alphanumeric() && *c != b'_').filter(|w| w.len() >= 8 && w.len() <= 24).collect();
+        if !found.is_empty() {
+            words.push(String::from_utf8_lossy(found[rng.below(found.len())]).into_owned());
+        }
+    }
+    qdb::execute(&mut db, b"mkdir -p stress/d0 stress/d1 stress/d2 stress/d3 stress/small");
+    let mut own: Vec<String> = Vec::new();
+    let mut next = 0usize;
+    let (mut read_ns, mut write_ns): (Vec<u64>, Vec<u64>) = (Vec::new(), Vec::new());
+    let started = Instant::now();
+    for _ in 0..opts.count {
+        let is_read = rng.below(100) < reads;
+        let roll = rng.below(100);
+        let file = &files[rng.below(files.len())];
+        let command = if is_read {
+            let word = &words[rng.below(words.len())];
+            match roll {
+                0..=24 => format!("cat {}", file),
+                25..=39 => format!("head -n 20 {}", file),
+                40..=49 => format!("wc -l {}", file),
+                50..=64 => format!("grep -n {} {}", word, file),
+                65..=84 => format!("grep -rl {} {}", word, dirs[rng.below(dirs.len())]),
+                85..=94 => format!("grep -rn {} .", word),
+                _ => format!("find {} -name '*.h'", dirs[rng.below(dirs.len())]),
+            }
+        } else if own.len() < 20 || roll < 25 {
+            next += 1;
+            let p = format!("stress/d{}/f{}.txt", rng.below(4), next);
+            own.push(p.clone());
+            format!("echo '{}' > {}", sentence(&mut rng, &vocab, 4, 40), p)
+        } else {
+            let mine = rng.below(own.len());
+            match roll {
+                25..=64 => format!("echo '{}' >> {}", sentence(&mut rng, &vocab, 4, 12), own[mine]),
+                65..=74 => format!("echo '{}' > {}", sentence(&mut rng, &vocab, 4, 40), own[mine]),
+                75..=84 => format!("sed -i 's/{}/{}/' {}", vocab[rng.below(40)], vocab[rng.below(vocab.len())], own[mine]),
+                85..=89 => format!("rm {}", own.swap_remove(mine)),
+                90..=93 => {
+                    next += 1;
+                    let to = format!("stress/d{}/m{}.txt", rng.below(4), next);
+                    let from = std::mem::replace(&mut own[mine], to.clone());
+                    format!("mv {} {}", from, to)
+                }
+                94..=98 => {
+                    next += 1;
+                    format!("cp {} stress/small/c{}", file, next)
+                }
+                _ => format!("echo '{}' >> {}", sentence(&mut rng, &vocab, 8, 1), file),
+            }
+        };
+        let mut out = Count::default();
+        let mut err = Vec::new();
+        let t = Instant::now();
+        let code = qdb::execute_to(&mut db, command.as_bytes(), &mut out, &mut err);
+        let nanos = t.elapsed().as_nanos() as u64;
+        if code > 1 {
+            return Err(format!("failed: {}\n{}", command, String::from_utf8_lossy(&err)));
+        }
+        if is_read {
+            read_ns.push(nanos);
+        } else {
+            write_ns.push(nanos);
+        }
+    }
+    let total = started.elapsed();
+    let peak = PEAK.load(Relaxed).saturating_sub(base);
+    let raw = db.content_bytes() as u64;
+    db.close()?;
+    let disk: u64 = std::fs::read_dir(&dir).map(|d| d.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()).unwrap_or(0);
+    let _ = std::fs::remove_dir_all(&dir);
+    read_ns.sort_unstable();
+    write_ns.sort_unstable();
+    let f = |v: &[u64], p: f64| show_ms(percentile(v, p) as f64 / 1e6);
+    Ok(format!(
+        "| {} | {} | {} | {}% reads | {:.0} | {} | {} | {} | {} | {:.1} | {:.3} | {:.1} | {:.1} |",
+        if sync == SyncMode::Always { "always" } else { "batch" },
+        if later { "later" } else { "at write" },
+        if compress { "compressed" } else { "plain" },
+        reads,
+        opts.count as f64 / total.as_secs_f64(),
+        f(&read_ns, 0.5),
+        f(&read_ns, 0.99),
+        f(&write_ns, 0.5),
+        f(&write_ns, 0.99),
+        disk as f64 / 1e6,
+        disk as f64 / raw.max(1) as f64,
+        peak as f64 / 1e6,
+        load.as_secs_f64()
+    ))
+}
+
+/// The comparison: every setting of the three switches, on three mixes
+/// of reads and writes.
+fn compare(opts: &Options) -> Result<bool, String> {
+    let folder = std::fs::read_to_string("bench/datasets.txt")
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| {
+            let mut p = l.splitn(3, '|').map(|p| p.trim().to_string());
+            Some((p.next()?, p.next()?))
+        })
+        .find(|(n, _)| *n == opts.dataset)
+        .ok_or(format!("unknown dataset {}", opts.dataset))?
+        .1;
+    let mut md = String::new();
+    let _ = writeln!(md, "# The switches compared on {}, run `{}`\n", opts.dataset, opts.label);
+    let _ = writeln!(
+        md,
+        "Each row is a fresh import of the dataset with the row's switches (sync in batches during the import), then {} command lines, seed {}. Times in milliseconds. Disk is the database directory after the run and a clean close, and against the raw text of all files then. Peak memory is the most heap the engine held from the import on. Import is the time of the import, in seconds.\n",
+        opts.count, opts.seed
+    );
+    let _ = writeln!(md, "| Sync | Index built | Text | Workload | Commands/s | Read median | Read 99% | Write median | Write 99% | Disk MB | Disk / raw text | Peak memory MB | Import s |");
+    let _ = writeln!(md, "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for reads in [95, 50, 5] {
+        for sync in [SyncMode::Always, SyncMode::Batch] {
+            for later in [false, true] {
+                for compress in [false, true] {
+                    let row = mix_run(opts, &folder, sync, later, compress, reads)?;
+                    eprintln!("{}", row);
+                    let _ = writeln!(md, "{}", row);
+                }
+            }
+        }
+    }
+    print!("{}", md);
+    let dir = opts.out.join("compare");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(format!("{}-{}.md", opts.dataset, opts.label)), md).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// What a sync costs here, and what a small write costs against it: the
+/// same line appended to a plain file and synced, and appended to a file
+/// in a database with `echo >>` under each sync setting.
+fn sync_cost(opts: &Options) -> Result<bool, String> {
+    use std::io::Write as _;
+    let dir = opts.db.as_ref().ok_or("sync-cost needs --db DIR")?.join("sync-cost");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let n = opts.count.min(5000);
+    let line = "a line of about eighty bytes, appended to a file again and again and again..\n";
+    let stats = |mut v: Vec<u64>| {
+        v.sort_unstable();
+        (percentile(&v, 0.5) as f64 / 1e6, percentile(&v, 0.9) as f64 / 1e6, percentile(&v, 0.99) as f64 / 1e6)
+    };
+    // The bare cost: one write of the line and one sync of the file.
+    let mut bare = Vec::new();
+    {
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("bare.txt")).map_err(|e| e.to_string())?;
+        for _ in 0..n {
+            let t = Instant::now();
+            f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+            f.sync_data().map_err(|e| e.to_string())?;
+            bare.push(t.elapsed().as_nanos() as u64);
+        }
+    }
+    // The same number of bytes as the engine writes for the line: the
+    // line, its record, and the record of the command line.
+    let mut bare_same = Vec::new();
+    let mut engine = Vec::new();
+    for sync in [SyncMode::Always, SyncMode::Batch] {
+        let cfg = Config { index: opts.index, sync, ..Config::default() };
+        let (mut db, _) = Db::open_dir(&dir.join(if sync == SyncMode::Always { "always" } else { "batch" }), cfg)?;
+        qdb::execute(&mut db, b"echo first > f.txt");
+        let command = format!("echo '{}' >> f.txt", line.trim_end());
+        let before = db.io_stats();
+        let mut times = Vec::new();
+        for _ in 0..n {
+            let t = Instant::now();
+            let out = qdb::execute(&mut db, command.as_bytes());
+            times.push(t.elapsed().as_nanos() as u64);
+            if out.code != 0 {
+                return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+            }
+        }
+        let io = db.io_stats();
+        let per_line = (io.bytes() - before.bytes()) / n as u64;
+        if sync == SyncMode::Always {
+            let block = vec![b'x'; per_line as usize];
+            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("bare-same.txt")).map_err(|e| e.to_string())?;
+            for _ in 0..n {
+                let t = Instant::now();
+                f.write_all(&block).map_err(|e| e.to_string())?;
+                f.sync_data().map_err(|e| e.to_string())?;
+                bare_same.push(t.elapsed().as_nanos() as u64);
+            }
+        }
+        engine.push((sync, stats(times), per_line, io.syncs - before.syncs));
+        db.close()?;
+    }
+    let mut md = String::new();
+    let _ = writeln!(md, "# What a sync costs, and a small write against it, run `{}`\n", opts.label);
+    let _ = writeln!(md, "{} times each. Times in milliseconds.\n", n);
+    let _ = writeln!(md, "| | Median | 90% | 99% | Bytes written per line | Syncs |");
+    let _ = writeln!(md, "|---|---:|---:|---:|---:|---:|");
+    let b = stats(bare);
+    let _ = writeln!(md, "| a plain file: append the line ({} bytes), sync | {} | {} | {} | {} | {} |", line.len(), show_ms(b.0), show_ms(b.1), show_ms(b.2), line.len(), n);
+    let bs = stats(bare_same);
+    let _ = writeln!(md, "| a plain file: append as many bytes as the engine writes for the line, sync | {} | {} | {} | {} | {} |", show_ms(bs.0), show_ms(bs.1), show_ms(bs.2), engine[0].2, n);
+    for (sync, t, per_line, syncs) in &engine {
+        let _ = writeln!(md, "| the engine, `echo '...' >> f.txt`, sync {} | {} | {} | {} | {} | {} |", if *sync == SyncMode::Always { "always" } else { "batch" }, show_ms(t.0), show_ms(t.1), show_ms(t.2), per_line, syncs);
+    }
+    let _ = writeln!(md, "\nThe engine under sync always against the bare append and sync of the same bytes: {:.2} times (median).", engine[0].1 .0 / bs.0);
+    print!("{}", md);
+    let out = opts.out.join("writes");
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    std::fs::write(out.join(format!("sync-cost-{}.md", opts.label)), md).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(true)
+}
+
 fn run() -> Result<bool, String> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().unwrap_or_default();
@@ -790,6 +1067,8 @@ fn run() -> Result<bool, String> {
     match mode.as_str() {
         "bigfile" => bigfile(&opts),
         "writes" => writes(&opts),
+        "compare" => compare(&opts),
+        "sync-cost" => sync_cost(&opts),
         _ => {
             println!("{}", USAGE);
             Ok(mode == "--help" || mode == "-h")
