@@ -53,7 +53,7 @@ fn mkdir_parents(db: &mut Db, path: &[u8]) -> Result<(), (Vec<u8>, Errno)> {
     if path.is_empty() {
         return Err((Vec::new(), Errno::NoEnt));
     }
-    let mut cur = db.root();
+    let mut cur = if path[0] == b'/' { db.root() } else { db.here().map_err(|e| (path.to_vec(), e))? };
     let mut pos = 0;
     let trimmed_len = path.len() - path.iter().rev().take_while(|c| **c == b'/').count();
     for comp in path.split(|c| *c == b'/') {

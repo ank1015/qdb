@@ -28,6 +28,62 @@ shell	{1..3..2}	re:\{[0-9]+\.\.[0-9]+\.\.[0-9]+\}
 shell	{a..z}	re:\{[a-z]\.\.[a-z]\}
 shell	{01..10}	re:\{0[0-9]+\.\.[0-9]+\}
 shell	line continuation	re:\\\n
+shell	NAME=value	re:(^|; )[A-Za-z_]+=[^ ;]*(;|$)
+shell	NAME=value command	re:(^|; )[A-Z_]+=[^ ;]* [a-z]
+shell	$NAME	re:\$[A-Za-z_]
+shell	${NAME}	re:\$\{[A-Za-z_]+\}
+shell	"$NAME"	re:"[^"]*\$[A-Za-z_][^"]*"
+shell	$?	re:\$\?
+shell	${NAME:-word}	re:\$\{[A-Za-z_]+:-
+shell	${NAME:=word}	re:\$\{[A-Za-z_]+:=
+shell	${#NAME}	re:\$\{#[A-Za-z_]+\}
+shell	unset variable is empty	re:\$UNSET
+shell	export NAME	re:export [A-Z]+(;|$)
+shell	export NAME=value	re:export [A-Z]+=
+shell	unset NAME	re:unset [A-Z]
+shell	unset -v	re:unset -v
+shell	~	re:(^| |=)~( |;|$|")
+shell	~/path	re:(^| |=)~/
+shell	$((...))	re:\$\(\(
+shell	arith + - * / %	re:\$\(\([^)]*[0-9a-zA-Z] ?[-+*/%] ?[0-9a-zA-Z(]
+shell	arith **	re:\$\(\([^)]*\*\*
+shell	arith comparisons	re:\$\(\([^)]*(<=|>=|==|!=|[0-9]<[0-9]|[0-9]>[0-9])
+shell	arith && ||	re:\$\(\([^)]*(&&|\|\|)
+shell	arith bitwise	re:\$\(\([^)]*(<<|>>|[0-9]&[0-9]|[0-9]\|[0-9]|\^|~)
+shell	arith ?:	re:\$\(\([^)]*\?[^)]*:
+shell	arith assignment	re:\$\(\([^)]*[A-Za-z]([-+*/%&|^]|<<|>>)?=[^=]
+shell	arith ++ --	re:\$\(\([^)]*(\+\+|--)
+shell	arith comma	re:\$\(\([^)]*,
+shell	arith bases	re:\$\(\([^)]*(0x|[0-9]#)
+shell	arith error	re:\$\(\(1/0
+shell	IFS	re:IFS=
+shell	field splitting	re:for w in \$X
+shell	cd	re:(^|; )cd(;|$)
+shell	cd DIR	re:(^|; )cd [a-z{~./"$]
+shell	pwd	re:(^|; )pwd(;| |$)
+shell	pwd -L	re:pwd -L
+shell	pwd -P	re:pwd -P
+shell	PWD and OLDPWD	re:OLDPWD
+shell	relative path after cd	re:cd src; [a-z]+ .*\.\./
+shell	for	re:for [a-z]+ in .*; ?do
+shell	if	re:if .*; ?then
+shell	elif	re:; ?elif
+shell	else	re:; ?else
+shell	while	re:while .*; ?do
+shell	until	re:until .*; ?do
+shell	break	re:break(;| \|)
+shell	break N	re:break [0-9]
+shell	continue	re:continue(;| \|)
+shell	continue N	re:continue [0-9]
+shell	read	re:read [A-Z]
+shell	read -r	re:read -r
+shell	read into REPLY	re:REPLY
+shell	read several names	re:read [A-Za-z]+ [A-Za-z]+
+shell	redirection on a loop	re:done ?(>|<|2>)
+shell	redirection on an if	re:fi ?(>|<|2>)
+shell	loop as a pipeline stage	re:done \|
+shell	loop fed by a pipeline	re:\| ?(while|for|until|if)
+shell	command limit	re:while true; do :; done
 ls	-A	-A
 ls	-d	-d
 ls	-r	-r

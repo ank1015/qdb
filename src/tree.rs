@@ -278,6 +278,9 @@ pub struct Config {
     /// once this many megabytes are waiting, when a data file is
     /// finished, and at close. Until then searches read what waits.
     pub index_later: bool,
+    /// A unit is stopped once it has run this many commands, so that a
+    /// loop without an end cannot hold the database for good.
+    pub command_limit: u64,
 }
 
 /// With `index_later`: how much text may wait to be indexed.
@@ -285,7 +288,7 @@ const INDEX_WAIT: u64 = 16 << 20;
 
 impl Default for Config {
     fn default() -> Config {
-        Config { piece: 64 * 1024, segment: 128 << 20, sync: SyncMode::Always, batch_lines: 64, batch_bytes: 4 << 20, index: true, checkpoint: 1 << 20, spool: 8 << 20, upkeep: true, compress: false, index_later: false }
+        Config { piece: 64 * 1024, segment: 128 << 20, sync: SyncMode::Always, batch_lines: 64, batch_bytes: 4 << 20, index: true, checkpoint: 1 << 20, spool: 8 << 20, upkeep: true, compress: false, index_later: false, command_limit: 1_000_000 }
     }
 }
 
@@ -572,6 +575,10 @@ pub struct Db {
     work: IndexWork,
     io: IoStats,
     tally: Tally,
+    /// The folder relative paths start from, while a command runs: its
+    /// components. Empty for the root. It is the session's, lent to the
+    /// database for the length of a command; nothing of it is stored.
+    cwd: Vec<Vec<u8>>,
     unit: Option<UnitStart>,
     last_cost: Cost,
     /// Upkeep under way, done a step at a time as command lines end: an
@@ -800,6 +807,7 @@ impl Db {
             work: IndexWork::default(),
             io: IoStats::default(),
             tally: Tally::default(),
+            cwd: Vec::new(),
             unit: None,
             last_cost: Cost::default(),
             idx_job: None,
@@ -2807,9 +2815,48 @@ impl Db {
         false
     }
 
-    /// Resolve a path. There is no current directory: every path resolves
-    /// from the root, so `src/a.txt`, `./src/a.txt` and `/src/a.txt` are the
-    /// same file. `..` at the root stays at the root.
+    /// Set the folder relative paths start from: an absolute path
+    /// without `.` or `..`, as a session keeps it.
+    pub fn set_cwd(&mut self, path: &[u8]) {
+        if path.len() <= 1 && self.cwd.is_empty() {
+            return;
+        }
+        self.cwd.clear();
+        self.cwd.extend(path.split(|c| *c == b'/').filter(|c| !c.is_empty()).map(|c| c.to_vec()));
+    }
+
+    /// The current directory as a path: `/`, or `/a/b`.
+    pub fn cwd(&self) -> Vec<u8> {
+        if self.cwd.is_empty() {
+            return b"/".to_vec();
+        }
+        let mut out = Vec::new();
+        for c in &self.cwd {
+            out.push(b'/');
+            out.extend_from_slice(c);
+        }
+        out
+    }
+
+    /// The folder relative paths start from, if it is still there.
+    pub fn here(&self) -> Result<NodeId, Errno> {
+        let mut cur = self.root;
+        for comp in &self.cwd {
+            cur = match &self.nodes[cur].kind {
+                NodeKind::Folder(c) => *c.get(comp.as_slice()).ok_or(Errno::NoEnt)?,
+                NodeKind::File(_) => return Err(Errno::NoEnt),
+            };
+        }
+        match &self.nodes[cur].kind {
+            NodeKind::Folder(_) => Ok(cur),
+            NodeKind::File(_) => Err(Errno::NoEnt),
+        }
+    }
+
+    /// Resolve a path. One that starts with a slash is from the root, any
+    /// other from the current directory, which is the root unless a
+    /// session has moved: so there `src/a.txt`, `./src/a.txt` and
+    /// `/src/a.txt` are the same file. `..` at the root stays at the root.
     pub fn resolve(&self, path: &[u8]) -> Result<NodeId, Errno> {
         if path.is_empty() {
             return Err(Errno::NoEnt);
@@ -2817,7 +2864,7 @@ impl Db {
         if path == b"/dev/null" {
             return Ok(NULL);
         }
-        let mut cur = self.root;
+        let mut cur = if self.cwd.is_empty() || path[0] == b'/' { self.root } else { self.here()? };
         for comp in path.split(|b| *b == b'/') {
             let children = match &self.nodes[cur].kind {
                 NodeKind::Folder(c) => c,
@@ -2855,7 +2902,7 @@ impl Db {
             Some(i) => (&trimmed[..i + 1], &trimmed[i + 1..]),
             None => (&b""[..], trimmed),
         };
-        let parent = if dir.is_empty() { self.root } else { self.resolve(dir)? };
+        let parent = if dir.is_empty() { self.here()? } else { self.resolve(dir)? };
         if !self.is_dir(parent) {
             return Err(Errno::NotDir);
         }

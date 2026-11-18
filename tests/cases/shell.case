@@ -170,9 +170,9 @@ $ tr a b
 $ rg TODO
 $ xargs ls
 $ tee x
-! cd src ## command: cd
-! pwd ## command: pwd
-! export A=1 ## command: export
+$ cd src
+$ pwd
+$ export A=1
 $ test -f README.md
 $ [ -f README.md ]
 $ true
@@ -192,20 +192,30 @@ $ cat README.md | sort
 $ mkdir shouldnotexist | sort
 ! rm README.md | awk x ## command: awk
 ! echo hi > x.txt | nosuch ## command: nosuch
-! echo $HOME ## variable expansion ($HOME)
-! echo "$HOME" ## variable expansion ($HOME)
-! echo "a $b c" ## variable expansion ($b)
-! echo ${HOME} ## parameter expansion
-! echo "${x:-y}" ## parameter expansion
+$ echo $HOME
+$ echo "$HOME"
+$ echo "a $b c"
+$ echo ${HOME}
+$ echo "${x:-y}"
+! echo ${x:+y} ## parameter expansion
+! echo ${x%y} ## parameter expansion
+! echo ${x/a/b} ## parameter expansion
+! echo ${#} ## parameter expansion
+! echo ${!x} ## parameter expansion
+! echo ${x[0]} ## parameter expansion
 ! echo $1 ## special parameter ($1)
-! echo $? ## special parameter ($?)
+$ echo $?
+! echo $# ## special parameter ($#)
+! echo $* ## special parameter ($*)
+! echo $! ## special parameter ($!)
+! echo $0 ## special parameter ($0)
 ! echo "$@" ## special parameter ($@)
 ! echo $$ ## special parameter ($$)
 $ echo $(ls)
 $ echo "$(ls)"
 $ echo `ls`
 $ echo "`ls`"
-! echo $((1 + 2)) ## arithmetic expansion
+$ echo $((1 + 2))
 ! echo $[1+2] ## arithmetic expansion
 ! echo $'a\nb' ## ANSI-C quoting
 ! echo $"hi" ## locale translation
@@ -217,7 +227,9 @@ $ ls;
 $ ls⏎ls
 $ rm README.md && ls
 $ rm README.md; ls
-! mkdir z; cd z ## command: cd
+$ mkdir z; cd z
+! cd - ## cd -
+! mkdir z; cd -P z ## flag: cd -P
 $ cat < README.md
 $ wc -l < README.md
 $ cat << EOF
@@ -238,14 +250,20 @@ $ cat 0< README.md
 ! ls |& cat ## |&
 ! diff <(ls) <(ls -a) ## process substitution
 ! ls > >(cat) ## process substitution
-! A=1 ## variable assignment
-! A=1 ls ## variable assignment
+$ A=1
+$ A=1 ls
 ! A+=1 ## variable assignment
 ! arr[0]=1 ## variable assignment
-! for f in *; do echo x; done ## for loop
-! while true; do ls; done ## while loop
-! until false; do ls; done ## until loop
-! if ls; then ls; fi ## if statement
+$ for f in *; do echo x; done
+$ while false; do ls; done
+$ until true; do ls; done
+$ if ls; then ls; fi
+! for f; do echo x; done ## for loop without `in'
+! for ((i=0; i<3; i++)); do echo x; done ## arithmetic for loop
+! ((1 + 2)) ## arithmetic command
+! { ls; } ## group command
+! ! ls ## pipeline negation
+! f() { ls; } ## function definition
 ! case x in x) ls;; esac ## case statement
 ! select x in a b; do ls; done ## select statement
 ! function f { ls; } ## function definition
@@ -262,8 +280,9 @@ $ echo {a,b}
 $ echo {1..3}
 $ echo x{a,b}y
 $ mkdir -p x/{a,b}
-! ls ~ ## tilde expansion
-! ls ~/src ## tilde expansion
+$ ls ~
+$ ls ~/src
+! ls ~+ ## tilde expansion
 ! cat ~root/x ## tilde expansion
 ! ls | ## syntax error
 ! | ls ## syntax error

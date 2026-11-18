@@ -491,7 +491,8 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         }
         if implicit_dot {
             let mut path = Vec::new();
-            run.tree(db, io, db.root(), &mut path);
+            let here = db.here().unwrap_or(db.root());
+            run.tree(db, io, here, &mut path);
         } else if files.is_empty() {
             let data = io.take_stdin();
             run.search(io, b"(standard input)", data, None);

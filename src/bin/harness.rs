@@ -181,14 +181,20 @@ impl Scratch {
     /// A fresh directory holding a copy of the tree.
     fn materialise(&mut self, db: &Db) -> PathBuf {
         self.next += 1;
-        let dir = self.base.join(format!("c{}", self.next)).join("root");
+        // The root lies several folders deep, all of them made here and
+        // empty: a command that climbs out of the root with `..` (the
+        // check before each real run cannot see through a variable)
+        // lands in one of them and nowhere else.
+        let dir = self.base.join(format!("c{}", self.next)).join("p/p/p/p/p/p/root");
         std::fs::create_dir_all(&dir).expect("cannot create case directory");
         store::dump_dir(db, &dir).expect("cannot write fixture");
         dir
     }
 
     fn discard(&self, dir: &Path) {
-        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+        if let Some(case) = dir.ancestors().nth(7) {
+            let _ = std::fs::remove_dir_all(case);
+        }
     }
 }
 
@@ -678,6 +684,35 @@ impl Gen {
             }
             let most = held.iter().max_by_key(|(_, n)| **n).unwrap().0;
             ("rm -r", vec![format!("rm -r {}", String::from_utf8_lossy(most))])
+        } else if roll >= 45 && roll < 50 {
+            // One unit that holds a loop: several writes that are kept
+            // or lost together.
+            let f = |rng: &mut Rng| files[rng.below(files.len())].clone();
+            let word = |rng: &mut Rng| words[rng.below(words.len())].chars().filter(|c| c.is_ascii_alphanumeric()).take(4).collect::<String>();
+            let unit = match rng.below(6) {
+                0 => format!("for f in {} {} {}; do echo '{}' >> $f; done", f(rng), f(rng), f(rng), diff_line(rng, words)),
+                1 => {
+                    let file = f(rng);
+                    format!("for i in 1 2 3 4; do echo \"$i {}\" >> {}; done; N=$(grep -c '' {}); echo \"$N lines\" >> count.txt", word(rng), file, file)
+                }
+                2 if !dirs.is_empty() => {
+                    let d = &dirs[rng.below(dirs.len())];
+                    format!("ls {0} | while read f; do sed -i 's/{1}/{2}/' \"{0}/$f\"; done", d, word(rng), word(rng))
+                }
+                3 if !dirs.is_empty() => {
+                    let d = &dirs[rng.below(dirs.len())];
+                    format!("cd {}; for f in *.c *.txt; do if grep -q '{}' \"$f\"; then echo '{}' >> \"$f\"; else cp \"$f\" kept.h; fi; done; cd /", d, word(rng), diff_line(rng, words))
+                }
+                4 => {
+                    let (file, w) = (f(rng), word(rng));
+                    format!("until grep -q 'zz{1}' {0}; do echo 'zz{1}' >> {0}; done; X={0}; echo \"${{#X}} $X\" > last.txt", file, w)
+                }
+                _ => {
+                    let file = f(rng);
+                    format!("for a in x y; do for b in 1 2 3; do if [ $b = 2 ]; then continue; fi; echo \"$a$b $((b * 7))\"; done; done > {}", file)
+                }
+            };
+            ("loop", vec![unit])
         } else if roll < 50 {
             let (pattern, syntax) = diff_pattern(rng, words);
             let flags = ["rn", "rn", "rl", "rc", "rin", "ril", "rnv", "rlv", "rci", "r", "rcv"][rng.below(11)];
@@ -1102,7 +1137,7 @@ fn crash_point(image: MemFs, cfg: &Config, history: &History, rng: &mut Rng, cou
 fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bool, index_later: bool) -> Result<bool, String> {
     use std::cell::RefCell;
     use std::rc::Rc;
-    let cfg = Config { piece: 512, segment: 96 << 10, sync, batch_lines: 8, batch_bytes: 24 << 10, index, checkpoint: 12 << 10, spool: 300, upkeep: true, compress, index_later };
+    let cfg = Config { piece: 512, segment: 96 << 10, sync, batch_lines: 8, batch_bytes: 24 << 10, index, checkpoint: 12 << 10, spool: 300, upkeep: true, compress, index_later, ..Config::default() };
     let mut gen = Gen::new(seed);
     let mut rng = Rng(seed.wrapping_mul(0xD1B54A32D192ED03) | 1);
     let counts: Rc<RefCell<CrashCounts>> = Default::default();

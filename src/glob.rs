@@ -199,7 +199,10 @@ pub fn fnmatch_pattern(pat: &[u8]) -> Vec<(u8, bool)> {
 /// caller then passes the word through unchanged.
 pub fn expand_path(db: &Db, word: &[(u8, bool)]) -> Vec<Vec<u8>> {
     let comps: Vec<&[(u8, bool)]> = word.split(|(c, _)| *c == b'/').collect();
-    let mut states: Vec<(Vec<u8>, NodeId)> = vec![(Vec::new(), db.root())];
+    // A pattern that starts with a slash is from the root, any other
+    // from the current directory.
+    let start = if word.first().map(|p| p.0) == Some(b'/') { db.root() } else { db.here().unwrap_or(db.root()) };
+    let mut states: Vec<(Vec<u8>, NodeId)> = vec![(Vec::new(), start)];
     for (idx, comp) in comps.iter().enumerate() {
         let sep: &[u8] = if idx > 0 { b"/" } else { b"" };
         let mut next = Vec::new();

@@ -328,10 +328,11 @@ fn rg_equivalent(command: &str) -> Option<String> {
         return None;
     }
     let pipeline = &script.items[0].first;
-    if pipeline.commands.len() != 1 || !pipeline.commands[0].redirects.is_empty() {
+    let [shell::Command::Simple(only)] = pipeline.commands.as_slice() else { return None };
+    if !only.redirects.is_empty() || !only.assigns.is_empty() {
         return None;
     }
-    let words: Vec<Vec<u8>> = pipeline.commands[0].words.iter().map(|w| w.text()).collect();
+    let words: Vec<Vec<u8>> = only.words.iter().map(|w| w.text()).collect();
     if words.first().map(|w| w.as_slice()) != Some(b"grep") {
         return None;
     }
@@ -755,6 +756,8 @@ struct Row {
     /// For a command that changes data with the index on: what the index
     /// did for it.
     index_work: String,
+    /// What the engine's first run of the command used.
+    cost: qdb::Cost,
 }
 
 fn csv_field(s: &str) -> String {
@@ -971,6 +974,7 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         }
         let work_before = engine_work(&db);
         let first = engine_run(&mut db, &command, true);
+        let cost = db.last_cost();
         let index_work = match (work_before, engine_work(&db)) {
             (Some(b), Some(a)) if *mutating => format!(
                 "documents +{} -{}; postings +{}; list bytes rewritten {}; rebuilds {}",
@@ -1028,6 +1032,7 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
             peak_bytes: peak,
             agree,
             index_work,
+            cost,
         };
         eprintln!("  {:>10} gnu {:>10} rg {:>10} engine {:>10} peak  {}  {}", ms(row.gnu_ms), ms(row.rg_ms), ms(row.engine_ms), size(row.peak_bytes), row.command, if row.agree == "yes" { "" } else { &row.agree });
         rows.push(row);
@@ -1051,10 +1056,19 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
             }
         }
     }
-    let mut csv = String::from("command,kind,gnu_ms,rg_ms,engine_ms,output_bytes,peak_bytes,agree,index_work\n");
+    let mut csv = String::from("command,kind,gnu_ms,rg_ms,engine_ms,output_bytes,peak_bytes,agree,index_work");
+    for (name, _) in qdb::Cost::default().fields() {
+        csv.push(',');
+        csv.push_str(name);
+    }
+    csv.push('\n');
     for r in &rows {
         let rg = if r.rg_ms < 0.0 { String::new() } else { format!("{:.4}", r.rg_ms) };
-        let _ = writeln!(csv, "{},{},{:.4},{},{:.4},{},{},{},{}", csv_field(&r.command), r.kind, r.gnu_ms, rg, r.engine_ms, r.out_bytes, r.peak_bytes, csv_field(&r.agree), csv_field(&r.index_work));
+        let _ = write!(csv, "{},{},{:.4},{},{:.4},{},{},{},{}", csv_field(&r.command), r.kind, r.gnu_ms, rg, r.engine_ms, r.out_bytes, r.peak_bytes, csv_field(&r.agree), csv_field(&r.index_work));
+        for (_, value) in r.cost.fields() {
+            let _ = write!(csv, ",{}", value);
+        }
+        csv.push('\n');
     }
     let mut meta = String::new();
     let _ = writeln!(meta, "source={}", source);
@@ -1152,6 +1166,10 @@ const LABELS: &[(&str, &str)] = &[
     ("s4-disk-after", "Stage 4, on disk, after the writes"),
     ("s4-disk-cap512", "Stage 4, on disk, 512 MB limit"),
     ("s4-disk-small", "Stage 4, on disk, 1 GB for everything, file cache included"),
+    ("s5p1-disk", "Stage 5 with part 1 done, on disk, settled"),
+    ("s5-mem", "Stage 5, in memory"),
+    ("s5-disk", "Stage 5, on disk, settled"),
+    ("s5-disk-cap512", "Stage 5, on disk, 512 MB limit"),
 ];
 
 struct Stored {
@@ -1179,7 +1197,7 @@ fn report_dataset(name: &str, opts: &Options) -> Result<(), String> {
     // The real tools' times, and the facts about the index, come from the
     // settled run on disk when there is one: the runs after it in the list
     // were made under limits.
-    let last = match runs.iter().find(|r| r.0 == "s4-disk").or(runs.last()) {
+    let last = match runs.iter().find(|r| r.0 == "s5-disk").or(runs.iter().find(|r| r.0 == "s4-disk")).or(runs.last()) {
         Some(r) => r,
         None => return Ok(()),
     };
@@ -1301,6 +1319,24 @@ fn report_dataset(name: &str, opts: &Options) -> Result<(), String> {
             }
         }
         let _ = writeln!(md, "{}", line);
+    }
+
+    // What each command used, from the newest run that counted.
+    if let Some((_, heading, s)) = runs.iter().rev().find(|r| r.0 == "s5-disk").or(runs.iter().rev().find(|r| r.2.rows.first().map_or(false, |row| row.len() >= 22))) {
+        let _ = writeln!(md, "\n## What each command used ({})\n", heading);
+        let _ = writeln!(md, "Counted by the engine for the first run of the command; the two times are that run's, measured. Bytes unless said otherwise.\n");
+        let _ = writeln!(md, "| Command | Text read | Pieces | Index read | Index lookups | Tree entries | Content written | Records written | Upkeep written | Syncs | Scratch | Memory | CPU, ms | Elapsed, ms |");
+        let _ = writeln!(md, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+        for r in s.rows.iter().filter(|r| r.len() >= 22) {
+            let mut line = format!("| `{}` |", r[0].replace('|', "\\|"));
+            for v in &r[9..20] {
+                let _ = write!(line, " {} |", v);
+            }
+            for v in &r[20..22] {
+                let _ = write!(line, " {} |", ms(v.parse::<f64>().unwrap_or(0.0) / 1000.0));
+            }
+            let _ = writeln!(md, "{}", line);
+        }
     }
 
     if let Some(terms) = Terms::read(&PathBuf::from("bench/terms").join(format!("{}.txt", name))) {

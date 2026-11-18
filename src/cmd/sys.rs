@@ -883,8 +883,11 @@ pub fn xargs(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     if x.command.is_empty() {
         x.command.push(b"echo".to_vec());
     }
-    if !super::known(&x.command[0]) {
-        return Err(format!("command: {}", String::from_utf8_lossy(&x.command[0])));
+    // The commands that are part of the shell (cd, export, unset, read,
+    // break, continue) are not commands xargs can run, and neither is
+    // `:`, as on a real system, where none of them is a program.
+    if !super::known(&x.command[0]) || x.command[0] == b":" {
+        return Err(format!("command: {} (xargs)", String::from_utf8_lossy(&x.command[0])));
     }
     let run: Runner = Box::new(move |db, io| xargs_run(&x, db, io));
     Ok(Prepared { run, input: Input::Whole })

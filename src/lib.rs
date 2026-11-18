@@ -22,6 +22,7 @@ pub mod mem;
 pub mod query;
 pub mod regex;
 pub mod scan;
+pub mod session;
 pub mod shell;
 pub mod store;
 pub mod testgen;
@@ -31,5 +32,6 @@ pub mod util;
 pub mod vfs;
 pub mod when;
 
-pub use engine::{execute, execute_to, Outcome, Sink};
+pub use engine::{execute, execute_in, execute_to, execute_to_in, Outcome, Sink};
+pub use session::Session;
 pub use tree::{Config, Cost, Db, SyncMode};

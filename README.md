@@ -51,7 +51,7 @@ cargo build --release
 ./target/release/qdb --db my.qdb --check --stats
 ./target/release/qdb --db my.qdb --compact
 
-# compare the engine with the real tools (4,689 cases): in memory, on
+# compare the engine with the real tools (5,281 cases): in memory, on
 # disk, and on disk closed and opened again after every step
 ./target/release/qdb-harness
 ./target/release/qdb-harness --no-index
@@ -203,6 +203,12 @@ Shell syntax, as bash 5.2 reads it:
 | Braces | `{a,b}`, nested, `{1..9}`, `{1..9..2}`, `{a..z}`, `{01..10}` |
 | Globs | `*`, `?`, `[...]` with bash's default rules |
 | Quoting | single quotes, double quotes, backslash, line continuation |
+| Variables | `NAME=value`, `NAME=value command`, `$NAME`, `${NAME}`, `${#NAME}`, `${NAME:-word}`, `${NAME:=word}`, `$?`, `export`, `unset`, `read` with `-r` and several names, `IFS` |
+| Arithmetic | `$((...))` with bash's operators on 64-bit integers, assignments and `++`/`--` included, and constants in base 8, 16 and `base#digits` |
+| Tilde | `~` and `~/path`, where a word or an assigned value begins |
+| Field splitting | unquoted `$NAME`, `$(...)` and `$((...))` are split at `IFS` and then matched as globs, as bash does |
+| Current directory | `cd`, `cd -`, `pwd`, `PWD` and `OLDPWD`; relative paths start there |
+| Loops and tests | `for NAME in WORDS; do ...; done`, `while`, `until`, `if`/`elif`/`else`/`fi`, `break [N]`, `continue [N]`, nested, in a pipeline, and with redirections on the whole construct |
 
 What the data model has no fact for prints a fixed value: `ls -l` shows
 mode `-rw-r--r--` or `drwxr-xr-x`, owner and group `qdb`, and a folder's
@@ -210,23 +216,51 @@ size as 4096; `du` and the `total` line count content in 4 KB blocks.
 The one fact kept per file and folder besides name and content is the
 modification time. Dates print in UTC.
 
-Anything else is refused before any part of the line runs, with exit
+Anything else is refused before any part of the unit runs, with exit
 status 2 and a message that names what was refused:
 
 ```
-$ qdb -c 'cat $HOME'      qdb: unsupported syntax: variable expansion ($HOME)
-$ qdb -c 'for f in *; do cat $f; done'
-                          qdb: unsupported syntax: for loop
+$ qdb -c 'echo ${X%.c}'   qdb: unsupported syntax: parameter expansion ${X%.c}
+$ qdb -c 'case $X in a) ls;; esac'
+                          qdb: unsupported syntax: case statement
+$ qdb -c 'f() { ls; }'    qdb: unsupported syntax: function definition
 $ qdb -c 'ls --color'     qdb: unsupported flag: ls --color (long options other than the ones listed in the README are not supported)
 $ qdb -c 'sort -g a'      qdb: unsupported flag: sort -g
 $ qdb -c 'awk 1'          qdb: unsupported command: awk
 $ qdb -c 'ln -s a b'      qdb: unsupported command: ln (the database has no links, hard or symbolic)
 ```
 
-`docs/HANDBACK-4.md` lists what is still refused, by kind.
+The check before running covers what the text of the unit shows, the
+bodies of loops and the insides of `$(...)` included. A command name or
+a flag that only an expansion reveals (`X=awk; $X 1`) is refused when
+the unit reaches it, with the same message; what ran before it stays
+done, as it does when a command fails.
 
-There is no current directory. Every path is resolved from the root, so
-`a`, `./a` and `/a` name the same thing.
+A unit is one line, or several when a quote, a here-document or a
+construct is still open at the end of the line. After a crash everything a unit
+wrote is there or none of it is, and a unit under `--sync always`
+ends with one sync, however many commands its loops ran.
+
+**Sessions.** Variables, the current directory and `$?` belong to a
+session, not to the database. `qdb` reading lines from standard input or
+a file is one session from the first line to the last; `qdb -c` is a
+session for its one argument. A session starts with `HOME=/`, `PWD=/`
+and the usual `IFS`, in the root folder. In the library a caller makes a
+`Session` and passes it to `execute_in`; `execute` runs a unit in a
+fresh one. Each stage of a pipeline and each `$(...)` works on a copy,
+as bash's subshells do, so `echo a | read X` leaves `X` unset.
+
+**The command limit.** A unit may run 1,000,000 commands (`--command-limit N`;
+loop turns count too). The unit that reaches the limit is stopped with
+status 3 and the message `qdb: the unit was stopped after N commands,
+the most one unit may run; what it changed before that stays`. As the
+message says, its writes up to there are kept, as they are when a
+command fails half way through a unit, and the database goes on as
+before.
+
+`find -exec` and `xargs` run the engine's commands, but not the ones
+that only make sense inside a session: `cd`, `export`, `unset`, `read`,
+`break`, `continue` and `:` are refused there.
 
 ## How it is put together
 

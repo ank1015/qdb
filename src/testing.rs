@@ -55,6 +55,46 @@ pub fn same_output(a: &[u8], b: &[u8], unordered: bool) -> bool {
     }
 }
 
+/// Take the path of the scratch directory out of what the real tools
+/// printed: `ROOT/src` becomes `/src`, and `ROOT` alone becomes `/`, which
+/// is what the engine calls the same place.
+fn strip_root(hay: &[u8], root: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(hay.len());
+    let mut i = 0;
+    while i < hay.len() {
+        if hay[i..].starts_with(root) {
+            i += root.len();
+            if hay.get(i) != Some(&b'/') {
+                out.push(b'/');
+            }
+        } else {
+            out.push(hay[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// bash's own messages begin `bash: line N: `; the engine's begin `qdb: `.
+fn bash_prefix(hay: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(hay.len());
+    let mut i = 0;
+    while i < hay.len() {
+        let at_line_start = i == 0 || hay[i - 1] == b'\n';
+        if at_line_start && hay[i..].starts_with(b"bash: line ") {
+            let digits = hay[i + 11..].iter().take_while(|c| c.is_ascii_digit()).count();
+            if digits > 0 && hay[i + 11 + digits..].starts_with(b": ") {
+                out.extend_from_slice(b"qdb: ");
+                i += 11 + digits + 2;
+                continue;
+            }
+        }
+        out.push(hay[i]);
+        i += 1;
+    }
+    out
+}
+
 pub fn replace(hay: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     if from.is_empty() {
         return hay.to_vec();
@@ -81,7 +121,39 @@ pub fn check_safe(command: &str, root: &Path) -> Result<(), String> {
         _ => return Ok(()),
     };
     let root = root.to_string_lossy().into_owned().into_bytes();
-    for c in &script.all_commands() {
+    // How deep below the root the commands start: a `cd` that stands
+    // alone between two separators moves it; any other `cd` is checked
+    // like a path and assumed to go nowhere, which is the safe side.
+    let mut here = 0i64;
+    let mut commands: Vec<(i64, shell::SimpleCommand)> = Vec::new();
+    for item in &script.items {
+        if let (true, [shell::Command::Simple(c)]) = (item.rest.is_empty(), item.first.commands.as_slice()) {
+            if c.words.first().is_some_and(|w| w.text() == b"cd") && c.words.len() <= 2 && !c.words.iter().any(|w| w.has_subst()) {
+                let to = c.words.get(1).map(|w| w.text()).unwrap_or_default();
+                let mut depth = if to.is_empty() || to.starts_with(b"/") { 0 } else { here };
+                let rel: &[u8] = match to.strip_prefix(&root[..]) {
+                    Some(rest) => rest,
+                    None if to.starts_with(b"/") => return Err(format!("refusing to run on the real tools (absolute path): {}", command)),
+                    None => &to,
+                };
+                for comp in rel.split(|c| *c == b'/') {
+                    match comp {
+                        b"" | b"." => {}
+                        b".." => depth -= 1,
+                        _ => depth += 1,
+                    }
+                    if depth < 0 {
+                        return Err(format!("refusing to run on the real tools (path leaves the scratch directory): {}", command));
+                    }
+                }
+                here = depth;
+                continue;
+            }
+        }
+        let one = shell::Script { items: vec![item.clone()], warnings: Vec::new(), open_here: false };
+        commands.extend(one.all_commands().into_iter().map(|c| (here, c)));
+    }
+    for (here, c) in &commands {
         // Commands whose words are not paths.
         let no_paths = c.words.first().is_some_and(|w| matches!(&w.text()[..], b"basename" | b"dirname" | b"printf" | b"echo" | b"seq" | b"sleep" | b"true" | b"false" | b":" | b"tr" | b"date"));
         let words = c.words.iter().skip(if no_paths { c.words.len() } else { 1 });
@@ -95,7 +167,19 @@ pub fn check_safe(command: &str, root: &Path) -> Result<(), String> {
         // An rg glob is not a path either.
         let is_rg = c.words.first().is_some_and(|w| w.text() == b"rg");
         let mut glob_next = false;
-        for w in words.chain(targets).flat_map(shell::brace_expand).map(|w| w.text()) {
+        // The value of a variable may be used as a path later.
+        let values = c.assigns.iter().filter(|a| a.name != b"IFS").map(|a| &a.value);
+        // `~` is the root, and a word that begins with a variable is
+        // taken to be a path from where the command stands.
+        let text = |w: shell::Word| {
+            let t = w.text();
+            if !matches!(w.parts.first(), Some(shell::Part::Lit(_) | shell::Part::Quoted(_)) | None) {
+                [&b"./"[..], &t[..]].concat()
+            } else {
+                t
+            }
+        };
+        for w in words.chain(targets).chain(values).flat_map(shell::brace_expand).map(text) {
             if w == b"/dev/null" {
                 continue;
             }
@@ -147,7 +231,7 @@ pub fn check_safe(command: &str, root: &Path) -> Result<(), String> {
             } else {
                 &w
             };
-            let mut depth = 0i64;
+            let mut depth = if w.starts_with(b"/") { 0 } else { *here };
             for comp in rel.split(|c| *c == b'/') {
                 match comp {
                     b"" | b"." => {}
@@ -205,13 +289,14 @@ pub fn run_real(root: &Path, command: &str) -> Outcome {
         .env("PATH", "/usr/bin:/bin")
         .env("LC_ALL", "C")
         .env("TZ", "UTC")
+        .env("HOME", root)
         .stdin(Stdio::null())
         .output()
         .expect("cannot run bash");
     let root_bytes = root.to_string_lossy().into_owned().into_bytes();
-    let stdout = replace(&out.stdout, &root_bytes, b"");
-    let stderr = replace(&out.stderr, &root_bytes, b"");
-    let stderr = replace(&stderr, b"bash: line 1: ", b"qdb: ");
+    let stdout = strip_root(&out.stdout, &root_bytes);
+    let stderr = strip_root(&out.stderr, &root_bytes);
+    let stderr = bash_prefix(&stderr);
     // What the data model has no fact for is fixed on the engine's side;
     // the owner and group of ls -l are made to agree here.
     let stdout = if command.contains("ls ") { mask_owner(&stdout) } else { stdout };

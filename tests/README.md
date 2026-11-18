@@ -164,6 +164,8 @@ F path/to/file          a file; its lines follow
 | `shell_lists.case` | command lists, redirections of all three streams, `/dev/null`, here-documents, command substitution, brace expansion |
 | `rg.case` | `rg`: flags, globs, types, and the ignore rules, on the fixture `rg.fx` |
 | `small.case` | `printf`, `test` and `[`, `seq`, `basename`, `dirname`, `true`, `false`, `:`, `sleep` |
+| `session.case` | variables, the parameter forms, arithmetic, tilde, field splitting, `cd` and `pwd`, `export`, `unset` |
+| `control.case` | `for`, `if`, `while`, `until`, `break`, `continue`, `read`, constructs in pipelines and under redirections, the command limit, and what `xargs` and `find -exec` refuse to run |
 | `p5_text.case`, `p5_sort.case`, `p5_sys.case` | `cut`, `tr`, `uniq`, `nl`, `tee`; `sort`; `du`, `date`, `xargs` |
 
 ## Clock and file times

@@ -1191,7 +1191,8 @@ pub fn rg(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             if io.has_stdin() && opts.mode != Mode::Files {
                 s.text(io, &Label(None), b"<stdin>", stdin);
             } else {
-                s.folder(db, io, db.resolve(b"/").expect("root"), b"");
+                let here = db.here().unwrap_or(db.root());
+                s.folder(db, io, here, b"");
                 if s.searched == 0 && opts.mode != Mode::Files {
                     io.err_line("rg: No files were searched, which means ripgrep probably applied a filter you didn't expect.");
                     io.err_line("Running with --debug will show why files are being skipped.");

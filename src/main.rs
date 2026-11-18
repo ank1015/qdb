@@ -1,7 +1,7 @@
 //! The qdb command line: open or load a tree, run command lines against it.
 
 use qdb::disk::Damage;
-use qdb::{execute, store, Config, Db, SyncMode};
+use qdb::{execute_in, store, Config, Db, Session, SyncMode};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -54,12 +54,17 @@ Runs bash command lines against a tree of text files.
                    fields up to `memory` are counts and repeat exactly;
                    `cpu_us` and `elapsed_us` are measured; `status` is the
                    unit's exit status
+  --command-limit N  stop a unit once it has run N commands (default
+                   1000000), with exit status 3; what it changed stays
   -c COMMAND       run COMMAND; can be given more than once
 
 Each -c is one unit: all of what it changes is there after a crash, or
 none of it. With no -c (and none of --check, --stats, --compact), units
 are read from standard input: one line, or as many lines as it takes to
-close a quote, a here-document or a line ending in |, && or ||. The exit status is that of the
+close a quote, a here-document, a loop, an if or a line ending in |, &&
+or ||. All units of one run share a session: its variables and its
+current directory last from one unit to the next, and are gone when the
+run ends. The exit status is that of the
 last command, or 2 if the database cannot be used.";
 
 fn run() -> Result<i32, String> {
@@ -103,6 +108,7 @@ fn run() -> Result<i32, String> {
                 }
             }
             "--cost" => cost = true,
+            "--command-limit" => cfg.command_limit = value("--command-limit")?.parse().map_err(|_| "--command-limit needs a number")?,
             "--check" => check = true,
             "--stats" => stats = true,
             "--compact" => compact = true,
@@ -176,8 +182,12 @@ fn run() -> Result<i32, String> {
         }
     }
     let mut code = 0;
+    // One session for the whole run: every -c, and every unit read from
+    // standard input, sees the variables and the current directory the
+    // ones before it left.
+    let mut session = Session::new();
     let mut run_line = |db: &mut Db, line: &[u8]| {
-        let out = execute(db, line);
+        let out = execute_in(db, &mut session, line);
         std::io::stdout().write_all(&out.stdout).ok();
         std::io::stdout().flush().ok();
         std::io::stderr().write_all(&out.stderr).ok();

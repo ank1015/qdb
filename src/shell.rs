@@ -39,6 +39,27 @@ pub enum Part {
     Quoted(Vec<u8>),
     /// `$(...)` or backticks. `quoted` when inside double quotes.
     Subst { script: Script, quoted: bool },
+    /// `$NAME`, `${NAME}`, `$?` (the name is `?`) and the forms of
+    /// `ParamOp`.
+    Param { name: Vec<u8>, op: ParamOp, quoted: bool },
+    /// `$((...))`: the expression, with the expansions inside it.
+    Arith { expr: Vec<Part>, quoted: bool },
+    /// `~` at the start of a word, or of the value of an assignment: the
+    /// value of `HOME`.
+    Tilde,
+}
+
+/// What a parameter expansion does besides giving the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParamOp {
+    /// `$NAME`, `${NAME}`
+    Value,
+    /// `${#NAME}`
+    Length,
+    /// `${NAME:-word}`: the word, if the variable is unset or empty.
+    Default(Word),
+    /// `${NAME:=word}`: the same, and the variable is given the word.
+    Assign(Word),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -56,7 +77,7 @@ impl Word {
             match p {
                 Part::Lit(b) => out.extend(b.iter().map(|c| (*c, false))),
                 Part::Quoted(b) => out.extend(b.iter().map(|c| (*c, true))),
-                Part::Subst { .. } => {}
+                _ => {}
             }
         }
         out
@@ -67,9 +88,10 @@ impl Word {
         self.bytes().into_iter().map(|(c, _)| c).collect()
     }
 
-    /// True if the word holds a command substitution.
+    /// True if the word holds anything whose value is only known when
+    /// it runs: a command substitution, a parameter, arithmetic, `~`.
     pub fn has_subst(&self) -> bool {
-        self.parts.iter().any(|p| matches!(p, Part::Subst { .. }))
+        self.parts.iter().any(|p| !matches!(p, Part::Lit(_) | Part::Quoted(_)))
     }
 
     fn unquoted_literal(&self) -> Option<&[u8]> {
@@ -98,15 +120,64 @@ pub enum Redirect {
     Here { body: HereBody },
 }
 
+/// `NAME=value` before a command, or alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assign {
+    pub name: Vec<u8>,
+    pub value: Word,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SimpleCommand {
+    pub assigns: Vec<Assign>,
     pub words: Vec<Word>,
     pub redirects: Vec<Redirect>,
 }
 
+/// `for`, `if`, `while` or `until`, with the redirections after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Compound {
+    pub kind: CompoundKind,
+    pub redirects: Vec<Redirect>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompoundKind {
+    /// `for NAME in WORDS; do BODY; done`
+    For { name: Vec<u8>, words: Vec<Word>, body: Vec<AndOr> },
+    /// `if A; then B; elif C; then D; else E; fi`: (condition, body) for
+    /// `if` and every `elif`, then the `else` part.
+    If { arms: Vec<(Vec<AndOr>, Vec<AndOr>)>, otherwise: Option<Vec<AndOr>> },
+    /// `while COND; do BODY; done`, and `until`.
+    While { until: bool, cond: Vec<AndOr>, body: Vec<AndOr> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    Simple(SimpleCommand),
+    Compound(Compound),
+}
+
+impl Command {
+    pub fn redirects(&self) -> &[Redirect] {
+        match self {
+            Command::Simple(c) => &c.redirects,
+            Command::Compound(c) => &c.redirects,
+        }
+    }
+
+    /// The simple command, if it is one.
+    pub fn simple(&self) -> Option<&SimpleCommand> {
+        match self {
+            Command::Simple(c) => Some(c),
+            Command::Compound(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Pipeline {
-    pub commands: Vec<SimpleCommand>,
+    pub commands: Vec<Command>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +193,16 @@ pub enum Connector {
 pub struct AndOr {
     pub first: Pipeline,
     pub rest: Vec<(Connector, Pipeline)>,
+    /// A newline, or the end of the text, follows it: bash reads and runs
+    /// a line at a time, and an error in an expansion gives up the rest
+    /// of the line it is on.
+    pub ends_line: bool,
+}
+
+impl AndOr {
+    pub fn pipelines(&self) -> impl Iterator<Item = &Pipeline> {
+        std::iter::once(&self.first).chain(self.rest.iter().map(|(_, p)| p))
+    }
 }
 
 /// A parsed unit: and-or lists that run one after the other.
@@ -138,38 +219,74 @@ pub struct Script {
 
 impl Script {
     /// Every simple command in the script, those inside command
-    /// substitutions and here-documents included.
+    /// substitutions, here-documents and the bodies of `for`, `if`,
+    /// `while` and `until` included.
     pub fn all_commands(&self) -> Vec<SimpleCommand> {
         fn parts(parts: &[Part], out: &mut Vec<SimpleCommand>) {
             for p in parts {
-                if let Part::Subst { script, .. } = p {
-                    walk(script, out);
+                match p {
+                    Part::Subst { script, .. } => list(&script.items, out),
+                    Part::Arith { expr, .. } => parts_of(expr, out),
+                    Part::Param { op: ParamOp::Default(w) | ParamOp::Assign(w), .. } => parts_of(&w.parts, out),
+                    _ => {}
                 }
             }
         }
-        fn walk(script: &Script, out: &mut Vec<SimpleCommand>) {
-            for item in &script.items {
-                for pipeline in std::iter::once(&item.first).chain(item.rest.iter().map(|(_, p)| p)) {
+        fn parts_of(p: &[Part], out: &mut Vec<SimpleCommand>) {
+            parts(p, out)
+        }
+        fn redirects(rs: &[Redirect], out: &mut Vec<SimpleCommand>) {
+            for r in rs {
+                match r {
+                    Redirect::Out { target, .. } | Redirect::Both { target, .. } | Redirect::In { target } => parts(&target.parts, out),
+                    Redirect::Here { body } => parts(&body.borrow(), out),
+                    Redirect::Dup { .. } => {}
+                }
+            }
+        }
+        fn list(items: &[AndOr], out: &mut Vec<SimpleCommand>) {
+            for item in items {
+                for pipeline in item.pipelines() {
                     for c in &pipeline.commands {
-                        out.push(c.clone());
-                        for w in &c.words {
-                            parts(&w.parts, out);
-                        }
-                        for r in &c.redirects {
-                            match r {
-                                Redirect::Out { target, .. } | Redirect::Both { target, .. } | Redirect::In { target } => {
-                                    parts(&target.parts, out)
+                        match c {
+                            Command::Simple(c) => {
+                                out.push(c.clone());
+                                for a in &c.assigns {
+                                    parts(&a.value.parts, out);
                                 }
-                                Redirect::Here { body } => parts(&body.borrow(), out),
-                                Redirect::Dup { .. } => {}
+                                for w in &c.words {
+                                    parts(&w.parts, out);
+                                }
                             }
+                            Command::Compound(c) => match &c.kind {
+                                CompoundKind::For { words, body, .. } => {
+                                    for w in words {
+                                        parts(&w.parts, out);
+                                    }
+                                    list(body, out);
+                                }
+                                CompoundKind::If { arms, otherwise } => {
+                                    for (cond, body) in arms {
+                                        list(cond, out);
+                                        list(body, out);
+                                    }
+                                    if let Some(body) = otherwise {
+                                        list(body, out);
+                                    }
+                                }
+                                CompoundKind::While { cond, body, .. } => {
+                                    list(cond, out);
+                                    list(body, out);
+                                }
+                            },
                         }
+                        redirects(c.redirects(), out);
                     }
                 }
             }
         }
         let mut out = Vec::new();
-        walk(self, &mut out);
+        list(&self.items, &mut out);
         out
     }
 }
@@ -185,8 +302,8 @@ impl Redirect {
 }
 
 pub fn parse(input: &[u8]) -> Result<Script, ParseError> {
-    let mut p = Parser { s: input, i: 0, pending: Vec::new(), warnings: Vec::new(), open_here: false, here_error: None };
-    let items = p.parse_list(None)?;
+    let mut p = Parser { s: input, i: 0, pending: Vec::new(), warnings: Vec::new(), open_here: false, here_error: None, end: None };
+    let items = p.parse_list(None, &[])?;
     p.read_heres();
     if let Some(e) = p.here_error {
         return Err(e);
@@ -195,16 +312,6 @@ pub fn parse(input: &[u8]) -> Result<Script, ParseError> {
 }
 
 const RESERVED: &[(&str, &str)] = &[
-    ("if", "if statement"),
-    ("then", "if statement"),
-    ("else", "if statement"),
-    ("elif", "if statement"),
-    ("fi", "if statement"),
-    ("for", "for loop"),
-    ("while", "while loop"),
-    ("until", "until loop"),
-    ("do", "loop"),
-    ("done", "loop"),
     ("case", "case statement"),
     ("esac", "case statement"),
     ("select", "select statement"),
@@ -235,7 +342,13 @@ struct Parser<'a> {
     open_here: bool,
     /// What was wrong inside the text of a here-document.
     here_error: Option<ParseError>,
+    /// The character that ends the list being read: `)` inside `$(...)`.
+    end: Option<u8>,
 }
+
+/// The words that open, divide and close `if`, `for`, `while` and
+/// `until`. They are words of the grammar only where a command begins.
+const KEYWORDS: &[&str] = &["if", "then", "elif", "else", "fi", "for", "while", "until", "do", "done"];
 
 fn unsupported<T>(what: impl Into<String>) -> Result<T, ParseError> {
     Err(ParseError::Unsupported(what.into()))
@@ -340,7 +453,7 @@ impl<'a> Parser<'a> {
                 ));
             }
             let parts = if here.expand {
-                let mut sub = Parser { s: &text, i: 0, pending: Vec::new(), warnings: Vec::new(), open_here: false, here_error: None };
+                let mut sub = Parser { s: &text, i: 0, pending: Vec::new(), warnings: Vec::new(), open_here: false, here_error: None, end: None };
                 match sub.quoted_text(None) {
                     Ok(parts) => parts,
                     Err(e) => {
@@ -371,8 +484,19 @@ impl<'a> Parser<'a> {
     }
 
     // list := and_or ( (';' | '&' | newline) and_or )*
-    fn parse_list(&mut self, end: Option<u8>) -> Result<Vec<AndOr>, ParseError> {
-        let mut items = Vec::new();
+    //
+    // The list ends at the end of the text, at the character `end`, or
+    // before one of the words `stops` where a command would begin.
+    fn parse_list(&mut self, end: Option<u8>, stops: &[&str]) -> Result<Vec<AndOr>, ParseError> {
+        let outer = std::mem::replace(&mut self.end, end);
+        let items = self.parse_list_inner(stops);
+        self.end = outer;
+        items
+    }
+
+    fn parse_list_inner(&mut self, stops: &[&str]) -> Result<Vec<AndOr>, ParseError> {
+        let end = self.end;
+        let mut items: Vec<AndOr> = Vec::new();
         loop {
             self.skip_blanks_and_newlines();
             match self.peek() {
@@ -380,10 +504,15 @@ impl<'a> Parser<'a> {
                 Some(c) if Some(c) == end => break,
                 _ => {}
             }
+            if let Some(word) = self.keyword() {
+                if stops.contains(&word) {
+                    break;
+                }
+            }
             items.push(self.parse_and_or()?);
             self.skip_blanks();
             match self.peek() {
-                None | Some(b'\n') => {}
+                None | Some(b'\n') => items.last_mut().unwrap().ends_line = true,
                 Some(c) if Some(c) == end => {}
                 Some(b';') => {
                     if self.peek_at(1) == Some(b';') {
@@ -419,7 +548,7 @@ impl<'a> Parser<'a> {
             self.skip_blanks_and_newlines();
             rest.push((op, self.parse_pipeline()?));
         }
-        Ok(AndOr { first, rest })
+        Ok(AndOr { first, rest, ends_line: false })
     }
 
     // pipeline := ['!'] command ( '|' command )*
@@ -440,14 +569,138 @@ impl<'a> Parser<'a> {
         Ok(Pipeline { commands })
     }
 
+    /// The keyword at this place, if the token here is one: unquoted and
+    /// ended by a blank, an operator or the end of the text.
+    fn keyword(&self) -> Option<&'static str> {
+        let rest = &self.s[self.i..];
+        KEYWORDS.iter().copied().find(|k| rest.starts_with(k.as_bytes()) && rest.get(k.len()).map_or(true, |c| is_meta(*c)))
+    }
+
+    /// Take the keyword `word`, which must be next.
+    fn expect(&mut self, word: &'static str) -> Result<(), ParseError> {
+        self.skip_blanks_and_newlines();
+        if self.keyword() == Some(word) {
+            self.i += word.len();
+            return Ok(());
+        }
+        Err(self.unexpected())
+    }
+
+    /// A list that must hold a command, up to one of `stops`.
+    fn body(&mut self, stops: &[&'static str]) -> Result<Vec<AndOr>, ParseError> {
+        let items = self.parse_list_inner(stops)?;
+        if items.is_empty() {
+            return Err(self.unexpected());
+        }
+        Ok(items)
+    }
+
+    /// The redirections after `done` or `fi`.
+    fn trailing_redirects(&mut self) -> Result<Vec<Redirect>, ParseError> {
+        let mut redirects = Vec::new();
+        loop {
+            self.skip_blanks();
+            match self.parse_redirect()? {
+                Some(r) => redirects.push(r),
+                None => return Ok(redirects),
+            }
+        }
+    }
+
+    // compound := for | if | while | until. Called at its first word.
+    fn parse_compound(&mut self, word: &'static str) -> Result<Compound, ParseError> {
+        self.i += word.len();
+        let kind = match word {
+            "if" => {
+                let mut arms = Vec::new();
+                let mut otherwise = None;
+                loop {
+                    let cond = self.body(&["then"])?;
+                    self.expect("then")?;
+                    arms.push((cond, self.body(&["elif", "else", "fi"])?));
+                    self.skip_blanks_and_newlines();
+                    match self.keyword() {
+                        Some("elif") => self.i += 4,
+                        Some("else") => {
+                            self.i += 4;
+                            otherwise = Some(self.body(&["fi"])?);
+                            self.expect("fi")?;
+                            break;
+                        }
+                        _ => {
+                            self.expect("fi")?;
+                            break;
+                        }
+                    }
+                }
+                CompoundKind::If { arms, otherwise }
+            }
+            "for" => {
+                self.skip_blanks();
+                if self.starts_with(b"((") {
+                    return unsupported("arithmetic for loop: for ((...))");
+                }
+                let start = self.i;
+                while self.peek().is_some_and(|c| !is_meta(c)) {
+                    self.i += 1;
+                }
+                let name = self.s[start..self.i].to_vec();
+                if name.is_empty() {
+                    return Err(self.unexpected());
+                }
+                if !crate::session::is_name(&name) {
+                    return Err(ParseError::Syntax(format!("`{}': not a valid identifier", String::from_utf8_lossy(&name))));
+                }
+                self.skip_blanks_and_newlines();
+                let rest = &self.s[self.i..];
+                if !(rest.starts_with(b"in") && rest.get(2).map_or(true, |c| is_meta(*c))) {
+                    if self.peek().is_none() {
+                        return Err(self.unexpected());
+                    }
+                    return unsupported("for loop without `in' (it would go over the positional parameters)");
+                }
+                self.i += 2;
+                let mut words = Vec::new();
+                loop {
+                    self.skip_blanks();
+                    match self.peek() {
+                        None | Some(b'\n') | Some(b';') => break,
+                        Some(c) if is_meta(c) => return Err(self.unexpected()),
+                        _ => words.push(self.parse_word()?),
+                    }
+                }
+                if self.peek() == Some(b';') {
+                    self.i += 1;
+                }
+                self.expect("do")?;
+                let body = self.body(&["done"])?;
+                self.expect("done")?;
+                CompoundKind::For { name, words, body }
+            }
+            _ => {
+                let cond = self.body(&["do"])?;
+                self.expect("do")?;
+                let body = self.body(&["done"])?;
+                self.expect("done")?;
+                CompoundKind::While { until: word == "until", cond, body }
+            }
+        };
+        Ok(Compound { kind, redirects: self.trailing_redirects()? })
+    }
+
     // command := simple_command | compound_command | function_def
-    fn parse_command(&mut self) -> Result<SimpleCommand, ParseError> {
+    fn parse_command(&mut self) -> Result<Command, ParseError> {
         self.skip_blanks();
         if self.starts_with(b"((") {
             return unsupported("arithmetic command ((...))");
         }
         if self.peek() == Some(b'(') {
             return unsupported("subshell ( ... )");
+        }
+        match self.keyword() {
+            Some(word @ ("if" | "for" | "while" | "until")) => return Ok(Command::Compound(self.parse_compound(word)?)),
+            Some(word) => return Err(ParseError::Syntax(format!("syntax error near unexpected token `{}'", word))),
+            None => {}
         }
         let mut cmd = SimpleCommand::default();
         loop {
@@ -464,6 +717,9 @@ impl<'a> Parser<'a> {
                 if cmd.words.len() == 1 && cmd.redirects.is_empty() {
                     return unsupported("function definition");
                 }
+                if cmd.assigns.last().is_some_and(|a| a.value.parts.is_empty()) && self.i > 0 && self.s[self.i - 1] == b'=' {
+                    return unsupported("variable assignment of an array");
+                }
                 return Err(self.unexpected());
             }
             if let Some(r) = self.parse_redirect()? {
@@ -472,14 +728,29 @@ impl<'a> Parser<'a> {
             }
             let word = self.parse_word()?;
             if cmd.words.is_empty() {
+                if let Some(assign) = assignment(&word)? {
+                    cmd.assigns.push(assign);
+                    continue;
+                }
                 check_command_position(&word)?;
             }
             cmd.words.push(word);
         }
-        if cmd.words.is_empty() && cmd.redirects.is_empty() {
+        if cmd.words.is_empty() && cmd.redirects.is_empty() && cmd.assigns.is_empty() {
             return Err(self.unexpected());
         }
-        Ok(cmd)
+        // `export NAME=value`: the value is an assignment's, so a `~`
+        // that begins it is HOME.
+        if cmd.words.first().and_then(|w| w.unquoted_literal()) == Some(b"export") {
+            for w in cmd.words.iter_mut().skip(1) {
+                if let Some(a) = assignment(w)? {
+                    let mut parts = vec![Part::Lit([&a.name[..], b"="].concat())];
+                    parts.extend(a.value.parts);
+                    w.parts = parts;
+                }
+            }
+        }
+        Ok(Command::Simple(cmd))
     }
 
     /// The word a redirection operator applies to.
@@ -600,7 +871,7 @@ impl<'a> Parser<'a> {
     fn dollar_paren(&mut self) -> Result<Script, ParseError> {
         self.i += 2;
         let outer = std::mem::take(&mut self.pending);
-        let items = self.parse_list(Some(b')'))?;
+        let items = self.parse_list(Some(b')'), &[])?;
         if self.peek() != Some(b')') {
             return Err(ParseError::Incomplete("unexpected end of input while looking for matching `)'".into()));
         }
@@ -678,15 +949,13 @@ impl<'a> Parser<'a> {
                     let script = self.backticks(dq)?;
                     parts.push(Part::Subst { script, quoted: true });
                 }
-                Some(b'$') => {
-                    if self.dollar(true)? {
-                        let script = self.dollar_paren()?;
-                        parts.push(Part::Subst { script, quoted: true });
-                    } else {
+                Some(b'$') => match self.dollar(true)? {
+                    Some(part) => parts.push(part),
+                    None => {
                         push_quoted(&mut parts, b'$');
                         self.i += 1;
                     }
-                }
+                },
                 Some(c) => {
                     push_quoted(&mut parts, c);
                     self.i += 1;
@@ -737,13 +1006,18 @@ impl<'a> Parser<'a> {
                     let script = self.backticks(false)?;
                     parts.push(Part::Subst { script, quoted: false });
                 }
-                b'$' => {
-                    if self.dollar(false)? {
-                        let script = self.dollar_paren()?;
-                        parts.push(Part::Subst { script, quoted: false });
-                    } else {
+                b'$' => match self.dollar(false)? {
+                    Some(part) => parts.push(part),
+                    None => {
                         push_lit(&mut parts, b'$');
                         self.i += 1;
+                    }
+                },
+                b'~' if self.i == start => {
+                    self.i += 1;
+                    match self.peek() {
+                        Some(c) if c != b'/' && !is_meta(c) => return unsupported("tilde expansion other than ~ and ~/path"),
+                        _ => parts.push(Part::Tilde),
                     }
                 }
                 _ => {
@@ -752,76 +1026,273 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        let word = Word { parts, raw: self.s[start..self.i].to_vec() };
-        check_word(&word)?;
-        Ok(word)
+        Ok(Word { parts, raw: self.s[start..self.i].to_vec() })
     }
 
-    /// Called at a `$`. Returns true for the start of a command
-    /// substitution, false if the dollar is a literal character, and an
-    /// error naming the expansion otherwise.
-    fn dollar(&self, in_double_quotes: bool) -> Result<bool, ParseError> {
+    /// Called at a `$`. Returns the expansion that starts here, having
+    /// read all of it; `None` if the dollar is a literal character; and
+    /// an error naming the expansion if it is one this version lacks.
+    fn dollar(&mut self, dq: bool) -> Result<Option<Part>, ParseError> {
         let next = match self.peek_at(1) {
-            None => return Ok(false),
+            None => return Ok(None),
             Some(n) => n,
         };
         match next {
-            b'(' if self.peek_at(2) == Some(b'(') => unsupported("arithmetic expansion $((...))"),
-            b'(' => Ok(true),
-            b'{' => unsupported("parameter expansion ${...}"),
+            b'(' if self.peek_at(2) == Some(b'(') => {
+                self.i += 3;
+                let expr = self.arith_body()?;
+                Ok(Some(Part::Arith { expr, quoted: dq }))
+            }
+            b'(' => {
+                let script = self.dollar_paren()?;
+                Ok(Some(Part::Subst { script, quoted: dq }))
+            }
+            b'{' => self.braced(dq).map(Some),
             b'[' => unsupported("arithmetic expansion $[...]"),
-            b'\'' if !in_double_quotes => unsupported("ANSI-C quoting $'...'"),
-            b'"' if !in_double_quotes => unsupported("locale translation $\"...\""),
+            b'\'' if !dq => unsupported("ANSI-C quoting $'...'"),
+            b'"' if !dq => unsupported("locale translation $\"...\""),
             c if c.is_ascii_alphabetic() || c == b'_' => {
                 let mut j = self.i + 1;
                 while j < self.s.len() && (self.s[j].is_ascii_alphanumeric() || self.s[j] == b'_') {
                     j += 1;
                 }
-                unsupported(format!(
-                    "variable expansion (${})",
-                    String::from_utf8_lossy(&self.s[self.i + 1..j])
-                ))
+                let name = self.s[self.i + 1..j].to_vec();
+                self.i = j;
+                Ok(Some(Part::Param { name, op: ParamOp::Value, quoted: dq }))
             }
-            c if c.is_ascii_digit() || matches!(c, b'?' | b'#' | b'@' | b'*' | b'$' | b'!' | b'-') => {
+            b'?' => {
+                self.i += 2;
+                Ok(Some(Part::Param { name: b"?".to_vec(), op: ParamOp::Value, quoted: dq }))
+            }
+            c if c.is_ascii_digit() || matches!(c, b'#' | b'@' | b'*' | b'$' | b'!' | b'-') => {
                 unsupported(format!("special parameter (${})", c as char))
             }
-            _ => Ok(false),
+            _ => Ok(None),
+        }
+    }
+
+    /// Called at `${`.
+    fn braced(&mut self, dq: bool) -> Result<Part, ParseError> {
+        let refuse = |p: &Parser| -> ParseError {
+            let end = p.s[p.i..].iter().position(|c| *c == b'}').map_or(p.s.len(), |n| p.i + n + 1);
+            ParseError::Unsupported(format!("parameter expansion {}", String::from_utf8_lossy(&p.s[p.i..end])))
+        };
+        let mut j = self.i + 2;
+        let length = self.s.get(j) == Some(&b'#') && self.s.get(j + 1).is_some_and(|c| *c != b'}');
+        if length {
+            j += 1;
+        }
+        let start = j;
+        if self.s.get(j) == Some(&b'?') {
+            j += 1;
+        } else {
+            while j < self.s.len() && (self.s[j].is_ascii_alphanumeric() || self.s[j] == b'_') {
+                j += 1;
+            }
+        }
+        let name = self.s[start..j].to_vec();
+        if name.is_empty() || name[0].is_ascii_digit() {
+            return Err(refuse(self));
+        }
+        if j >= self.s.len() {
+            return Err(ParseError::Incomplete("unexpected end of input while looking for matching `}'".into()));
+        }
+        if self.s[j] == b'}' {
+            self.i = j + 1;
+            return Ok(Part::Param { name, op: if length { ParamOp::Length } else { ParamOp::Value }, quoted: dq });
+        }
+        let assign = self.s[j..].starts_with(b":=");
+        if length || name == b"?" || !(assign || self.s[j..].starts_with(b":-")) {
+            return Err(refuse(self));
+        }
+        let from = j + 2;
+        self.i = from;
+        let parts = self.braced_word(dq)?;
+        let word = Word { parts, raw: self.s[from..self.i - 1].to_vec() };
+        Ok(Part::Param { name, op: if assign { ParamOp::Assign(word) } else { ParamOp::Default(word) }, quoted: dq })
+    }
+
+    /// The word of `${NAME:-word}`, up to and with the closing brace.
+    /// Outside double quotes its plain text is `Lit`, to be split into
+    /// fields like the value of a variable.
+    fn braced_word(&mut self, dq: bool) -> Result<Vec<Part>, ParseError> {
+        let mut parts: Vec<Part> = Vec::new();
+        let plain = |parts: &mut Vec<Part>, c: u8| if dq { push_quoted(parts, c) } else { push_lit(parts, c) };
+        // Outside quotes a `~` that begins the word is HOME.
+        if !dq && self.peek() == Some(b'~') && matches!(self.peek_at(1), Some(b'}') | Some(b'/')) {
+            parts.push(Part::Tilde);
+            self.i += 1;
+        }
+        loop {
+            let c = match self.peek() {
+                None => return Err(ParseError::Incomplete("unexpected end of input while looking for matching `}'".into())),
+                Some(c) => c,
+            };
+            match c {
+                b'}' => {
+                    self.i += 1;
+                    return Ok(parts);
+                }
+                b'\\' => match self.peek_at(1) {
+                    Some(b'\n') => self.i += 2,
+                    Some(n) if !dq || matches!(n, b'$' | b'`' | b'\\' | b'"' | b'}') => {
+                        push_quoted(&mut parts, n);
+                        self.i += 2;
+                    }
+                    _ => {
+                        push_quoted(&mut parts, b'\\');
+                        self.i += 1;
+                    }
+                },
+                b'\'' if !dq => {
+                    self.i += 1;
+                    let start = self.i;
+                    while self.peek().is_some_and(|c| c != b'\'') {
+                        self.i += 1;
+                    }
+                    if self.peek().is_none() {
+                        return Err(ParseError::Incomplete("unexpected end of input while looking for matching `''".into()));
+                    }
+                    parts.push(Part::Quoted(self.s[start..self.i].to_vec()));
+                    self.i += 1;
+                }
+                b'"' => {
+                    self.i += 1;
+                    parts.extend(self.quoted_text(Some(b'"'))?);
+                }
+                b'`' => {
+                    let script = self.backticks(dq)?;
+                    parts.push(Part::Subst { script, quoted: dq });
+                }
+                b'$' => match self.dollar(dq)? {
+                    Some(part) => parts.push(part),
+                    None => {
+                        plain(&mut parts, b'$');
+                        self.i += 1;
+                    }
+                },
+                _ => {
+                    plain(&mut parts, c);
+                    self.i += 1;
+                }
+            }
+        }
+    }
+
+    /// The inside of `$((...))`, up to and with the closing `))`: the
+    /// text of the expression, as quoted text, and the expansions in it.
+    fn arith_body(&mut self) -> Result<Vec<Part>, ParseError> {
+        let mut parts = vec![Part::Quoted(Vec::new())];
+        let mut depth = 0usize;
+        loop {
+            let c = match self.peek() {
+                None => return Err(ParseError::Incomplete("unexpected end of input while looking for matching `)'".into())),
+                Some(c) => c,
+            };
+            match c {
+                b')' if depth == 0 => {
+                    if self.peek_at(1) != Some(b')') {
+                        return unsupported("a command substitution that begins with a subshell: $((...) ...)");
+                    }
+                    self.i += 2;
+                    return Ok(parts);
+                }
+                b'(' | b')' => {
+                    depth = if c == b'(' { depth + 1 } else { depth - 1 };
+                    push_quoted(&mut parts, c);
+                    self.i += 1;
+                }
+                b'$' => match self.dollar(true)? {
+                    Some(part) => parts.push(part),
+                    None => {
+                        push_quoted(&mut parts, b'$');
+                        self.i += 1;
+                    }
+                },
+                b'`' => {
+                    let script = self.backticks(true)?;
+                    parts.push(Part::Subst { script, quoted: true });
+                }
+                // Quotes around an operand are dropped.
+                b'"' => self.i += 1,
+                b'\\' if self.peek_at(1) == Some(b'\n') => self.i += 2,
+                _ => {
+                    push_quoted(&mut parts, c);
+                    self.i += 1;
+                }
+            }
         }
     }
 }
 
-/// Checks on the first word of a command: reserved words and assignments.
+/// Checks on the first word of a command: the reserved words that are
+/// not supported.
 fn check_command_position(word: &Word) -> Result<(), ParseError> {
     if let Some(lit) = word.unquoted_literal() {
         if let Some((_, what)) = RESERVED.iter().find(|(w, _)| w.as_bytes() == lit) {
             return unsupported(*what);
         }
     }
-    // NAME=value, NAME+=value, NAME[i]=value
-    if let Some(Part::Lit(b)) = word.parts.first() {
-        let mut j = 0;
-        if !b.is_empty() && (b[0].is_ascii_alphabetic() || b[0] == b'_') {
-            while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
-                j += 1;
-            }
-            let rest = &b[j..];
-            if rest.starts_with(b"=") || rest.starts_with(b"+=") || rest.starts_with(b"[") && rest.contains(&b'=') {
-                return unsupported("variable assignment");
-            }
-        }
-    }
     Ok(())
 }
 
-/// Checks on every word: tilde expansion, which bash performs on unquoted
-/// text and this version does not.
-fn check_word(word: &Word) -> Result<(), ParseError> {
-    if let Some(Part::Lit(b)) = word.parts.first() {
-        if b.starts_with(b"~") {
-            return unsupported("tilde expansion (~)");
+/// `NAME=value` where a command could begin: the assignment, or `None`
+/// for any other word. `NAME+=value` and `NAME[i]=value` are refused.
+fn assignment(word: &Word) -> Result<Option<Assign>, ParseError> {
+    let Some(Part::Lit(b)) = word.parts.first() else { return Ok(None) };
+    let mut j = 0;
+    if b.is_empty() || !(b[0].is_ascii_alphabetic() || b[0] == b'_') {
+        return Ok(None);
+    }
+    while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
+        j += 1;
+    }
+    let rest = &b[j..];
+    if rest.starts_with(b"+=") {
+        return unsupported("variable assignment with +=");
+    }
+    if rest.starts_with(b"[") && rest.contains(&b'=') {
+        return unsupported("variable assignment to an array element");
+    }
+    if !rest.starts_with(b"=") {
+        return Ok(None);
+    }
+    // A `~` that begins the value, or follows a colon in it, is HOME.
+    let mut parts: Vec<Part> = Vec::new();
+    let lit = |parts: &mut Vec<Part>, text: &[u8], mut at_start: bool, last: bool| -> Result<(), ParseError> {
+        let mut i = 0;
+        while i < text.len() {
+            let c = text[i];
+            if c == b'~' && at_start {
+                match text.get(i + 1) {
+                    None if !last => {}
+                    None | Some(b'/') | Some(b':') => {
+                        parts.push(Part::Tilde);
+                        i += 1;
+                        at_start = false;
+                        continue;
+                    }
+                    Some(_) => return unsupported("tilde expansion other than ~ and ~/path"),
+                }
+            }
+            push_lit(parts, c);
+            at_start = c == b':';
+            i += 1;
+        }
+        Ok(())
+    };
+    let count = word.parts.len();
+    for (n, p) in word.parts.iter().enumerate() {
+        match p {
+            Part::Lit(text) => {
+                let text = if n == 0 { &text[j + 1..] } else { &text[..] };
+                let at_start = n == 0 || matches!(parts.last(), Some(Part::Lit(b)) if b.ends_with(b":"));
+                lit(&mut parts, text, at_start, n + 1 == count)?;
+            }
+            other => parts.push(other.clone()),
         }
     }
-    Ok(())
+    Ok(Some(Assign { name: b[..j].to_vec(), value: Word { parts, raw: word.raw[(j + 1).min(word.raw.len())..].to_vec() } }))
 }
 
 // ---------------------------------------------------------- brace expansion
@@ -836,7 +1307,8 @@ enum Atom {
     Q(u8),
     /// An empty quoted string: it keeps an empty word in existence.
     Empty,
-    /// A command substitution: the index of its part in the word.
+    /// A substitution or another expansion: the index of its part in
+    /// the word.
     S(usize),
 }
 
@@ -853,7 +1325,7 @@ pub fn brace_expand(word: &Word) -> Vec<Word> {
             Part::Lit(b) => atoms.extend(b.iter().map(|c| Atom::C(*c))),
             Part::Quoted(b) if b.is_empty() => atoms.push(Atom::Empty),
             Part::Quoted(b) => atoms.extend(b.iter().map(|c| Atom::Q(*c))),
-            Part::Subst { .. } => atoms.push(Atom::S(i)),
+            _ => atoms.push(Atom::S(i)),
         }
     }
     expand_atoms(&atoms)
@@ -1002,7 +1474,7 @@ mod tests {
     use super::*;
 
     fn first(s: &str) -> SimpleCommand {
-        parse(s.as_bytes()).unwrap().items[0].first.commands[0].clone()
+        parse(s.as_bytes()).unwrap().items[0].first.commands[0].simple().unwrap().clone()
     }
 
     fn words(s: &str) -> Vec<Vec<u8>> {
@@ -1029,8 +1501,8 @@ mod tests {
         let s = parse(b"cat a | grep x >> out |\n wc -l > n").unwrap();
         let p = &s.items[0].first;
         assert_eq!(p.commands.len(), 3);
-        assert!(matches!(&p.commands[1].redirects[0], Redirect::Out { fd: 1, append: true, .. }));
-        assert!(matches!(&p.commands[2].redirects[0], Redirect::Out { fd: 1, append: false, target } if target.text() == b"n"));
+        assert!(matches!(&p.commands[1].redirects()[0], Redirect::Out { fd: 1, append: true, .. }));
+        assert!(matches!(&p.commands[2].redirects()[0], Redirect::Out { fd: 1, append: false, target } if target.text() == b"n"));
         let c = first("ls 2>e >&2 2>&1 &>b &>>c <in 2>>f");
         assert_eq!(c.redirects.len(), 7);
         assert!(matches!(&c.redirects[0], Redirect::Out { fd: 2, append: false, .. }));
@@ -1058,7 +1530,7 @@ mod tests {
         let s = parse(b"cat <<A <<-'B'; echo x\none $(echo two)\nA\n\t$(three)\n\tB\necho y\n").unwrap();
         assert_eq!(s.items.len(), 3);
         let c = &s.items[0].first.commands[0];
-        let body = |i: usize| match &c.redirects[i] {
+        let body = |i: usize| match &c.redirects()[i] {
             Redirect::Here { body } => body.borrow().clone(),
             _ => panic!(),
         };
@@ -1091,21 +1563,27 @@ mod tests {
 
     #[test]
     fn rejected_by_name() {
-        assert!(unsupported_name("echo $HOME").contains("variable expansion"));
-        assert!(unsupported_name("ls &").contains("background"));
-        assert!(unsupported_name("for f in a; do ls; done").contains("for loop"));
-        assert!(unsupported_name("if ls; then ls; fi").contains("if statement"));
-        assert!(unsupported_name("cat <<< a").contains("here-strings"));
-        assert!(unsupported_name("ls 3> e").contains("file descriptor"));
-        assert!(unsupported_name("ls 2>&3").contains("duplication"));
-        assert!(unsupported_name("X=1 ls").contains("assignment"));
-        assert!(unsupported_name("ls ~").contains("tilde"));
-        assert!(unsupported_name("(ls)").contains("subshell"));
-        assert!(unsupported_name("f() { ls; }").contains("function"));
-        assert!(unsupported_name("echo $((1+2))").contains("arithmetic"));
-        assert!(unsupported_name("diff <(ls) a").contains("process substitution"));
-        assert!(unsupported_name("ls; echo $(echo $x)").contains("variable expansion"));
-        assert!(unsupported_name("cat <<E\n$x\nE").contains("variable expansion"));
+        for (unit, name) in [
+            ("echo ${X%a}", "parameter expansion"),
+            ("echo $1", "special parameter"),
+            ("ls &", "background"),
+            ("for ((i=0;i<3;i++)); do ls; done", "arithmetic for loop"),
+            ("for f; do ls; done", "for loop without"),
+            ("case x in x) ls;; esac", "case statement"),
+            ("cat <<< a", "here-strings"),
+            ("ls 3> e", "file descriptor"),
+            ("ls 2>&3", "duplication"),
+            ("X+=1", "assignment"),
+            ("A=(1 2)", "array"),
+            ("ls ~root", "tilde"),
+            ("(ls)", "subshell"),
+            ("f() { ls; }", "function"),
+            ("((1+2))", "arithmetic command"),
+            ("diff <(ls) a", "process substitution"),
+            ("ls; echo $(echo ${x/a/b})", "parameter expansion"),
+        ] {
+            assert!(unsupported_name(unit).contains(name), "{}", unit);
+        }
     }
 
     #[test]

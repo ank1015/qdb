@@ -272,6 +272,9 @@ impl Parser<'_> {
                 }
                 // Refuse now what the command could not run.
                 let probe: Vec<Vec<u8>> = command.iter().map(|a| crate::testing::replace(a, b"{}", b"x")).collect();
+                if probe[0] == b":" {
+                    return Err(Stop::Unsupported("command: : (it is part of the shell)".into()));
+                }
                 if let Err(what) = super::prepare(&probe[0], &probe[1..]) {
                     return Err(Stop::Unsupported(what));
                 }

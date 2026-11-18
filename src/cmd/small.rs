@@ -696,6 +696,28 @@ pub fn status(code: i32) -> Result<Runner, String> {
     Ok(Box::new(move |_, _| code))
 }
 
+/// `pwd`, `pwd -L`, `pwd -P`: there are no links, so all three print the
+/// same. As in bash, anything after the flags is ignored.
+pub fn pwd(args: Vec<Vec<u8>>) -> Result<Runner, String> {
+    Ok(Box::new(move |db, io| {
+        io.errors_first();
+        for a in &args {
+            if a == b"--" || !a.starts_with(b"-") || a.len() == 1 {
+                break;
+            }
+            if let Some(c) = a[1..].iter().find(|c| !matches!(c, b'L' | b'P')) {
+                io.err_line(format!("qdb: pwd: -{}: invalid option", *c as char));
+                io.err_line("pwd: usage: pwd [-LP]");
+                return 2;
+            }
+        }
+        let mut here = db.cwd();
+        here.push(b'\n');
+        io.put(&here);
+        0
+    }))
+}
+
 pub fn ln(_args: Vec<Vec<u8>>) -> Result<Runner, String> {
     Err("command: ln (the database has no links, hard or symbolic)".into())
 }

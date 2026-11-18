@@ -1,0 +1,335 @@
+# Stage 5, part 2: variables, parameters, arithmetic, tilde, field
+# splitting and the current directory. Every unit starts a new session,
+# on both sides: the current directory is the root, HOME is the root.
+@fixture basic
+
+# Assignment and $NAME.
+$ X=5; echo $X
+$ X=5; echo "$X" '$X' \$X
+$ X=a Y=b; echo $X$Y ${X}${Y} "${X}x" $Xx
+$ X=1; X=2; echo $X
+$ X=; echo "[$X]"
+$ echo "[$UNSET]" [$UNSET]
+$ X='a b'; echo $X; echo "$X"
+$ X="a   b"; echo $X; echo "$X"
+$ X=a\ b; echo "$X"
+$ X=$(echo hi); echo $X
+$ X=`echo hi`; echo $X
+$ X=$(ls src | head -n 2); echo "$X"
+$ X=README.md; cat $X | wc -l
+$ X=src Y=lib; ls $X/$Y
+$ X=*.md; echo $X; echo "$X"
+$ X='*'; echo $X | wc -w; echo "$X"
+$ X=a{b,c}; echo $X
+$ X=~; echo "$X"
+$ X=1 Y=$X; echo "[$Y]"
+$ X=1; Y=$X; echo "[$Y]"
+$ X=hello; echo ${#X} ${#UNSET}
+$ X=; echo ${#X}
+$ _a1=x; echo $_a1
+$ X=1; echo $X_ ${X}_
+$ echo $ a$ "$" '$'
+$ X=5; echo "a${X}b$X c"
+$ X=one; cat <<EOF⏎value $X ${X}s $(echo $X)⏎EOF
+$ X=one; cat <<'EOF'⏎value $X⏎EOF
+$ X=out.txt; echo hi > $X; cat out.txt
+$ X='two words'; echo hi > $X
+$ X=notes.txt; wc -l < $X
+$ D=src; F=main.c; grep -c include $D/$F
+$ X=TODO; grep -rl $X .
+$ P='a*b'; echo 'aab a*b' | grep -o "$P"
+
+# NAME=value command: for that command only.
+$ X=1 echo hi; echo "[$X]"
+$ X=old; X=new echo hi; echo $X
+$ X=1 Y=2 ls src; echo "[$X$Y]"
+$ LC_ALL=C sort notes.txt
+$ X=5 true; echo "[$X]"
+$ X=$(echo sub) echo $X
+
+# The status of an assignment is that of its last substitution.
+$ X=$(false); echo $?
+$ X=$(true); echo $?
+$ X=1; echo $?
+$ X=$(ls nope); echo $? "[$X]"
+$ X=$(echo a; false) Y=$(true); echo $?
+
+# $?
+$ true; echo $?
+$ false; echo $?
+$ ls nope; echo $?
+$ false; echo $? $?
+$ false || echo $?; echo $?
+$ true && false; echo $?
+$ echo a | false; echo $?
+$ false | true; echo $?
+$ grep -q TODO src/main.c; echo $?
+$ grep -q nosuchword src/main.c; echo $?
+$ echo ${?}
+
+# ${NAME:-word} and ${NAME:=word}.
+$ echo ${X:-default}
+$ X=; echo ${X:-default}
+$ X=set; echo ${X:-default}
+$ echo "${X:-two words}" ${X:-two words}
+$ echo ${X:-}
+$ echo ${X:-$(echo sub)} "${X:-`echo back`}"
+$ Y=y; echo ${X:-$Y} ${X:-${Y}} ${X:-${Z:-deep}}
+$ echo ${X:-a b} | wc -w; echo "${X:-a b}" | wc -w
+$ echo ${X:-'a  b'} "${X:-'a b'}"
+$ echo ${X:-"a  b"}
+$ echo ${X:-*.md} "${X:-*.md}"
+$ echo ${X:-~} "${X:-~}"
+$ echo ${X:=assigned} $X
+$ X=; echo ${X:=assigned} $X
+$ X=kept; echo ${X:=assigned} $X
+$ echo "${X:=a b}"; echo "$X"
+$ : ${X:=quiet}; echo $X
+$ echo ${X:-a}${Y:-b}
+$ echo ${X:-\}} "${X:-\}}"
+$ echo ${#X} ${X:-0}
+! echo ${X:?msg} ## parameter expansion
+! echo ${X-word} ## parameter expansion
+! echo ${X=word} ## parameter expansion
+! echo ${X:1:2} ## parameter expansion
+! echo ${X#a} ## parameter expansion
+! A=(1 2) ## array
+! echo ${X##a} ## parameter expansion
+! echo ${X%%a} ## parameter expansion
+! echo ${X//a/b} ## parameter expansion
+! echo ${X,,} ## parameter expansion
+! echo ${X@Q} ## parameter expansion
+! echo ${#X[@]} ## parameter expansion
+! echo ${1} ## parameter expansion
+! echo ${} ## parameter expansion
+! echo "${X:+y}" ## parameter expansion
+! cat <<EOF⏎${X%y}⏎EOF ## parameter expansion
+
+# export and unset.
+$ export X=1; echo $X
+$ export X; X=2; echo $X
+$ X=3; export X; echo $X
+$ export X=1 Y=2; echo $X $Y
+$ export X='a b'; echo "$X"
+$ Y='a b'; export X=$Y; echo "$X"
+$ export X=~; echo "$X"
+$ export X=$(echo sub); echo $X
+$ export 1X=2; echo $?
+$ export X-Y=2; echo $?
+$ X=1; unset X; echo "[$X]"
+$ X=1; unset -v X; echo "[$X]"
+$ X=1 Y=2; unset X Y; echo "[$X$Y]"
+$ unset NOSUCH; echo $?
+$ unset 1X; echo $?
+$ X=1; unset X; echo ${X:-gone}
+! export ## export without a name
+! export -p ## flag: export -p
+! export -n X ## flag: export -n
+! unset -f X ## flag: unset -f
+! X=1; unset -n X ## flag: unset -n
+
+# Tilde.
+$ ls ~/src
+$ cat ~/README.md | head -n 1
+$ echo "~" '~' \~ a~ a/~
+$ X=~/src; ls $X
+$ X=~:~; echo "$X"
+$ ls ~/src/lib; ls ~/docs
+$ echo hi > ~/tilde.txt; cat tilde.txt
+$ HOME={ROOT}/src; ls ~
+$ HOME={ROOT}/src; cat ~/main.c | wc -l
+$ HOME={ROOT}/src; cd; pwd
+! echo ~root ## tilde expansion
+! echo ~+ ## tilde expansion
+! echo ~- ## tilde expansion
+! X=~root ## tilde expansion
+
+# Arithmetic.
+$ echo $((1+2)) $((7-10)) $((6*7)) $((7/2)) $((7%3)) $((2**10))
+$ echo $((-7/2)) $((-7%3)) $((7/-2))
+$ echo $(( 1 + 2 * 3 )) $(( (1 + 2) * 3 ))
+$ echo $((5>3)) $((5<3)) $((5>=5)) $((5<=4)) $((5==5)) $((5!=5))
+$ echo $((1&&0)) $((1||0)) $((!1)) $((!0)) $((0&&1/0)) $((1||1/0))
+$ echo $((6&3)) $((6|3)) $((6^3)) $((~6)) $((1<<10)) $((1024>>3)) $((-8>>1))
+$ echo $((1?2:3)) $((0?2:3)) $((1?0?4:5:6)) $((0 ? 1/0 : 9))
+$ echo $((1,2,3)) $((x=4,x+1))
+$ X=5; echo $((X)) $(($X)) $((X+1)) $(($X+1)) $((${X}*2))
+$ X=5; echo $((X+=2)) $X; echo $((X-=1)) $((X*=3)) $((X/=2)) $((X%=5)) $X
+$ X=6; echo $((X<<=2)) $((X>>=1)) $((X&=7)) $((X|=8)) $((X^=1)) $X
+$ X=5; echo $((X++)) $X $((++X)) $X $((X--)) $X $((--X)) $X
+$ X=5; echo $((X++ + ++X)) $X
+$ echo $((UNSET)) $((UNSET+1))
+$ X=; echo $((X+1))
+$ X=abc; abc=7; echo $((X+1))
+$ X='1+2'; echo $((X*3)) $(($X*3))
+$ echo $((0x1F)) $((0XA)) $((017)) $((16#ff)) $((2#101)) $((36#z)) $((64#_)) $((8#17))
+$ echo $((9223372036854775807)) $((9223372036854775807+1)) $((-9223372036854775808))
+$ echo $((-9223372036854775808/-1)) $((-9223372036854775808%-1))
+$ echo $((2**62)) $((2**63)) $((2**64)) $((3**0)) $((-2**2)) $((-2**3))
+$ echo $((1 - -1)) $((1 - - 1)) $((3--1)) $((3++1)) $((+3)) $((- 3))
+$ echo "$((1+1))" "a$((1+1))b" $((1+1))$((2+2))
+$ echo $(( $(echo 3) + 1 )) $(( `echo 3` * 2 ))
+$ echo $((  )) $(())
+$ echo $((1 +⏎2))
+$ echo $(( "1" + 2 ))
+$ X=3; while [ $X -gt 0 ]; do echo $X; X=$((X-1)); done
+$ i=0; i=$((i+1)); i=$((i+1)); echo $i
+$ echo $((10/3*3)) $((10%3+10/3*3))
+$ echo $((1<2<3)) $((3>2>1)) $((1==1==1))
+$ echo $((1<<63)) $((1<<64)) $((1<<65))
+$ X=2; echo $((X**X**X)) $((2**3**2))
+$ X=1; echo $((X==1 ? 10 : 20)) $((X==2 ? 10 : 20))
+$ echo $((a=b=3)) $a $b
+$ echo $(( 1 +  2 ))$((3))
+$ cat <<EOF⏎$((6*7)) and $((1 > 0))⏎EOF
+$ echo $((1/0)); echo same line⏎echo next line $?
+$ echo $((1%0))⏎echo $?
+$ echo $((1/0+5))
+$ echo $(( 3 + ))
+$ echo $((3 4))
+$ echo $((a b))
+$ echo $((1=2))
+$ echo $((2**-1))
+$ echo $((08))
+$ echo $((1 ? 2))
+$ echo $((1 +* 2))
+! echo $(( (1+2 )) ## $((...) ...)
+! echo $((1+2))) ## syntax error
+$ echo $((3#3)) 
+$ echo $((65#1))
+$ echo $((0x))
+$ X='1+'; echo $((X))
+$ echo before; echo $((1/0)); echo after⏎echo next
+$ for i in 1 2; do echo $((1/0)); echo in; done⏎echo after $?
+$ echo $(echo $((1/0)); echo more); echo outer $?
+$ X=$((1/0)); echo "[$X]"⏎echo "[$X]" $?
+$ echo hi > $((1/0)); echo after⏎ls $((1+1)) 2>&1 | wc -l
+! echo $[1+2] ## arithmetic expansion $[...]
+! ((X=1)) ## arithmetic command
+
+# Field splitting.
+$ X='a b  c'; for w in $X; do echo "[$w]"; done
+$ X='a b  c'; for w in "$X"; do echo "[$w]"; done
+$ X=' lead trail '; for w in $X; do echo "[$w]"; done; for w in x$X; do echo "[$w]"; done; for w in ${X}x; do echo "[$w]"; done
+$ X=''; for w in $X; do echo "[$w]"; done; for w in "$X"; do echo "[$w]"; done
+$ X=''; for w in a$X; do echo "[$w]"; done; for w in $X$X; do echo "[$w]"; done; for w in "$X"$X; do echo "[$w]"; done
+$ X='a:b:c'; IFS=:; for w in $X; do echo "[$w]"; done
+$ X=':a::b:'; IFS=:; for w in $X; do echo "[$w]"; done
+$ X=' :a'; IFS=' :'; for w in $X; do echo "[$w]"; done
+$ X='a : b'; IFS=' :'; for w in $X; do echo "[$w]"; done
+$ X='a: :b'; IFS=' :'; for w in $X; do echo "[$w]"; done
+$ X='a::b'; IFS=' :'; for w in $X; do echo "[$w]"; done
+$ X='a b'; IFS=; for w in $X; do echo "[$w]"; done
+$ X='a b:c'; unset IFS; for w in $X; do echo "[$w]"; done
+$ X='a,b c'; IFS=,; for w in $X; do echo "[$w]"; done; echo $X; echo "$X"
+$ IFS=/; X=src/lib/lex.c; for w in $X; do echo "[$w]"; done
+$ IFS=:; for w in $(echo a:b c); do echo "[$w]"; done
+$ IFS=:; X=a:b; echo $X "$X" x${X}y
+$ IFS=1; echo $((100+10))
+$ IFS=x; X=axb; echo ${X:-none} ${Y:-cxd} "${Y:-cxd}"
+$ X=$(printf 'a\tb\nc'); for w in $X; do echo "[$w]"; done
+$ X='*.md notes*'; for w in $X; do echo "[$w]"; done
+$ X='a\b'; echo $X "$X"
+$ X="with space.txt"; cat "$X" | wc -l; cat $X
+$ IFS=:; X=a:b; Y=$X; echo "$Y"
+$ X='a b'; Y=$X; echo "$Y"
+$ X='-n hi'; echo $X; echo "$X"
+
+# The current directory.
+$ pwd
+$ pwd -L; pwd -P; pwd -LP
+$ pwd -x; echo $?
+$ pwd extra words
+$ cd src; pwd
+$ cd src; ls
+$ cd src; cat main.c | head -n 2
+$ cd src/lib; pwd; ls
+$ cd src; cd lib; pwd
+$ cd src; cd ..; pwd
+$ cd src/lib; cd ../..; pwd; cd src/../docs; pwd
+$ cd ./src/./lib/; pwd
+$ cd src//lib; pwd
+$ cd {ROOT}/src; pwd; cd {ROOT}/docs; pwd
+$ cd src; cd; pwd
+$ cd src; cd ~; pwd
+$ cd src; cd ~/docs; pwd
+$ cd src; echo $PWD $OLDPWD
+$ echo "[$OLDPWD]"; cd src; cd lib; echo $OLDPWD
+$ cd src; cd lib; cd "$OLDPWD"; pwd
+$ cd nosuch; echo $?; pwd
+$ cd README.md; echo $?
+$ cd src/main.c; echo $?
+$ cd src nosuch; echo $?
+$ cd ""; echo $?; pwd
+$ cd src && pwd
+$ cd nosuch || echo failed
+$ cd src; ls ../docs; cat ../README.md | head -n 1
+$ cd src; cat {ROOT}/README.md | head -n 1
+$ cd src; echo new > made.txt; cat made.txt; ls
++ cat src/made.txt
+$ cd src; mkdir -p a/b; touch a/b/c; find a
++ find src/a
+$ cd src; rm util.c; ls
++ ls src
+$ cd src; mv main.c ../moved.c; ls; ls ..
+$ cd src; cp main.c lib; ls lib
+$ cd src; cp -r lib ../libcopy; ls ..
+$ cd src; find . -name '*.c'
+$ cd src; find . -type f | sort
+$ cd src; find lib
+$ cd src; grep -rn include .
+$ cd src; grep -rn include
+$ cd src; grep -rl TODO . lib
+$ cd src; grep -c include *.c
+$ cd src; rg include
+$ cd src; rg -l TODO .
+$ cd src; ls *.c; echo *.h lib/*
+$ cd src; echo * | wc -w; echo ../*.md
+$ cd src; wc -l *.c | tail -n 1
+$ cd src; sed -n 1p main.c; sed -i 's/include/INCLUDE/' main.c; head -n 1 main.c
+$ cd src; du -a . | sort -k 2
+$ cd src; ls -R
+$ cd src; ls -d . .. lib ../docs
+$ cd src; test -f main.c && echo yes; [ -d lib ] && echo dir; [ -e ../README.md ] && echo up
+$ cd src; cat nope.txt
+$ cd src; cat ../nope.txt lib/nope.txt
+$ cd src; sort main.c | head -n 2; head -n 1 util.h; tail -n 1 util.c
+$ cd src; tee copy.txt < main.c | wc -l; wc -l copy.txt
+$ cd src; ls > listing.txt; cat listing.txt
+$ cd src; cat < main.c | wc -l; wc -l < lib/lex.c
+$ cd src; echo lib/* | xargs wc -l | tail -n 1
+$ cd src; find . -name '*.h' -exec wc -l {} \;
+$ cd src; touch new.c; ls -1 | wc -l
+$ cd src; rmdir lib; echo $?; mkdir e; rmdir e; ls
+$ cd src; basename "$PWD"; dirname "$PWD/x"
+$ cd deep; find . | sort | head -n 5
+$ cd empty; ls -a; pwd
+$ cd src; cd lib; cd ../../docs; ls
+$ cd src; X=$(pwd); cd ..; echo $X; pwd
+$ cd src; echo $(cd lib; pwd); pwd
+$ cd src; echo $(pwd) `pwd`
+$ cd src | cat; pwd
+$ echo x | cd src; pwd
+$ cd src; ls | while read f; do echo "<$f>"; done
+$ cd src; for f in *.c; do wc -l $f; done
+= cd ..; pwd; cd ../..; pwd; cat ../README.md | wc -c
+> /
+> /
+> 104
+$ mkdir gone; cd gone; rmdir ../gone; echo $?
+$ cd src; PWD=bogus; pwd
+$ cd src⏎pwd⏎cd lib⏎pwd
+$ HOME={ROOT}/nosuch; cd; echo $?
+$ unset HOME; cd; echo $?; pwd
+! cd - ## cd -
+! cd -L src ## flag: cd -L
+! cd -P src ## flag: cd -P
+! cd src; cd - ## cd -
+
+# Each stage of a pipeline has its own copy of the session.
+$ X=1; X=2 | cat; echo $X
+$ X=1; echo a | X=2; echo $X
+$ X=1; echo $(X=2; echo $X) $X
+$ echo a | read L; echo "[$L]"
+$ X=out; echo hi | while read L; do X=$L; done; echo $X
+$ cd src | ls; pwd

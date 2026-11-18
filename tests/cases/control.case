@@ -1,0 +1,317 @@
+# Stage 5, part 3: for, if, while, until, break, continue, read, and
+# redirections on them. One call is still one unit.
+@fixture basic
+
+# for
+$ for f in a b c; do echo $f; done
+$ for f in a b c; do echo "<$f>"; done; echo "after $f"
+$ for f in; do echo never; done; echo $?
+$ for f in a; do false; done; echo $?
+$ for f in a; do true; done; echo $?
+$ for f in *; do echo "$f"; done
+$ for f in *.md src/*.c; do wc -l "$f"; done
+$ for f in "with space.txt" notes.txt; do wc -l "$f"; done
+$ for f in src/*.c; do echo "$f: $(wc -l < $f)"; done
+$ for f in $(ls src); do echo "[$f]"; done
+$ for f in `ls docs`; do echo "[$f]"; done
+$ for f in {1..5}; do echo $f; done
+$ for f in a{1,2} b; do echo $f; done
+$ for i in 1 2 3; do for j in a b; do echo $i$j; done; done
+$ for f in a b⏎do⏎echo $f⏎done
+$ for f in a b; do⏎  echo $f⏎  echo again $f⏎done
+$ for f in a b;⏎do echo $f;⏎done
+$ for f in 'a b' "c d" e\ f; do echo "[$f]"; done
+$ X='p q'; for f in $X "$X"; do echo "[$f]"; done
+$ for f in nomatch*; do echo "[$f]"; done
+$ for f in a b; do echo $f; done | wc -l
+$ for f in c a b; do echo $f; done | sort
+$ for f in a b; do echo $f; done > out.txt; cat out.txt
+$ for f in a b; do echo $f; done >> notes.txt; tail -n 3 notes.txt
+$ for f in a b; do echo $f; ls nope; done 2> err.txt; cat err.txt
+$ for f in a b; do echo $f; ls nope; done 2>&1 | sort
+$ for f in a b; do echo $f; ls nope; done > both.txt 2>&1; wc -l both.txt
+$ for f in a b; do ls nope; done 2> /dev/null; echo $?
+$ for f in a b c; do echo $f > $f.txt; done; cat a.txt b.txt c.txt; ls
+$ for f in src/*.c; do cp $f $f.bak; done; ls src
+$ for f in src/*.c; do sed -i 's/int/INT/' $f; done; grep -c INT src/*.c
+$ for f in src/*.c; do mv $f ${f}.old; done; ls src
+$ for d in src docs; do for f in $d/*; do echo $f; done; done
+$ for f in 1 2 3; do echo $((f*f)); done
+$ sum=0; for n in 1 2 3 4; do sum=$((sum+n)); done; echo $sum
+$ for f in a b; do X=$f; done; echo $X
+$ for f in a b; do echo $f; done; for f in c; do echo $f; done
+$ for f in a; do echo one; done && echo two
+$ for f in a; do false; done || echo failed
+$ for for in a; do echo $for; done
+$ for in in a; do echo $in; done
+$ for do in a; do echo $do; done
+$ for f in in do done; do echo $f; done
+$ for f in a # comment⏎do echo $f; done
+$ for i in $(seq 200); do echo $i; done | tail -n 1
+$ for i in $(seq 50); do echo "line $i" >> log.txt; done; wc -l log.txt
+$ for f in a b; do cat README.md | head -n 1; done
+$ for f in a b; do echo $f | tr a-z A-Z; done
+$ for f in a b; do if [ $f = a ]; then echo first; else echo other; fi; done
+! for f; do echo x; done ## for loop without `in'
+! for f do echo x; done ## for loop without `in'
+! for ((i=0;i<2;i++)); do echo; done ## arithmetic for loop
+! for f in a; do awk 1; done ## command: awk
+! for f in a; do ls --frobnicate; done ## flag: ls --frobnicate
+! for f in a; echo; done ## syntax error
+! for f in a; do done ## syntax error
+! for f in a; do echo ## syntax error
+! for 1x in a; do echo; done ## not a valid identifier
+! done ## syntax error
+! do echo; done ## syntax error
+! for f in a; do echo; done done ## syntax error
+
+# if
+$ if true; then echo yes; fi
+$ if false; then echo yes; fi; echo $?
+$ if false; then echo yes; else echo no; fi
+$ if false; then echo a; elif true; then echo b; else echo c; fi
+$ if false; then echo a; elif false; then echo b; else echo c; fi
+$ if false; then echo a; elif false; then echo b; fi; echo $?
+$ if true; then false; fi; echo $?
+$ if false; then true; else false; fi; echo $?
+$ if [ -f README.md ]; then echo file; fi
+$ if [ -d src ] && [ -f src/main.c ]; then echo both; fi
+$ if test -e nope; then echo there; else echo missing; fi
+$ if grep -q TODO src/main.c; then echo found; fi
+$ if grep -q nosuchword src/main.c; then echo found; else echo none; fi
+$ if ls nope 2> /dev/null; then echo a; else echo b; fi
+$ if true⏎then⏎echo yes⏎fi
+$ if true; then⏎  echo one⏎  echo two⏎else⏎  echo three⏎fi
+$ if true; then if false; then echo a; else echo b; fi; fi
+$ if false; true; then echo last counts; fi
+$ if true; false; then echo no; else echo last counts; fi
+$ if true; then echo a; fi | tr a b
+$ if true; then echo a; fi > out.txt; cat out.txt
+$ if true; then ls nope; fi 2> err.txt; wc -l < err.txt
+$ if cat; then echo ok; fi < README.md | wc -l
+$ X=5; if [ $X -gt 3 ]; then echo big; else echo small; fi
+$ X=; if [ -z "$X" ]; then echo empty; fi
+$ if [ "$(wc -l < README.md)" -gt 2 ]; then echo long; fi
+$ if true; then echo a; fi; if false; then echo b; fi; echo c
+$ if true; then echo a; fi && echo b
+$ if true; then X=1; else X=2; fi; echo $X
+$ if echo cond; then echo body; fi
+! if true; then echo; ## syntax error
+! if true; echo; fi ## syntax error
+! if true; then fi ## syntax error
+! if true; then echo; else fi ## syntax error
+! if; then echo; fi ## syntax error
+! fi ## syntax error
+! then echo; fi ## syntax error
+! else echo; fi ## syntax error
+! if true; then awk 1; fi ## command: awk
+! if awk 1; then echo; fi ## command: awk
+! if true; then echo; elif awk; then echo; fi ## command: awk
+! if true; then echo; else ls --frobnicate; fi ## flag: ls --frobnicate
+
+# while and until
+$ i=0; while [ $i -lt 3 ]; do echo $i; i=$((i+1)); done
+$ i=3; until [ $i -eq 0 ]; do echo $i; i=$((i-1)); done
+$ while false; do echo never; done; echo $?
+$ until true; do echo never; done; echo $?
+$ i=0; while [ $i -lt 2 ]; do i=$((i+1)); false; done; echo $?
+$ i=0; while [ $i -lt 2 ]; do i=$((i+1)); done; echo $? $i
+$ i=0; while i=$((i+1)); [ $i -le 3 ]; do echo $i; done
+$ i=0; while [ $i -lt 3 ]⏎do⏎echo $i⏎i=$((i+1))⏎done
+$ i=0; while [ $i -lt 100 ]; do i=$((i+1)); done; echo $i
+$ i=0; while [ $i -lt 3 ]; do i=$((i+1)); echo $i; done | wc -l
+$ i=0; while [ $i -lt 3 ]; do i=$((i+1)); echo $i; done > out.txt; cat out.txt; echo "[$i]"
+$ i=0; while [ $i -lt 3 ]; do j=0; while [ $j -lt 2 ]; do echo $i$j; j=$((j+1)); done; i=$((i+1)); done
+$ while ls nope 2> /dev/null; do echo never; done; echo $?
+$ until ls src > /dev/null; do echo never; done; echo done
+$ touch flag; while [ -f flag ]; do rm flag; echo removed; done
+$ i=0; until [ -f made.txt ]; do i=$((i+1)); if [ $i -eq 3 ]; then touch made.txt; fi; done; echo $i
+! while true; do echo; ## syntax error
+! while true; echo; done ## syntax error
+! while; do echo; done ## syntax error
+! until true; do done ## syntax error
+! while awk 1; do echo; done ## command: awk
+
+# break and continue
+$ for i in 1 2 3 4; do if [ $i = 3 ]; then break; fi; echo $i; done; echo after $i
+$ for i in 1 2 3 4; do if [ $i = 2 ]; then continue; fi; echo $i; done
+$ for i in 1 2; do for j in a b c; do if [ $j = b ]; then break; fi; echo $i$j; done; done
+$ for i in 1 2; do for j in a b c; do if [ $j = b ]; then break 2; fi; echo $i$j; done; done; echo out
+$ for i in 1 2; do for j in a b c; do if [ $j = b ]; then continue 2; fi; echo $i$j; done; echo end$i; done
+$ for i in 1 2; do for j in a b; do continue 5; echo no; done; echo no; done; echo ok
+$ for i in 1 2; do for j in a b; do break 5; echo no; done; echo no; done; echo ok
+$ i=0; while true; do i=$((i+1)); if [ $i -ge 3 ]; then break; fi; done; echo $i
+$ i=0; while [ $i -lt 5 ]; do i=$((i+1)); if [ $((i%2)) -eq 0 ]; then continue; fi; echo $i; done
+$ i=0; until false; do i=$((i+1)); [ $i -lt 4 ] || break; done; echo $i
+$ for i in 1 2 3; do false; break; done; echo $?
+$ for i in 1 2 3; do false; continue; done; echo $?
+$ for i in 1 2; do break 0; echo $i; done; echo after $?
+$ for i in 1 2; do continue 0; echo $i; done; echo after $?
+$ for i in 1 2; do break x; echo $i; done; echo after $?
+$ break; echo $?
+$ continue; echo $?
+$ break 2; echo $?
+$ for i in 1 2; do echo $i; break; done | cat
+$ for i in 1 2 3; do echo $i | break; echo after$i; done
+$ for i in 1 2 3; do echo $(break; echo sub); done
+$ for i in 1 2; do true && break; echo no; done; echo ok
+$ for i in 1 2; do false || continue; echo no; done; echo ok
+$ for i in 1 2 3; do if [ $i = 2 ]; then break; fi; echo $i; done > out.txt; cat out.txt
+$ for i in 1 2 3; do while true; do break; done; echo $i; done
+$ for i in 1 2; do if true; then for j in a b; do break; done; fi; echo $i; done
+
+# read
+$ read X < README.md; echo "[$X]"
+$ read -r X < README.md; echo "[$X]"
+$ read A B < README.md; echo "[$A][$B]"
+$ read A B C D E F < README.md; echo "[$A][$B][$C][$D][$E][$F]"
+$ read < README.md; echo "[$REPLY]"
+$ echo '  two  words  ' | while read X; do echo "[$X]"; done
+$ echo '  two  words  ' | while read; do echo "[$REPLY]"; done
+$ echo 'a b c d' | while read X Y; do echo "[$X][$Y]"; done
+$ echo 'a b' | while read X Y Z; do echo "[$X][$Y][$Z]"; done
+$ printf 'a\\tb\n' | while read X; do echo "[$X]"; done; printf 'a\\tb\n' | while read -r X; do echo "[$X]"; done
+$ printf 'one\\\ntwo\nthree\n' | while read X; do echo "[$X]"; done
+$ printf 'one\\\ntwo\nthree\n' | while read -r X; do echo "[$X]"; done
+$ printf 'a\\ b c\n' | while read X Y; do echo "[$X][$Y]"; done
+$ printf 'no newline' | while read X; do echo "[$X]"; done; echo $?
+$ printf 'no newline' | while read X || [ -n "$X" ]; do echo "[$X]"; done
+$ printf '' | while read X; do echo never; done; echo $?
+$ printf '\n\n' | while read X; do echo "[$X]"; done
+$ read X; echo $? "[$X]"
+$ X=old; read X < /dev/null; echo $? "[$X]"
+$ echo 'a:b:c' | while IFS=: read X Y Z; do echo "[$X][$Y][$Z]"; done
+$ echo 'a:b:c:d' | while IFS=: read X Y; do echo "[$X][$Y]"; done
+$ echo 'a:b:' | while IFS=: read X Y; do echo "[$X][$Y]"; done
+$ echo 'a:b:c:' | while IFS=: read X Y; do echo "[$X][$Y]"; done
+$ echo 'a::b' | while IFS=: read X Y Z; do echo "[$X][$Y][$Z]"; done
+$ echo ':a' | while IFS=: read X Y; do echo "[$X][$Y]"; done
+$ echo 'a:' | while IFS=: read X; do echo "[$X]"; done
+$ echo ' a : b ' | while IFS=' :' read X Y; do echo "[$X][$Y]"; done
+$ echo ' keep  spaces ' | while IFS= read -r X; do echo "[$X]"; done
+$ echo 'a b' | while IFS=: read X Y; do echo "[$X][$Y]"; done; echo "[$IFS]" | wc -c
+$ cat README.md | while read L; do echo "> $L"; done
+$ while read L; do echo "> $L"; done < README.md
+$ while read -r L; do echo "${#L}"; done < notes.txt
+$ n=0; while read L; do n=$((n+1)); done < README.md; echo $n
+$ n=0; cat README.md | while read L; do n=$((n+1)); done; echo $n
+$ find src -name '*.c' | sort | while read f; do wc -l "$f"; done
+$ find src -name '*.c' | sort | while read f; do sed -i 's/int/INT/' "$f"; done; grep -c INT src/main.c
+$ ls src | while read f; do echo "$f" > "src/$f.name"; done; ls src
+$ ls | while read f; do if [ -d "$f" ]; then echo "dir $f"; fi; done
+$ printf 'a 1\nb 2\n' | while read name n; do echo "$n $name"; done
+$ printf 'a\nb\nc\n' | while read X; do if [ $X = b ]; then break; fi; echo $X; done
+$ printf 'a\nb\nc\n' | while read X; do if [ $X = b ]; then continue; fi; echo $X; done
+$ printf '1\n2\n3\n' | while read X; do echo $((X*2)); done | sort -rn
+$ printf 'x\ny\n' | while read A; do read B; echo "$A-$B"; done
+$ printf 'x\ny\nz\n' | while read A; do cat; done
+$ printf 'x\ny\nz\n' | while read A; do head -n 1; echo "took $A"; done
+$ printf 'x\ny\nz\n' | while read A; do echo "$A"; wc -l; done
+$ printf 'x\ny\n' | while read A; do echo in; done; echo out
+$ printf 'x\ny\n' | for i in 1 2 3; do read A; echo "$i:$A:$?"; done
+$ printf 'x\ny\n' | if read A; then echo "got $A"; read B; echo "then $B"; fi
+$ printf 'x\ny\n' | until read A && [ "$A" = y ]; do echo "skip $A"; done
+$ while read A; do while read B; do echo "$A$B"; done < notes.txt; done < README.md | head -n 4
+$ while read A B; do echo "$B"; done < README.md > out.txt; cat out.txt
+$ read A < README.md; read B < README.md; echo "$A|$B"
+$ read 1X < README.md; echo $?
+$ echo hi | read; echo "[$REPLY]"
+$ echo "a b" | read X Y; echo "[$X$Y]"
+$ read -r; echo $?
+! read -p prompt X ## flag: read -p
+! read -a X ## flag: read -a
+! read -n 1 X ## flag: read -n
+! read -d : X ## flag: read -d
+! echo a | while read -s X; do echo; done ## flag: read -s
+
+# Redirections on a construct, left to right.
+$ for f in a b; do echo $f; done > one.txt > two.txt; wc -c one.txt two.txt
+$ for f in a b; do echo $f; ls nope; done > out.txt 2> err.txt; cat out.txt; wc -l < err.txt
+$ for f in a b; do echo $f; ls nope; done 2>&1 > out.txt | wc -l
+$ for f in a b; do echo $f; done > nodir/out.txt; echo $?
+$ while read L; do echo "$L"; done < nope.txt; echo $?
+$ while read L; do echo "$L"; done < README.md >> notes.txt; wc -l notes.txt
+$ if true; then echo a; echo b; fi > out.txt; cat out.txt
+$ for f in a b; do cat; done < README.md
+$ for f in a b; do read L; echo "$f: $L"; done < README.md
+$ for f in a b; do echo $f; done > /dev/null; echo quiet
+$ for f in a b; do echo $f >&2; done 2> err.txt; cat err.txt
+$ for f in a b; do echo $f; done > README.md; cat README.md
+$ for f in a; do cat README.md; done > README.md; wc -c README.md
+$ i=0; while [ $i -lt 3 ]; do echo $i; i=$((i+1)); done <<EOF⏎unused⏎EOF
+$ while read L; do echo "[$L]"; done <<EOF⏎one⏎two $((1+1))⏎EOF
+$ X=5; while read L; do echo "$L"; done <<EOF⏎value $X⏎EOF
+
+# In pipelines.
+$ for f in b a; do echo $f; done | sort | tr a-z A-Z
+$ ls src | while read f; do echo "$f"; done | wc -l
+$ echo start | if read X; then echo "$X end"; fi | tr a-z A-Z
+$ seq 5 | while read n; do echo $((n*n)); done | tail -n 2
+$ seq 100 | while read n; do echo $n; done | head -n 3
+$ for i in $(seq 100); do echo $i; done | head -n 2
+$ i=0; while true; do i=$((i+1)); echo $i; done | head -n 3
+$ for f in a b; do echo $f; done | while read x; do echo "<$x>"; done
+$ cat README.md | for i in 1 2; do read L; echo "$i $L"; done
+$ for f in a b; do echo $f; done | for g in 1; do cat; done
+$ true | for f in a; do echo $f; done
+$ for f in a; do echo $f; done | true; echo $?
+$ for f in a; do false; done | cat; echo $?
+$ echo x | while read L; do false; done; echo $?
+
+# What the text shows is checked before anything runs; what only an
+# expansion shows is refused when it is reached, and what ran stays.
+! rm README.md; for f in a; do awk 1; done ## command: awk
+! rm README.md; if false; then ls --frobnicate; fi ## flag: ls --frobnicate
+= echo kept > made.txt; X=awk; $X 1; echo not reached
+2> qdb: unsupported command: awk
+? 2
++ cat made.txt
+= echo kept > made.txt; X=--frobnicate; ls $X; echo not reached
+2> qdb: unsupported flag: ls --frobnicate (long options other than the ones listed in the README are not supported)
+? 2
++ cat made.txt
+= for f in a b c; do echo $f > $f.txt; X=${X}x; if [ $X = xx ]; then $(echo awk) 1; fi; done
+2> qdb: unsupported command: awk
+? 2
++ ls *.txt
+= X=-; cd $X
+2> qdb: unsupported cd -: going back to the directory before
+? 2
+= X=-p; read $X Y
+2> qdb: unsupported flag: read -p
+? 2
+
+# xargs and find -exec run commands; what is part of the shell they
+# cannot run, as on a real system, where cd and : are not programs.
+! echo a | xargs cd ## command: cd
+! echo a | xargs : ## command: :
+! echo a | xargs read ## command: read
+! echo a | xargs export ## command: export
+! echo a | xargs unset ## command: unset
+! echo a | xargs break ## command: break
+! echo a | xargs continue ## command: continue
+= find src -maxdepth 0 -exec cd {} \;
+2> qdb: unsupported command: cd
+? 2
+= find src -maxdepth 0 -exec : {} \;
+2> qdb: unsupported command: : (it is part of the shell)
+? 2
+$ cd src; ls | xargs wc -l | tail -n 1
+$ cd src; find . -name '*.h' | xargs grep -c define
+$ find src -maxdepth 0 -exec pwd \;
+$ ls src | while read f; do echo $f; done | xargs echo
+
+# A unit that runs too many commands is stopped; what it wrote stays.
+= echo before > kept.txt; while true; do :; done; echo never
+2> qdb: the unit was stopped after 1000000 commands, the most one unit may run; what it changed before that stays
+? 3
++ cat kept.txt
+= i=0; while true; do i=$((i+1)); echo $i > count.txt; done
+2> qdb: the unit was stopped after 1000000 commands, the most one unit may run; what it changed before that stays
+? 3
++ cat count.txt
+= for i in $(seq 100000); do :; done; echo $i
+> 100000
+= until false; do true; done | cat
+2> qdb: the unit was stopped after 1000000 commands, the most one unit may run; what it changed before that stays
+? 3
