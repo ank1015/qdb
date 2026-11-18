@@ -159,3 +159,61 @@ F path/to/file          a file; its lines follow
 | `shell.case` | quoting, globs, pipes, and everything that must be refused |
 | `pipes.case` | pipelines that stop early: what is printed, what is written, and which errors are reported |
 | `text.case` | the text-only rule and awkward content |
+| `files_flags.case`, `read_flags.case`, `grep_flags.case`, `find_more.case`, `ls_long.case` | the flags added in stage 4 to the first fifteen commands, with file times set by `touch -d` |
+| `sed_script.case` | sed addresses, commands, blocks and `-i` with a suffix |
+| `shell_lists.case` | command lists, redirections of all three streams, `/dev/null`, here-documents, command substitution, brace expansion |
+| `rg.case` | `rg`: flags, globs, types, and the ignore rules, on the fixture `rg.fx` |
+| `small.case` | `printf`, `test` and `[`, `seq`, `basename`, `dirname`, `true`, `false`, `:`, `sleep` |
+| `p5_text.case`, `p5_sort.case`, `p5_sys.case` | `cut`, `tr`, `uniq`, `nl`, `tee`; `sort`; `du`, `date`, `xargs` |
+
+## Clock and file times
+
+Both sides must show the same times. A case sets the times it prints
+with `touch -d`, which runs on both sides. For the generated tests the
+harness sets every file's and folder's time afresh before each case, to
+the same age on both sides. `ls -l` is compared with the owner and group
+of the real side replaced by `qdb`.
+
+## The coverage table (`--coverage`)
+
+`tests/coverage.txt` has one row for every command and every flag,
+syntax form or behaviour the engine supports, with a pattern that finds
+the cases exercising it:
+
+```
+grep<TAB>-o<TAB>-o             a short flag of that command
+rg<TAB>--files<TAB>--files     a long flag
+shell<TAB>&&<TAB>re:&&         a regular expression over the whole case
+```
+
+Every run of the harness prints the table with the number of cases per
+row, and fails if a row has none. `--coverage` prints the table alone.
+
+## Generated tests against the real tools (`--gen FAMILY`)
+
+`src/testgen.rs` writes random command lines over a small generated tree
+for eight families: `shell`, `grep`, `sed`, `find`, `rg`, `text` (sort,
+uniq, cut, tr, nl, seq, printf), `ls` (ls and du) and `xargs`. Each line
+runs on the real tool and on the engine and everything is compared, as
+for a hand-written case.
+
+```
+./target/release/qdb-harness --gen all --count 10000 --seed 1
+./target/release/qdb-harness --gen sed --count 10000 --seed 2 --store reopen
+```
+
+A line of the result reads `N passed, K known differences, F failed`. A
+known difference is one where the real tool's output is a defect that
+the engine does not copy; there is one kind, in `known_difference` in
+`src/bin/harness.rs`: GNU grep 3.11 with `-o`, `-w` and `-x` together
+takes the line's newline as part of the match for some patterns and
+prints an empty line after it (and prints an empty match for `^$`). The
+engine prints the match alone. It showed in 9 of 30,000 generated grep
+lines.
+
+The generator stays inside what the engine supports and inside what is
+deterministic on the real side: only the last command of a pipeline
+writes a file or standard error, and `find -size` is asked only of
+files. Where the real tool prints in directory order (`find`, `grep -r`,
+`du`, `rg` without `--sort path`) the lines are compared as a sorted set.
+

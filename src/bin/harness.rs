@@ -804,9 +804,29 @@ fn diff_run(steps: usize, seed: u64, setup: &Setup, scratch: &mut Scratch) -> Re
             on.db.as_mut().unwrap().set_clock(Some(now));
             off.set_clock(Some(now));
             let before = (on.db().index_work(), on.db().io_stats().content_bytes);
+            let moved = on.db().io_stats().moved_bytes;
             let a = execute(on.db.as_mut().unwrap(), command.as_bytes());
-            if kind == "same" && matches!(nth, 1..=4 | 6) && (on.db().index_work(), on.db().io_stats().content_bytes) != before {
+            // A write of the same content still sets the file's time, as
+            // the real tools do, so upkeep may take a step after it: only
+            // a line where upkeep moved nothing can be held to this.
+            let upkeep = on.db().io_stats().moved_bytes != moved;
+            if kind == "same" && matches!(nth, 1..=4 | 6) && !upkeep && (on.db().index_work(), on.db().io_stats().content_bytes) != before {
                 println!("FAIL  seed {} step {}: a write that changes nothing reached the index or wrote content: {}", seed, step + 1, command);
+                println!("    index work and content bytes before: {:?}", before);
+                println!("    and after: {:?}", (on.db().index_work(), on.db().io_stats().content_bytes));
+                println!("    all lines of the step: {:?}; the line printed: {}", all, show(&a.stderr));
+                if std::env::var_os("QDB_DIFF_VERBOSE").is_some() {
+                    let f = command.split(' ').nth(1).unwrap_or("");
+                    for c in [format!("wc {} same.txt", f), format!("tail -c 80 {}", f), "tail -c 80 same.txt".to_string()] {
+                        println!("    {}: {}", c, show(&execute(on.db.as_mut().unwrap(), c.as_bytes()).stdout));
+                    }
+                    if let Ok(id) = on.db().resolve(f.as_bytes()) {
+                        println!("    pieces of {}: {:?}", f, on.db().pieces(id).iter().map(|p| on.db().text_of(p).len()).collect::<Vec<_>>());
+                    }
+                    if let Ok(id) = on.db().resolve(b"same.txt") {
+                        println!("    pieces of same.txt: {:?}", on.db().pieces(id).iter().map(|p| on.db().text_of(p).len()).collect::<Vec<_>>());
+                    }
+                }
                 return Ok(false);
             }
             if let Some(e) = on.db().failure() {
@@ -837,8 +857,10 @@ fn diff_run(steps: usize, seed: u64, setup: &Setup, scratch: &mut Scratch) -> Re
             println!("FAIL  seed {} step {}: the trees differ after {:?}", seed, step + 1, all);
             return Ok(false);
         }
-        if (step + 1) % 1000 == 0 || step + 1 == steps {
+        let every: usize = std::env::var("QDB_DIFF_CHECK_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(1000);
+        if (step + 1) % every == 0 || step + 1 == steps {
             if let Some(what) = rebuild_check(on.db()) {
+                println!("    the step: {:?}", all);
                 println!("FAIL  seed {} step {}: {}", seed, step + 1, what);
                 return Ok(false);
             }
@@ -889,14 +911,29 @@ fn known_difference(family: &str, command: &str) -> bool {
 const CLOCK_BASE: i64 = 1_700_000_000_000_000_000;
 
 fn digest(db: &Db) -> u64 {
+    digest_of(db, true)
+}
+
+/// The same without the modification times, for the kill test: there
+/// the tree to compare with is made by another process, a moment
+/// earlier or later by the clock.
+fn digest_untimed(db: &Db) -> u64 {
+    digest_of(db, false)
+}
+
+fn digest_of(db: &Db, times: bool) -> u64 {
     use std::hash::Hasher;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    h.write_i64(db.mtime(db.root()));
+    if times {
+        h.write_i64(db.mtime(db.root()));
+    }
     for (path, content) in db.snapshot() {
         h.write_usize(path.len());
         h.write(&path);
         // Modification times are part of what must survive.
-        h.write_i64(db.mtime(db.resolve(&path).expect("a path of the snapshot")));
+        if times {
+            h.write_i64(db.mtime(db.resolve(&path).expect("a path of the snapshot")));
+        }
         match content {
             None => h.write_u8(0),
             Some(c) => {
@@ -1277,10 +1314,11 @@ fn kill_run(kills: usize, seed: u64, sync: SyncMode, scratch: &mut Scratch) -> R
     }
     let cfg = Config { piece: 512, segment: 256 << 10, checkpoint: 16 << 10, sync, ..Config::default() };
     let dir = scratch.base.join("kill-db");
+    let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0);
     let mut gen = Gen::new(seed);
     let mut rng = Rng(seed.wrapping_mul(0xD1B54A32D192ED03) | 1);
     let mut shadow = Db::without_index();
-    let mut history = History { states: vec![(digest(&shadow), 0)], returned: 0, running: false, upkeep: false };
+    let mut history = History { states: vec![(digest_untimed(&shadow), 0)], returned: 0, running: false, upkeep: false };
     let mut counts = CrashCounts::default();
     let (mut lines, mut mid_line, mut replayed) = (0usize, 0usize, 0u64);
     for kill in 0..kills {
@@ -1305,10 +1343,13 @@ fn kill_run(kills: usize, seed: u64, sync: SyncMode, scratch: &mut Scratch) -> R
                 if command.contains('\n') {
                     continue;
                 }
+                // Whether the line changed anything, a time included,
+                // decides whether it was logged.
+                let timed = digest(&shadow);
                 execute(&mut shadow, command.as_bytes());
                 let before = history.states[history.returned];
-                let after = digest(&shadow);
-                history.states.push((after, before.1 + (after != before.0) as u64));
+                let after = digest_untimed(&shadow);
+                history.states.push((after, before.1 + (digest(&shadow) != timed) as u64));
                 history.running = true;
                 lines += 1;
                 let marker = format!("QDB-ANSWERED-{}", lines);
@@ -1346,7 +1387,16 @@ fn kill_run(kills: usize, seed: u64, sync: SyncMode, scratch: &mut Scratch) -> R
         drop((to, from));
         let opened = Db::open_dir(&dir, cfg.clone()).map_err(|e| format!("recovery failed: {}", e)).and_then(|(db, report)| {
             db.check().map_err(|e| format!("after recovery, check: {}", e))?;
-            history.allows(&cfg, db.commit_seq(), digest(&db))?;
+            history.allows(&cfg, db.commit_seq(), digest_untimed(&db))?;
+            // The times cannot be compared with the shadow's, but every
+            // one must be a moment of this test.
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0);
+            for (path, _) in db.snapshot() {
+                let t = db.mtime(db.resolve(&path).expect("a path of the snapshot"));
+                if t < started || t > now {
+                    return Err(format!("after recovery, {} has a modification time outside the test ({} ns)", String::from_utf8_lossy(&path), t));
+                }
+            }
             Ok((db, report))
         });
         let (db, report) = match opened {
@@ -1367,7 +1417,7 @@ fn kill_run(kills: usize, seed: u64, sync: SyncMode, scratch: &mut Scratch) -> R
         replayed += report.replayed;
         shadow = db.clone();
         shadow.set_index(false);
-        history = History { states: vec![(digest(&shadow), db.commit_seq())], returned: 0, running: false, upkeep: false };
+        history = History { states: vec![(digest_untimed(&shadow), db.commit_seq())], returned: 0, running: false, upkeep: false };
         // Half the time the checking process closes the database
         // properly; otherwise the next process finds it as the kill left
         // it and recovers by itself.

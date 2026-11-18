@@ -1,0 +1,291 @@
+# The 133 cases of stages 1 to 3 that changed in stage 4.
+# Every one was a refusal (!). 131 are supported now and are compared with
+# the real tools ($); 2 are still refusals, of something else on the line.
+# The other 1,484 cases are unchanged and pass.
+
+## ls.case
+-! ls -l ## ls -l
+-! ls -la ## ls -l
+-! ls -S ## ls -S
+-! ls -d src ## ls -d
+-! ls -t ## ls -t
+-! ls -h ## ls -h
++$ ls -l
++$ ls -la src
++$ ls -S
++$ ls -d src
++$ ls -t
++$ ls -h
+-! ls -r ## ls -r
++$ ls -r
+
+## find.case
+-! find . -iname '*.C' ## find -iname
+-! find . -path './src/*' ## find -path
+-! find . -size +1k ## find -size
+-! find . -name '*.c' -exec cat {} + ## find -exec
+-! find . -print ## find -print
++$ find . -iname '*.C'
++$ find . -path './src/*'
++$ find . -type f -size +1k
++$ find . -name '*.c' -exec cat {} +
++$ find . -print
+-! find . -newer README.md ## find -newer
+-! find . -name a -o -name b ## find -o
+-! find . ! -name a ## find !
++$ find . -newer README.md
++$ find . -name a -o -name b
++$ find . ! -name a
+-! find . -mindepth 1 ## find -mindepth
++$ find . -mindepth 1
+
+## read.case
+-! cat -A README.md ## cat -A
+-! cat -s README.md ## cat -s
+-! cat -b README.md ## cat -b
++$ cat -A README.md
++$ cat -s README.md
++$ cat -b README.md
+-! head -5 README.md ## head -5
+-! head -c 10 README.md ## head -c
+-! head -q README.md ## head -q
+-! head -n 1k README.md ## size suffix
+-! head -n 2MB README.md ## size suffix
++$ head -5 README.md
++$ head -c 10 README.md
++$ head -q README.md
++$ head -n 1k README.md
++$ head -n 2MB README.md
+-! tail -5 README.md ## tail -5
++$ tail -5 README.md
+-! tail -c 10 README.md ## tail -c
++$ tail -c 10 README.md
+-! tail -n 1k README.md ## size suffix
++$ tail -n 1k README.md
+-! wc -m README.md ## wc -m
++$ wc -m README.md
+
+## grep.case
+-! grep -w foo data/words.txt ## grep -w
+-! grep -e TODO README.md ## grep -e
++$ grep -w foo data/words.txt
++$ grep -e TODO README.md
+-! grep -o foo data/words.txt ## grep -o
+-! grep -A 1 foo data/words.txt ## grep -A
+-! grep -B1 foo data/words.txt ## grep -B
+-! grep -C 1 foo data/words.txt ## grep -C
+-! grep --include='*.c' -r foo . ## long options
+-! grep -q foo data/words.txt ## grep -q
+-! grep -x foo data/words.txt ## grep -x
++$ grep -o foo data/words.txt
++$ grep -A 1 foo data/words.txt
++$ grep -B1 foo data/words.txt
++$ grep -C 1 foo data/words.txt
++$ grep --include='*.c' -r foo .
++$ grep -q foo data/words.txt
++$ grep -x foo data/words.txt
+-! grep -h foo data/words.txt ## grep -h
+-! grep -H foo data/words.txt ## grep -H
+-! grep -s foo data/words.txt ## grep -s
+-! grep -R foo . ## grep -R
+-! grep -m 1 foo data/words.txt ## grep -m
+-! grep -L foo data/words.txt ## grep -L
++$ grep -h foo data/words.txt
++$ grep -H foo data/words.txt
++$ grep -s foo data/words.txt
++$ grep -R foo .
++$ grep -m 1 foo data/words.txt
++$ grep -L foo data/words.txt
+-! grep -rw foo . ## grep -w
++$ grep -rw foo .
+
+## sed.case
+-! sed -iE 's/1/x/' data/numbers.txt ## backup suffix
++$ sed -iE 's/1/x/' data/numbers.txt
+-! sed -n 's/a/b/p' notes.txt ## sed -n
+-! sed -e 's/a/b/' notes.txt ## sed -e
+-! sed -r 's/a/b/' notes.txt ## sed -r
+-! sed -i.bak 's/a/b/' notes.txt ## backup suffix
+-! sed -ibak 's/a/b/' notes.txt ## backup suffix
++$ sed -n 's/a/b/p' notes.txt
++$ sed -e 's/a/b/' notes.txt
++$ sed -r 's/a/b/' notes.txt
++$ sed -i.bak 's/a/b/' notes.txt
++$ sed -ibak 's/a/b/' notes.txt
+-! sed -s 's/a/b/' notes.txt ## sed -s
++$ sed -s 's/a/b/' notes.txt
+-! sed 's/a/b/p' notes.txt ## `p` flag
+-! sed 's/a/b/2' notes.txt ## `2` flag
+-! sed 's/a/b/I' notes.txt ## `I` flag
+-! sed 's/a/b/i' notes.txt ## `i` flag
++$ sed 's/a/b/p' notes.txt
++$ sed 's/a/b/2' notes.txt
++$ sed 's/a/b/I' notes.txt
++$ sed 's/a/b/i' notes.txt
+-! sed 's/a/b/gp' notes.txt ## `p` flag
+-! sed '2s/a/b/' notes.txt ## addresses
+-! sed '1,2s/a/b/' notes.txt ## addresses
+-! sed '/note/s/a/b/' notes.txt ## addresses
+-! sed '$s/a/b/' notes.txt ## addresses
+-! sed 's/a/b/;s/c/d/' notes.txt ## more than one command
+-! sed 's/a/b/⏎s/c/d/' notes.txt ## more than one command
+-! sed d notes.txt ## `d` command
+-! sed '2d' notes.txt ## addresses
+-! sed p notes.txt ## `p` command
+-! sed '5,10p' notes.txt ## addresses
+-! sed 'y/abc/xyz/' notes.txt ## `y` command
+-! sed q notes.txt ## `q` command
+-! sed '{s/a/b/}' notes.txt ## blocks
+-! sed '' notes.txt ## empty script
++$ sed 's/a/b/gp' notes.txt
++$ sed '2s/a/b/' notes.txt
++$ sed '1,2s/a/b/' notes.txt
++$ sed '/note/s/a/b/' notes.txt
++$ sed '$s/a/b/' notes.txt
++$ sed 's/a/b/;s/c/d/' notes.txt
++$ sed 's/a/b/⏎s/c/d/' notes.txt
++$ sed d notes.txt
++$ sed '2d' notes.txt
++$ sed p notes.txt
++$ sed '5,10p' notes.txt
++$ sed 'y/abc/xyz/' notes.txt
++$ sed q notes.txt
++$ sed '{s/a/b/}' notes.txt
++$ sed '' notes.txt
+-! sed -i -n 's/a/b/' notes.txt ## sed -n
++$ sed -i -n 's/a/b/' notes.txt
+
+## write.case
+-! touch -c x ## touch -c
+-! touch -t 202001010000 x ## touch -t
++$ touch -c x
++$ touch -t 202001010000 x
+
+## copy_move.case
+-! cp -n README.md x ## cp -n
+-! cp -a src x ## cp -a
+-! cp -R src x ## cp -R
+-! cp -v README.md x ## cp -v
+-! cp -f README.md x ## cp -f
+-! cp -p README.md x ## cp -p
++$ cp -n README.md x
++$ cp -a src x
++$ cp -R src x
++$ cp -v README.md x
++$ cp -f README.md x
++$ cp -p README.md x
+-! mv -n README.md x ## mv -n
+-! mv -f README.md x ## mv -f
+-! mv -v README.md x ## mv -v
++$ mv -n README.md x
++$ mv -f README.md x
++$ mv -v README.md x
+
+## remove.case
+-! rm -v README.md ## rm -v
+-! rm -d empty ## rm -d
+-! rm -R src ## rm -R
++$ rm -v README.md
++$ rm -d empty
++$ rm -R src
+-! rm -rfv src ## rm -v
++$ rm -rfv src
+-! rmdir -p x/y ## rmdir -p
++$ rmdir -p x/y
+
+## shell.case
+-! sort README.md ## command: sort
+-! uniq README.md ## command: uniq
+-! cut -c1 README.md ## command: cut
+-! tr a b ## command: tr
+-! rg TODO ## command: rg
+-! xargs ls ## command: xargs
+-! tee x ## command: tee
++$ sort README.md
++$ uniq README.md
++$ cut -c1 README.md
++$ tr a b
++$ rg TODO
++$ xargs ls
++$ tee x
+-! test -f README.md ## command: test
+-! [ -f README.md ] ## command: [
+-! true ## command: true
+-! printf hi ## command: printf
++$ test -f README.md
++$ [ -f README.md ]
++$ true
++$ printf hi
+-! du -sh . ## command: du
++$ du -sh .
+-! cat README.md | sort ## command: sort
+-! mkdir shouldnotexist | sort ## command: sort
++$ cat README.md | sort
++$ mkdir shouldnotexist | sort
+-! echo $(ls) ## command substitution $(...)
+-! echo "$(ls)" ## command substitution $(...)
+-! echo `ls` ## command substitution (`...`)
+-! echo "`ls`" ## command substitution (`...`)
++$ echo $(ls)
++$ echo "$(ls)"
++$ echo `ls`
++$ echo "`ls`"
+-! ls && ls ## && lists
+-! ls nope || ls ## || lists
+-! ls ; ls ## command lists (;)
+-! ls; ## command lists (;)
++$ ls && ls
++$ ls nope || ls
++$ ls ; ls
++$ ls;
+-! ls⏎ls ## more than one command
+-! rm README.md && ls ## && lists
+-! rm README.md; ls ## command lists (;)
+-! mkdir z; cd z ## command lists (;)
+-! cat < README.md ## input redirection (<)
+-! wc -l < README.md ## input redirection (<)
+-! cat << EOF ## here-documents
+-! cat <<EOF⏎hi⏎EOF ## here-documents
+-! cat <<- EOF ## here-documents
++$ ls⏎ls
++$ rm README.md && ls
++$ rm README.md; ls
++! mkdir z; cd z ## command: cd
++$ cat < README.md
++$ wc -l < README.md
++$ cat << EOF
++$ cat <<EOF⏎hi⏎EOF
++$ cat <<- EOF
+-! ls 2> err.txt ## standard error redirection (2>)
+-! ls 2>> err.txt ## standard error redirection (2>>)
+-! ls 2>&1 ## standard error redirection (2>&)
+-! ls > out.txt 2>&1 ## standard error redirection (2>&)
+-! ls &> out.txt ## &>
+-! ls &>> out.txt ## &>
+-! ls >& out.txt ## file descriptor duplication (>&)
++$ ls 2> err.txt
++$ ls 2>> err.txt
++$ ls 2>&1
++$ ls > out.txt 2>&1
++$ ls &> out.txt
++$ ls &>> out.txt
++$ ls >& out.txt
+-! cat 0< README.md ## file descriptor redirection (0<)
++$ cat 0< README.md
+-! echo {a,b} ## brace expansion
+-! echo {1..3} ## brace expansion
+-! echo x{a,b}y ## brace expansion
+-! mkdir -p x/{a,b} ## brace expansion
++$ echo {a,b}
++$ echo {1..3}
++$ echo x{a,b}y
++$ mkdir -p x/{a,b}
+-! ls || ## || lists
++! ls || ## syntax error
+
+## pipes.case
+-! echo x > made.txt | tail -5 ## tail -5
+-! rm notes.txt | grep -o a ## grep -o
++$ echo x > made.txt | tail -5
++$ rm notes.txt | grep -o a
+

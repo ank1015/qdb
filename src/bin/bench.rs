@@ -1393,12 +1393,12 @@ fn have_rg() -> bool {
 /// The runs a table shows, in order: label, column heading.
 const LABELS: &[(&str, &str)] = &[
     ("part4", "Stage 2, in memory"),
-    ("s3-mem", "Stage 3, in memory"),
-    ("s3-disk", "On disk, settled"),
-    ("s3-disk-after", "On disk, after the writes"),
-    ("s3-disk-cold", "On disk, cold"),
-    ("s3-disk-cap512", "On disk, 512 MB limit"),
-    ("s3-disk-cap512-after", "On disk, 512 MB limit, after the writes"),
+    ("s3-disk", "Stage 3, on disk, settled"),
+    ("s4-mem", "Stage 4, in memory"),
+    ("s4-disk", "Stage 4, on disk, settled"),
+    ("s4-disk-after", "Stage 4, on disk, after the writes"),
+    ("s4-disk-cap512", "Stage 4, on disk, 512 MB limit"),
+    ("s4-disk-small", "Stage 4, on disk, 1 GB for everything, file cache included"),
 ];
 
 struct Stored {

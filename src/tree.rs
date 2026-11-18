@@ -3159,8 +3159,13 @@ impl Db {
             if at != seg.end {
                 return Err(format!("{}: damaged: no whole record at offset {}, and the file goes on to {}", seg.name(), at, seg.end));
             }
-            if next_live != live.len() || ended != seg.sealed && seg.id != self.active {
+            if next_live != live.len() {
                 return Err(format!("{}: a file has a piece here that no content record holds", seg.name()));
+            }
+            // In memory a data file that is full is not given a closing
+            // record: there is no one to read it after a crash.
+            if ended != seg.sealed && seg.id != self.active && !self.volatile {
+                return Err(format!("{}: {} and {}", seg.name(), if ended { "has its closing record" } else { "has no closing record" }, if seg.sealed { "is counted as closed" } else { "is counted as still written to" }));
             }
             if let Some(p) = &seg.packed {
                 p.verify_all();

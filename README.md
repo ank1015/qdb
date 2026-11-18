@@ -14,12 +14,20 @@ index that lets a search read only the files that can match. Stage 3 put
 the data on disk: a format of its own, recovery after a crash to the
 result of a whole number of command lines, the engine's own memory
 independent of how much text there is, and upkeep done in small steps.
+Stage 4 widened the language: command lists, all three streams,
+here-documents, command substitution and brace expansion; most of the
+flags people use on the first fifteen commands; `rg` with its ignore
+rules; and eighteen more commands, from `sort` and `xargs` to `date`.
+Files and folders now carry a modification time, and a copy shares its
+content with the original until one of them changes.
 There is no concurrency yet: one process, one thread.
 
 Nothing is borrowed from an existing database, storage engine, search
 library or regex library. The crate depends on `memchr` (finding a byte
-or a substring), `libc` (mmap, flock, limits), `crc32fast` (checksums)
-and `lz4_flex` (the one compression codec, used with `--compress`).
+or a substring), `libc` (mmap, flock, limits), `crc32fast` (checksums),
+`lz4_flex` (the one compression codec, used with `--compress`) and
+`regex-syntax` (parsing `rg` patterns only; the matching is the
+engine's own).
 
 ## Quick start
 
@@ -43,7 +51,7 @@ cargo build --release
 ./target/release/qdb --db my.qdb --check --stats
 ./target/release/qdb --db my.qdb --compact
 
-# compare the engine with the real tools (1,617 cases): in memory, on
+# compare the engine with the real tools (4,676 cases): in memory, on
 # disk, and on disk closed and opened again after every step
 ./target/release/qdb-harness
 ./target/release/qdb-harness --no-index
@@ -56,6 +64,9 @@ cargo build --release
 
 # index on against index off over 10,000 random searches and writes
 ./target/release/qdb-harness --diff 10000 --seed 1
+
+# 10,000 generated command lines per family against the real tools
+./target/release/qdb-harness --gen all --count 10000 --seed 1
 
 # time the engine against the real tools
 ./target/release/qdb-bench --dataset small
@@ -143,37 +154,76 @@ line; an index file per data file; a checkpoint of the tree.
 
 ## What is supported
 
+Thirty-four commands. Short flags combine (`ls -ltR`, `grep -rin`), and
+the long forms listed are accepted too.
+
 | Command | Flags |
 |---|---|
-| `ls` | `-a -R -1 -p` |
-| `find` | `-name -type f/d -maxdepth` |
-| `cat` | `-n` |
-| `head` | `-n N` |
-| `tail` | `-n N`, `-n +N` |
-| `wc` | `-l -w -c` |
-| `grep` | `-r -i -n -l -v -c -E -F` |
-| `mkdir` | `-p` |
-| `touch` | |
-| `cp` | `-r` |
+| `ls` | `-a -A -R -1 -p -d -r -S -t -l -h` |
+| `find` | `-name -iname -path -ipath -type f/d -maxdepth -mindepth -empty -size -newer -mmin -mtime -print -print0 -prune`, `-exec ... ;` and `-exec ... +`, `! -not -a -and -o -or ( )` |
+| `cat` | `-n -b -s -A -e -E -t -T -v -u` |
+| `head` | `-n N`, `-n -N`, `-c N`, `-NUM`, `-q -v`, size suffixes |
+| `tail` | `-n N`, `-n +N`, `-c N`, `-c +N`, `-NUM`, `-q -v`, size suffixes |
+| `wc` | `-l -w -c -m` |
+| `grep` | `-r -R -i -n -l -L -v -c -o -q -s -w -x -h -H -I -a`, `-E -F -G`, `-e PATTERN` (several), `-A -B -C N`, `-NUM`, `-m N`, `--include --exclude --exclude-dir` |
+| `rg` | `-i -S -s -F -w -x -v -c -l -n -N -0`, `-A -B -C N`, `-m N`, `-g GLOB`, `-t TYPE`, `-T TYPE`, `-u -uu -uuu`, `--hidden --no-ignore --files --no-heading --sort path`, `-j N` (accepted; there is one thread) |
+| `sed` | `-n -E -r -i -i.SUFFIX -s -e`; addresses `N`, `$`, `/re/`, `\%re%`, `N,M`, `N,+M`, `first~step`, `0,/re/`, `!`; commands `s p d q Q = a i c y` and `{ }` blocks; `s` flags `g p N i I`; `&` and `\1`..`\9` |
+| `sort` | `-u -n -r -h -f -b -s -c -C`, `-t SEP`, `-k` with character positions and modifiers, `--parallel=N` (accepted) |
+| `uniq` | `-c -d -u -i`, `-f N`, `-s N`, `-w N` |
+| `cut` | `-b -c -f`, `-d`, `-s`, `--complement`, `--output-delimiter` |
+| `tr` | `-d -s -c -C -t`, ranges, classes, `[c*n]` repeats, escapes |
+| `nl` | `-b -h -f` with `a t n`, `-v -i -w -s`, `-n ln/rn/rz` |
+| `tee` | `-a`, several files |
+| `du` | `-s -h -a -c -d N -b -k -m -x`, `--apparent-size`, `--exclude=PAT` |
+| `date` | `-u`, `-d WHEN`, `-I`, `-R`, `+FORMAT` |
+| `xargs` | `-n -I -i -L -l -0 -d -r -t -s -x`, `-P 1` |
+| `printf` | `%s %b %c %d %i %u %x %X %o %f %F %e %E %g %G %%`, flags, width, precision, escapes |
+| `test`, `[` | `-f -d -e -s -z -n`, `= == !=`, `-eq -ne -lt -le -gt -ge`, `! -a -o`, quoted parentheses |
+| `seq` | `-s -w -f` |
+| `basename` | `-a -s SUFFIX -z` |
+| `dirname` | several operands, `-z` |
 | `echo` | `-n` |
-| `sed` | `-i -E`, `s/old/new/` with `g` |
-| `mv` | |
-| `rm` | `-r -f` |
-| `rmdir` | |
+| `true`, `false`, `:`, `sleep` | |
+| `mkdir` | `-p` |
+| `touch` | `-c`, `-d WHEN`, `-t STAMP` |
+| `cp` | `-r -R -a -p -f -n -T -v` |
+| `mv` | `-f -n -v` |
+| `rm` | `-r -R -f -d -v` |
+| `rmdir` | `-p` |
 
-Shell syntax: pipes, `>` and `>>`, globs (`*`, `?`, `[...]` with bash's
-default rules), single quotes, double quotes and backslash escapes.
-Combined short flags (`ls -aR`, `grep -rin`) work.
+Shell syntax, as bash 5.2 reads it:
+
+| Kind | What |
+|---|---|
+| Lists | `;`, newline, `&&`, `||` |
+| Pipes | `a \| b \| c`, with the exit status of the last stage |
+| Redirections | `>`, `>>`, `<`, `2>`, `2>>`, `2>&1`, `>&2`, `&>`, `&>>`, and `/dev/null` as a source or a target |
+| Here-documents | `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`, several on one line |
+| Substitution | `$(...)` and backticks, nested, in or out of double quotes |
+| Braces | `{a,b}`, nested, `{1..9}`, `{1..9..2}`, `{a..z}`, `{01..10}` |
+| Globs | `*`, `?`, `[...]` with bash's default rules |
+| Quoting | single quotes, double quotes, backslash, line continuation |
+
+What the data model has no fact for prints a fixed value: `ls -l` shows
+mode `-rw-r--r--` or `drwxr-xr-x`, owner and group `qdb`, and a folder's
+size as 4096; `du` and the `total` line count content in 4 KB blocks.
+The one fact kept per file and folder besides name and content is the
+modification time. Dates print in UTC.
 
 Anything else is refused before any part of the line runs, with exit
 status 2 and a message that names what was refused:
 
 ```
-$ qdb -c 'ls ; ls'        qdb: unsupported syntax: command lists (;)
 $ qdb -c 'cat $HOME'      qdb: unsupported syntax: variable expansion ($HOME)
-$ qdb -c 'ls --all'       qdb: unsupported flag: ls --all (long options are not supported yet)
+$ qdb -c 'for f in *; do cat $f; done'
+                          qdb: unsupported syntax: for loop
+$ qdb -c 'ls --color'     qdb: unsupported flag: ls --color (long options other than the ones listed in the README are not supported)
+$ qdb -c 'sort -g a'      qdb: unsupported flag: sort -g
 $ qdb -c 'awk 1'          qdb: unsupported command: awk
+$ qdb -c 'ln -s a b'      qdb: unsupported command: ln (the database has no links, hard or symbolic)
 ```
+
+`docs/HANDBACK-4.md` lists what is still refused, by kind.
 
 There is no current directory. Every path is resolved from the root, so
 `a`, `./a` and `/a` name the same thing.
