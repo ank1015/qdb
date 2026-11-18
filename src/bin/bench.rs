@@ -1178,7 +1178,9 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
             continue;
         }
         check_safe(&command.replace('⏎', "\n"), &root)?;
-        let unordered = order_is_unspecified(&command);
+        // A sort after the walk puts its lines in one order again.
+        let sorted_later = command.contains("| sort");
+        let unordered = order_is_unspecified(&command) && !sorted_later;
         let not_compared = nocmp.contains(template);
         let long_listing = command.split(['|', ';', '&']).any(|c| {
             let mut w = c.split_whitespace();
@@ -1248,7 +1250,7 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
             "not compared".to_string()
         } else if real_code != first.code {
             format!("NO: exit status, real {}, engine {}", real_code, first.code)
-        } else if order_dependent(&command) {
+        } else if order_dependent(&command) && !sorted_later {
             let lines = |b: &[u8]| b.iter().filter(|c| **c == b'\n').count();
             if lines(&real_stdout) == lines(&engine_stdout) {
                 "order differs".to_string()

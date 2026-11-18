@@ -519,17 +519,22 @@ impl Filter for Tr {
             if self.plain {
                 self.out.extend(chunk.iter().map(|c| self.map[*c as usize]));
             } else {
-                for c in chunk {
-                    if self.delete[*c as usize] {
-                        continue;
-                    }
-                    let c = self.map[*c as usize];
-                    if self.squeeze[c as usize] && self.last == Some(c) {
-                        continue;
-                    }
-                    self.last = Some(c);
-                    self.out.push(c);
+                // No branch per byte: every byte is written, and the place
+                // to write only moves on past one that is kept.
+                self.out.resize(chunk.len(), 0);
+                let mut j = 0;
+                let mut last: u32 = self.last.map_or(256, u32::from);
+                for &c in chunk {
+                    let gone = self.delete[c as usize];
+                    let m = self.map[c as usize];
+                    let again = self.squeeze[m as usize] & (u32::from(m) == last);
+                    // Safety: j counts bytes kept, never more than seen.
+                    unsafe { *self.out.get_unchecked_mut(j) = m };
+                    j += usize::from(!(gone | again));
+                    last = if gone { last } else { u32::from(m) };
                 }
+                self.out.truncate(j);
+                self.last = u8::try_from(last).ok();
             }
             io.put(&self.out);
         }
@@ -677,7 +682,8 @@ struct UniqOpts {
 
 struct Uniq {
     o: UniqOpts,
-    held: Option<Vec<u8>>,
+    held: Vec<u8>,
+    has: bool,
     n: u64,
     lines: LineBuf,
     out: Vec<u8>,
@@ -712,7 +718,10 @@ impl Uniq {
     }
 
     fn emit(&mut self) {
-        let Some(line) = self.held.take() else { return };
+        if !self.has {
+            return;
+        }
+        self.has = false;
         let show = match (self.o.repeated, self.o.unique) {
             (true, true) => false,
             (true, false) => self.n > 1,
@@ -721,21 +730,37 @@ impl Uniq {
         };
         if show {
             if self.o.count {
-                self.out.extend_from_slice(format!("{:>7} ", self.n).as_bytes());
+                // The count, right-aligned in seven columns.
+                let mut digits = [b' '; 20];
+                let mut at = digits.len();
+                let mut n = self.n;
+                loop {
+                    at -= 1;
+                    digits[at] = b'0' + (n % 10) as u8;
+                    n /= 10;
+                    if n == 0 {
+                        break;
+                    }
+                }
+                let from = at.min(digits.len() - 7);
+                self.out.extend_from_slice(&digits[from..]);
+                self.out.push(b' ');
             }
-            self.out.extend_from_slice(&line);
+            self.out.extend_from_slice(&self.held);
             self.out.push(b'\n');
         }
     }
 
     fn line(&mut self, line: &[u8]) {
         let text = line.strip_suffix(b"\n").unwrap_or(line);
-        if self.held.as_ref().is_some_and(|h| self.same(h, text)) {
+        if self.has && self.same(&self.held, text) {
             self.n += 1;
             return;
         }
         self.emit();
-        self.held = Some(text.to_vec());
+        self.held.clear();
+        self.held.extend_from_slice(text);
+        self.has = true;
         self.n = 1;
     }
 }
@@ -807,7 +832,7 @@ pub fn uniq(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         Err(r) => return Ok(r),
     };
     let o = UniqOpts { count: p.has(b'c'), repeated: p.has(b'd'), unique: p.has(b'u'), icase: p.has(b'i'), skip_fields, skip_chars, width };
-    let make = move || -> Box<dyn Filter> { Box::new(Uniq { o, held: None, n: 0, lines: LineBuf::default(), out: Vec::new() }) };
+    let make = move || -> Box<dyn Filter> { Box::new(Uniq { o, held: Vec::new(), has: false, n: 0, lines: LineBuf::default(), out: Vec::new() }) };
     let files = if p.operands.first().is_some_and(|f| f == b"-") { Vec::new() } else { p.operands };
     Ok(over_files("uniq", files, make, |n| format!("uniq: error reading {}: Is a directory", quote(n))))
 }

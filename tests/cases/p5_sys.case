@@ -211,3 +211,7 @@ $ seq 1 2000 | sort | tail -2
 $ seq 1 300 | tr '\n' ' ' | wc -w
 $ printf 'b\na\n' | sort > out; cat out
 $ printf 'b\na\n' | tee f | sort > g; cat f g
+
+# Totals are remembered between commands and forgotten at a write.
+$ du -s . ; du -sb . ; echo more text here > du_new.txt ; du -s . ; du -sb . ; rm du_new.txt ; du -s . ; du -sb .
+$ du -s . ⏎ mkdir du_dir ⏎ du -s . ⏎ cp -r du_dir du_dir2 ⏎ du -s . du_dir ⏎ rm -r du_dir du_dir2 ⏎ du -s .

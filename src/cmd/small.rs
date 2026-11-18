@@ -924,6 +924,22 @@ pub fn seq(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         }
     }
     let operands: Vec<Vec<u8>> = args[i.min(args.len())..].to_vec();
+    if let Some(f) = &format {
+        // %a prints the bits of the number in hexadecimal.
+        let mut k = 0;
+        while k < f.len() {
+            if f[k] == b'%' {
+                k += 1;
+                while f.get(k).is_some_and(|c| b"-+ #0'.".contains(c) || c.is_ascii_digit()) {
+                    k += 1;
+                }
+                if matches!(f.get(k), Some(b'a') | Some(b'A')) {
+                    return Err(format!("flag: seq -f with %{} (hexadecimal floating point is not supported)", char::from(f[k])));
+                }
+            }
+            k += 1;
+        }
+    }
     Ok(Box::new(move |_, io| {
         if let Some(m) = missing {
             return usage(io, "seq", &m);

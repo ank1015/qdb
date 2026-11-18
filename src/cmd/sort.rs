@@ -227,7 +227,11 @@ impl Opts {
 
     /// The order of two lines by the keys alone.
     fn by_keys(&self, a: &[u8], b: &[u8]) -> Ordering {
-        for k in &self.keys {
+        self.by_keys_from(a, b, 0)
+    }
+
+    fn by_keys_from(&self, a: &[u8], b: &[u8], from: usize) -> Ordering {
+        for k in &self.keys[from..] {
             let (x, y) = (self.field(a, k), self.field(b, k));
             let ord = if k.o.human {
                 unit(x).cmp(&unit(y)).then_with(|| numeric(x, y))
@@ -263,13 +267,66 @@ impl Opts {
     }
 }
 
-/// One line of the run being gathered: where it is, and its first bytes
-/// to settle most comparisons without looking at it.
+impl Opts {
+    /// Whether what is compared first is compared as bytes, so that its
+    /// first eight can stand in for it: the whole line, or a first key
+    /// with no ordering letters.
+    fn bytes_first(&self) -> bool {
+        self.keys.first().is_none_or(|k| !k.o.numeric && !k.o.human && !k.o.fold)
+    }
+
+    /// What is compared first in a line: its place in the line and its
+    /// first bytes.
+    fn head(&self, line: &[u8]) -> (u64, u32, u32) {
+        match self.keys.first() {
+            None => (prefix(line), 0, line.len() as u32),
+            Some(k) if self.bytes_first() => {
+                let f = self.field(line, k);
+                let off = f.as_ptr() as usize - line.as_ptr() as usize;
+                (prefix(f), off as u32, f.len() as u32)
+            }
+            Some(_) => (0, 0, 0),
+        }
+    }
+
+    /// The order of two lines whose heads are known.
+    #[inline]
+    fn compare_headed(&self, a: &[u8], ha: (u64, u32, u32), b: &[u8], hb: (u64, u32, u32)) -> Ordering {
+        if self.keys.is_empty() {
+            let ord = ha.0.cmp(&hb.0).then_with(|| a.cmp(b));
+            return if self.reverse { ord.reverse() } else { ord };
+        }
+        if !self.bytes_first() {
+            return self.compare(a, b);
+        }
+        let k = &self.keys[0];
+        let ord = ha.0.cmp(&hb.0).then_with(|| a[ha.1 as usize..(ha.1 + ha.2) as usize].cmp(&b[hb.1 as usize..(hb.1 + hb.2) as usize]));
+        if ord != Ordering::Equal {
+            return if k.o.reverse { ord.reverse() } else { ord };
+        }
+        let ord = self.by_keys_from(a, b, 1);
+        if ord != Ordering::Equal || self.unique || self.stable {
+            return ord;
+        }
+        let ord = a.cmp(b);
+        if self.reverse {
+            ord.reverse()
+        } else {
+            ord
+        }
+    }
+}
+
+/// One line of the run being gathered: where it is, and the first bytes
+/// of what is compared first, to settle most comparisons without looking
+/// at the line.
 #[derive(Clone, Copy)]
 struct Ent {
     prefix: u64,
     off: u32,
     len: u32,
+    koff: u32,
+    klen: u32,
 }
 
 fn prefix(line: &[u8]) -> u64 {
@@ -305,10 +362,11 @@ impl Sorter {
 
     fn add(&mut self, line: &[u8]) {
         let text = line.strip_suffix(b"\n").unwrap_or(line);
-        if self.buf.len() + text.len() > u32::MAX as usize || self.scratch.as_ref().is_some_and(|s| s.vfs.is_some() && self.buf.len() + self.ents.len() * 16 >= s.limit.saturating_mul(RUN_SPOOLS)) {
+        if self.buf.len() + text.len() > u32::MAX as usize || self.scratch.as_ref().is_some_and(|s| s.vfs.is_some() && self.buf.len() + self.ents.len() * std::mem::size_of::<Ent>() >= s.limit.saturating_mul(RUN_SPOOLS)) {
             self.spill();
         }
-        self.ents.push(Ent { prefix: if self.o.keys.is_empty() { prefix(text) } else { 0 }, off: self.buf.len() as u32, len: text.len() as u32 });
+        let (prefix, koff, klen) = self.o.head(text);
+        self.ents.push(Ent { prefix, off: self.buf.len() as u32, len: text.len() as u32, koff, klen });
         self.buf.extend_from_slice(text);
     }
 
@@ -323,7 +381,7 @@ impl Sorter {
                 self.ents.sort_unstable_by(|a, b| a.prefix.cmp(&b.prefix).then_with(|| text(a).cmp(text(b))));
             }
         } else {
-            self.ents.sort_by(|a, b| o.compare(text(a), text(b)));
+            self.ents.sort_by(|a, b| o.compare_headed(text(a), (a.prefix, a.koff, a.klen), text(b), (b.prefix, b.koff, b.klen)));
         }
     }
 
@@ -420,12 +478,16 @@ impl Sorter {
         // while `all` is in use.
         let all: &[u8] = unsafe { std::slice::from_raw_parts(f.base(), self.written as usize) };
         // The next line of each run, and the lines after it.
-        let mut heads: Vec<Option<(&[u8], &[u8])>> = self
+        let o = self.o.clone();
+        let headed = |h: Option<(&'static [u8], &'static [u8])>| h.map(|(line, rest)| (line, rest, o.head(line)));
+        // Safety: as above; the slices do not outlive this call.
+        let all: &'static [u8] = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(all) };
+        let mut heads: Vec<Option<(&[u8], &[u8], (u64, u32, u32))>> = self
             .runs
             .iter()
             .map(|(s, e)| {
                 let run = &all[*s as usize..*e as usize];
-                next_line(run)
+                headed(next_line(run))
             })
             .collect();
         let mut last: Vec<u8> = Vec::new();
@@ -434,16 +496,19 @@ impl Sorter {
             // The least head; of equal ones, that of the earliest run.
             let mut best: Option<usize> = None;
             for (i, h) in heads.iter().enumerate() {
-                if let Some((line, _)) = h {
+                if let Some((line, _, hd)) = h {
                     match best {
-                        Some(b) if self.o.compare(heads[b].unwrap().0, line) != Ordering::Greater => {}
+                        Some(b) if {
+                            let (bl, _, bh) = heads[b].unwrap();
+                            o.compare_headed(bl, bh, line, *hd) != Ordering::Greater
+                        } => {}
                         _ => best = Some(i),
                     }
                 }
             }
             let Some(b) = best else { break };
-            let (line, rest) = heads[b].unwrap();
-            heads[b] = next_line(rest);
+            let (line, rest, _) = heads[b].unwrap();
+            heads[b] = headed(next_line(rest));
             if self.o.unique {
                 if any && self.o.compare(&last, line) == Ordering::Equal {
                     continue;

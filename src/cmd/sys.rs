@@ -100,7 +100,13 @@ impl Du {
         sum
     }
 
+    /// Everything under a folder. Totals are remembered by the storage
+    /// layer until the tree changes, so asking again costs a lookup.
     fn below(&self, db: &Db, dir: NodeId) -> u64 {
+        let kind = u8::from(self.apparent);
+        if let Some(sum) = db.total(dir, kind) {
+            return sum;
+        }
         let mut sum = 0;
         for child in db.children(dir).values() {
             sum += self.own(db, *child);
@@ -108,6 +114,7 @@ impl Du {
                 sum += self.below(db, *child);
             }
         }
+        db.set_total(dir, kind, sum);
         sum
     }
 }

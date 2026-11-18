@@ -121,7 +121,7 @@ rg -j 1 -i {RAREUP}
 rg -j 1 -w {FEW}
 rg -j 1 -F '{FEW}'
 rg -j 1 -n -C 2 {RARE}
-rg -j 1 -o '{PREFIX}_[a-z]+\('
+rg -j 1 '{PREFIX}_[a-z]+\('
 rg -j 1 '{RARE}|{ONE}'
 rg -j 1 '\b{RARE}\w*'
 rg -j 1 -t c {FEW}

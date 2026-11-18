@@ -418,6 +418,12 @@ pub struct Db {
     /// will go into the log.
     ops: Vec<u8>,
     dirty: bool,
+    /// Counts every change to the tree or to content; what is remembered
+    /// about the tree is good for one value of it.
+    epoch: u64,
+    /// Totals a command worked out over whole folders, with the epoch
+    /// they are good for.
+    totals: std::cell::RefCell<(u64, std::collections::HashMap<(NodeId, u8), u64>)>,
     /// Pieces it has taken out of files. Their content is forgotten when
     /// the command line ends.
     retired: Vec<(NodeId, Piece)>,
@@ -653,6 +659,8 @@ impl Db {
             consult: true,
             ops: Vec::new(),
             dirty: false,
+            epoch: 0,
+            totals: Default::default(),
             retired: Vec::new(),
             veils: Vec::new(),
             timed: Default::default(),
@@ -1742,6 +1750,7 @@ impl Db {
             }
         }
         self.dirty = true;
+        self.epoch += 1;
         let added: u64 = new.iter().map(|p| p.len as u64).sum();
         let gone: Vec<Piece> = t.pieces.splice(at..at + del, new).collect();
         t.len = t.len + added - gone.iter().map(|p| p.len as u64).sum::<u64>();
@@ -2533,6 +2542,27 @@ impl Db {
 
     // ------------------------------------------------------------- the tree
 
+    /// A total over everything under a folder that a command worked out
+    /// since the tree last changed, by the command's own `kind` number.
+    pub fn total(&self, folder: NodeId, kind: u8) -> Option<u64> {
+        let t = self.totals.borrow();
+        if t.0 == self.epoch {
+            t.1.get(&(folder, kind)).copied()
+        } else {
+            None
+        }
+    }
+
+    /// Remember a total until the tree next changes.
+    pub fn set_total(&self, folder: NodeId, kind: u8, sum: u64) {
+        let mut t = self.totals.borrow_mut();
+        if t.0 != self.epoch {
+            t.0 = self.epoch;
+            t.1.clear();
+        }
+        t.1.insert((folder, kind), sum);
+    }
+
     pub fn root(&self) -> NodeId {
         self.root
     }
@@ -2697,6 +2727,7 @@ impl Db {
         }
         self.nodes.get_mut(id).unwrap().mtime = t;
         self.dirty = true;
+        self.epoch += 1;
         if !self.volatile {
             self.timed.insert(id);
         }
@@ -2710,6 +2741,7 @@ impl Db {
 
     fn log_name(&mut self, op: u64, id: NodeId, parent: NodeId, name: &[u8]) {
         self.dirty = true;
+        self.epoch += 1;
         if !self.volatile {
             for n in [op, id, parent] {
                 disk::put_u64(&mut self.ops, n);
@@ -2767,6 +2799,7 @@ impl Db {
         };
         self.count_files(Some(parent), -gone);
         self.dirty = true;
+        self.epoch += 1;
         self.touch(parent);
         let mut stack = vec![id];
         while let Some(n) = stack.pop() {
