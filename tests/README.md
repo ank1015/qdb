@@ -13,7 +13,72 @@ cargo build --release
 ./target/release/qdb-harness --fuzz 5000 --seed 7  # plus generated regex cases
 ./target/release/qdb-harness --no-index            # the same cases with the search index off
 ./target/release/qdb-harness --diff 10000 --seed 1 # index on against index off
+./target/release/qdb-harness --store disk          # the same cases on a database directory
+./target/release/qdb-harness --store reopen        # ... closed and opened again after every step
+./target/release/qdb-harness --crash 10000 --seed 1 --sync batch   # the power-cut test
+./target/release/qdb-harness --kill 1000 --seed 1                  # the kill test
+cargo test --release                               # unit tests, and tests/disk.rs
 ```
+
+## The three stores
+
+`--store memory` (the default) runs the engine on a tree in memory.
+`--store disk` runs it on a database directory, and after each case runs
+every check `qdb --check` makes. `--store reopen` also closes the
+database and opens it again after every step of every case, and checks it
+each time, so everything a case leaves behind has been through the files.
+`--sync`, `--piece BYTES`, `--segment BYTES`, `--compress` and
+`--index-later` set the switches; a small `--piece` (16) makes the small
+test files span many pieces, and a small `--segment` makes data files
+finish, indexes get written and space get reclaimed during the cases.
+`--diff` takes the same options: the engine under test is then compared,
+step for step, with an engine in memory without an index.
+
+## The power-cut test (`--crash N`)
+
+The engine does all its file work through one layer (`src/vfs.rs`). The
+test runs it on files in memory that remember, for every file, what has
+been synced and what has only been written, and for the directory which
+creations, removals and renames have been synced. A generated run of
+command lines (the generator of `--diff`) goes on; at N points in it,
+chosen at any file operation (a write, a sync, a rename, ...) of a command
+line, of an index file being written, of a tree being saved, of a close
+or a compaction, the power is cut: a crash image is made that keeps
+everything synced, and of what was not synced a random part (whole writes
+in order up to some point, then possibly a torn write; an unsynced rename
+or creation may or may not have happened).
+
+Every image must open. The opened database must hold exactly the tree
+after some whole number of the run's command lines (the test keeps the
+tree after every line), no fewer than the sync setting allows (none lost
+that had returned under `always`; at most 7 with the test's batch of 8
+lines), and it must pass every check. Then, on a share of the images: the
+power is cut again at every file operation of the recovery itself, and
+each of those images must recover to the same tree; the recovered
+database is written to, checked, closed and reopened; and the run goes on
+from the image instead of from where it was, sometimes after a simulated
+disk failure (every operation fails from some point on, the database
+must stop with an error, and the image must recover).
+
+`tests/results/crash/power-cuts.txt` holds the official runs,
+`mutations.md` the faults put into the engine on purpose to see that the
+test catches them, and every real fault the test found.
+
+## The kill test (`--kill N`)
+
+A real `qdb --db` process on a real directory is fed command lines and
+killed with SIGKILL at a random moment, N times; after each kill the
+directory is opened and must hold the tree after a whole number of
+command lines, with every line whose output had been seen present.
+`tests/results/crash/kills.txt` holds the official runs.
+
+## tests/disk.rs
+
+What survives closing; that reads write nothing; the lock; a missing or
+damaged index file is built again; damaged content, a damaged tree or
+MANIFEST is an error that names the file; a file from a newer format
+version is refused; a directory that is not a database is refused;
+compaction gives back space.
 
 The real side runs under `bash --noprofile --norc -c` with an empty
 environment, `LC_ALL=C` and no standard input. The harness refuses any

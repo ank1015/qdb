@@ -1,41 +1,41 @@
 # 100000 writes on postgres, run `s3-mem`
 
-Seed 1, search index on. The whole run took 15.5 s.
+Seed 1, search index on. The whole run took 18.6 s.
 
 Times in milliseconds.
 
 | Kind of write | Writes | Median | 90% | 99% | 99.9% | Slowest |
 |---|---:|---:|---:|---:|---:|---:|
-| **every small write** | 90912 | 0.009 | 0.028 | 0.088 | 0.411 | 22.1 |
-| **every large write** | 9088 | 0.067 | 3.24 | 25.5 | 119 | 255 |
-| append | 39801 | 0.008 | 0.021 | 0.091 | 0.387 | 22.1 |
-| create | 20249 | 0.009 | 0.021 | 0.091 | 0.426 | 10.5 |
-| overwrite | 9827 | 0.009 | 0.026 | 0.093 | 0.565 | 10.7 |
-| sed | 9994 | 0.020 | 0.043 | 0.087 | 0.410 | 2.01 |
-| rm | 5069 | 0.005 | 0.010 | 0.043 | 0.335 | 18.2 |
-| mv | 3940 | 0.007 | 0.011 | 0.054 | 0.191 | 0.444 |
-| same | 2032 | 0.031 | 0.057 | 0.101 | 0.674 | 0.853 |
-| cp file | 5017 | 0.084 | 0.472 | 3.47 | 18.6 | 36.1 |
-| append to a dataset file | 2595 | 0.009 | 0.080 | 0.636 | 2.80 | 8.62 |
-| sed over a folder | 479 | 3.43 | 7.66 | 16.2 | 25.9 | 25.9 |
-| cp -r | 307 | 5.56 | 41.0 | 216 | 255 | 255 |
-| cat into one | 211 | 3.75 | 14.1 | 46.2 | 57.7 | 57.7 |
-| sed on a large file | 285 | 8.92 | 26.0 | 60.2 | 77.8 | 77.8 |
-| rm -r | 194 | 0.041 | 0.682 | 3.65 | 11.6 | 11.6 |
+| **every small write** | 90912 | 0.010 | 0.037 | 0.112 | 0.527 | 27.3 |
+| **every large write** | 9088 | 0.080 | 3.81 | 29.9 | 123 | 375 |
+| append | 39801 | 0.009 | 0.030 | 0.113 | 0.537 | 19.7 |
+| create | 20249 | 0.010 | 0.030 | 0.112 | 0.475 | 26.5 |
+| overwrite | 9827 | 0.011 | 0.035 | 0.116 | 0.530 | 27.3 |
+| sed | 9994 | 0.025 | 0.057 | 0.114 | 0.494 | 1.73 |
+| rm | 5069 | 0.005 | 0.013 | 0.060 | 0.663 | 11.8 |
+| mv | 3940 | 0.008 | 0.015 | 0.070 | 0.269 | 0.458 |
+| same | 2032 | 0.039 | 0.075 | 0.132 | 0.718 | 0.867 |
+| cp file | 5017 | 0.100 | 0.560 | 4.04 | 22.1 | 50.8 |
+| append to a dataset file | 2595 | 0.011 | 0.097 | 0.746 | 2.83 | 10.8 |
+| sed over a folder | 479 | 4.00 | 9.85 | 20.4 | 34.1 | 34.1 |
+| cp -r | 307 | 6.68 | 46.4 | 259 | 375 | 375 |
+| cat into one | 211 | 4.53 | 17.2 | 49.1 | 54.8 | 54.8 |
+| sed on a large file | 285 | 10.2 | 28.6 | 68.5 | 98.7 | 98.7 |
+| rm -r | 194 | 0.055 | 0.789 | 4.87 | 16.5 | 16.5 |
 
 The ten slowest small writes:
 
-| ms | Write number | Command |
+| ms | Write number | Command, and what was written to disk during it |
 |---:|---:|---|
-| 22.1 | 39757 | `echo 'famipa nevu anstfato trnitoso atelopa mion anvuermi raonvuate tilo neguis' >> stress/d5/f4615.` |
-| 18.2 | 54562 | `rm stress/d5/f14669.txt` |
-| 11.6 | 99723 | `echo 'trmiingne nierfa sest onmu trnitoso muraerto sotrse soju oustibani ateulerfa chateon pavuto on` |
-| 10.7 | 76568 | `echo 'inger onsoto bane tilo vule kimion ulisan neingantr vule mutier ulnikiis paanba ingtrpa mupalo` |
-| 10.5 | 88823 | `echo 'trmiingne juan tiousousst isvunele vusoingba vujuba juiser soch' > stress/d4/f26115.txt` |
-| 7.85 | 13150 | `echo 'sttost mini tistnich baul ulni sole dolomu vuousvu soing soing antr ateousmuis' >> stress/d0/f` |
-| 5.44 | 44315 | `echo 'lenimu vujuba sobais palegu dois nist nionseon jusogust aning' >> stress/d5/f1536.txt` |
-| 4.06 | 15994 | `echo 'jumuerle nist trse vugu kistvu doeran anousstst loentous ateso fanesetr vusoingba nitivupa soi` |
-| 3.99 | 23022 | `echo 'ateulerfa toer entvustso faniki kirenemi anatemist tion leki toer raravu tobach faniousre fane` |
-| 3.52 | 99328 | `echo 'palegu nist doonra ismikiso onate setoneti leki negudoso tovu muju fanesetr mutier rekiingfa g` |
+| 27.3 | 76568 | `echo 'inger onsoto bane tilo vule kimion ulisan neingantr vu` 1 syncs; bytes: 303 content, 0 of it moved, 17967557 index files, 0 tree |
+| 26.5 | 88823 | `echo 'trmiingne juan tiousousst isvunele vusoingba vujuba ju` 1 syncs; bytes: 104 content, 0 of it moved, 15328185 index files, 0 tree |
+| 19.7 | 99723 | `echo 'trmiingne nierfa sest onmu trnitoso muraerto sotrse so` 1 syncs; bytes: 228 content, 0 of it moved, 16672629 index files, 0 tree |
+| 11.8 | 54562 | `rm stress/d5/f14669.txt` 1 syncs; bytes: 0 content, 0 of it moved, 14984663 index files, 0 tree |
+| 10.9 | 13150 | `echo 'sttost mini tistnich baul ulni sole dolomu vuousvu soi` 1 syncs; bytes: 323 content, 0 of it moved, 7549622 index files, 0 tree |
+| 7.78 | 15994 | `echo 'jumuerle nist trse vugu kistvu doeran anousstst loento` 0 syncs; bytes: 31064 content, 30129 of it moved, 0 index files, 0 tree |
+| 4.92 | 44315 | `echo 'lenimu vujuba sobais palegu dois nist nionseon jusogus` 1 syncs; bytes: 102 content, 0 of it moved, 4078470 index files, 0 tree |
+| 4.78 | 23022 | `echo 'ateulerfa toer entvustso faniki kirenemi anatemist tio` 1 syncs; bytes: 181 content, 0 of it moved, 0 index files, 0 tree |
+| 3.63 | 99328 | `echo 'palegu nist doonra ismikiso onate setoneti leki negudo` 0 syncs; bytes: 324 content, 0 of it moved, 0 index files, 0 tree |
+| 3.57 | 47931 | `echo 'atefach ateingtrni trnitoso isratipa vusoingba paisdor` 0 syncs; bytes: 1012 content, 571 of it moved, 0 index files, 0 tree |
 
 Index work over the run: 283621 documents added, 100560 retired, 160950422 bytes of lists rewritten by sweeps, 0 rebuilds.

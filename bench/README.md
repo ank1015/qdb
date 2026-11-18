@@ -90,6 +90,41 @@ themselves:
 | `part4` | After part 4, index on |
 | `paired` | After part 4, `--paired`: each read-only command on the engine alone, with searches using the index and ignoring it by turns in one process |
 
+| `s3-mem` | Stage 3, in memory |
+| `s3-disk` | Stage 3, `--db`: imported, compacted, closed and opened again (settled); warm file cache |
+| `s3-disk-after` | The same database straight after the command list's writes: the read-only commands again |
+| `s3-disk-batch` | As `s3-disk` with `--sync batch` |
+| `s3-disk-cold` | `--cold --reps 1`: before every read-only command the database is closed, the operating system is told to forget its file cache, and the database is opened again; the real tools start from an empty cache too |
+| `s3-disk-cap512` | `--cap 512`: the whole run with the process's own memory limited to 512 MB (`RLIMIT_DATA`); outputs are kept in files and compared through mappings so that the benchmark's own bookkeeping is not what hits the limit |
+
+With `--db DIR` the dataset is imported into a database (sync in batches
+during the import), compacted, closed and opened again before the
+commands run; `.meta` then also holds the times of those steps and what
+is on disk by component, settled (`disk_settled_*`) and after the writes
+(`disk_after_*`).
+
+## qdb-stress
+
+Measurements the command list does not make. Results are under
+`results/bigfile/`, `results/writes/` and `results/compare/`.
+
+- `qdb-stress bigfile --size 1024 --db DIR --cap 512 [--piece N] [--sync MODE]`:
+  one generated 1 GB file, built without ever being held whole; commands
+  on it on the real tools and on the engine, with time, peak heap, bytes
+  written to disk and syncs for each.
+- `qdb-stress writes --dataset NAME --count 100000 --db DIR --sync MODE`:
+  a long run of small writes mixed with occasional large ones. The time
+  of every write, the ten slowest small writes with what was written to
+  disk during each, bytes written by kind and the write amplification,
+  syncs per command line, and the size of the directory against the raw
+  text every 200 writes.
+- `qdb-stress sync-cost --db DIR`: what a sync costs here, and a small
+  write under each sync setting against it.
+- `qdb-stress compare --dataset NAME --count 20000 --db DIR`: the eight
+  settings of the three switches on three mixes of reads and writes.
+
+`results/TARGETS-3.md` checks each stage 3 target against these runs.
+
 `results/TARGETS.md` checks each stage 2 target against these runs, and
 `docs/HANDBACK-2.md` discusses them. `results/stage1/` holds the stage 1
 results in their original form.

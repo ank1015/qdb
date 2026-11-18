@@ -508,6 +508,9 @@ fn writes(opts: &Options) -> Result<bool, String> {
             let report = store::load_into_db(&mut db, &opts.data.join(&folder)).map_err(|e| e.to_string())?;
             db.compact()?;
             db.close()?;
+            // What the import left for the operating system to write out
+            // is written out now, so that it is not charged to the run.
+            unsafe { libc::sync() };
             (Db::open_dir(dir, Config { sync: opts.sync, ..cfg })?.0, report)
         }
     };
@@ -782,6 +785,7 @@ fn mix_run(opts: &Options, folder: &str, sync: SyncMode, later: bool, compress: 
     store::load_into_db(&mut db, &opts.data.join(folder)).map_err(|e| e.to_string())?;
     db.sync();
     let load = t.elapsed();
+    unsafe { libc::sync() };
     db.set_sync(sync);
     let files = dataset_files(&db);
     let mut rng = Rng(opts.seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
