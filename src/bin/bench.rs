@@ -1241,7 +1241,9 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
             }
         }
 
-        let (real_stdout, engine_stdout) = if long_listing && !CAPPED.load(Relaxed) {
+        // Under the memory limit only a listing of moderate size is
+        // brought into memory to be masked.
+        let (real_stdout, engine_stdout) = if long_listing && (!CAPPED.load(Relaxed) || real_stdout.len().max(first.stdout.len()) < 64 << 20) {
             (Bytes::Mem(long_listing_normal(&real_stdout)), Bytes::Mem(long_listing_normal(&first.stdout)))
         } else {
             (real_stdout, first.stdout)

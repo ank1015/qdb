@@ -1,0 +1,30 @@
+command,kind,gnu_ms,engine_ms,engine_peak_bytes,disk_bytes_written,syncs,agree
+"grep -n qdbrareterm big.txt",read,850.6723,0.3727,24048,0,0,true
+"grep -c qdbrareterm big.txt",read,702.7690,0.2861,24813,0,0,true
+"wc -l big.txt",read,179.8533,0.0894,2745,0,0,true
+"tail -n 5 big.txt",read,2.8995,0.0225,3282,0,0,true
+"head -n 3 big.txt",read,2.7388,0.0207,3011,0,0,true
+"sort --parallel=1 big.txt | tail -n 2",read,8177.5465,2066.9646,113317832,0,0,true
+"sort --parallel=1 -u big.txt | wc -l",read,6867.3013,2432.7396,113315950,0,0,true
+"sort --parallel=1 -k 2,2 big.txt | head -n 2",read,10490.6670,6724.2233,113316691,0,0,true
+"uniq -c big.txt | tail -n 2",read,5053.9259,944.2321,191598,0,0,true
+"uniq big.txt | wc -l",read,3635.9957,835.6931,49812,0,0,true
+"cut -c 1-16 big.txt | tail -n 2",read,2220.4611,825.9456,147222,0,0,true
+"cut -d ' ' -f 2 big.txt | wc -c",read,3446.1398,1004.6168,35279,0,0,true
+"tr a-z A-Z < big.txt | tail -n 2",read,1440.7082,193.8395,707494,0,0,true
+"tr -d e < big.txt | wc -c",read,3231.8903,496.3213,575941,0,0,true
+"tr -s ' ' < big.txt | wc -c",read,5963.8225,1038.0671,576360,0,0,true
+"nl big.txt | tail -n 1",read,5142.7394,1283.7530,199539,0,0,true
+"grep -o '[a-z]*ing' big.txt | sort --parallel=1 | uniq -c | sort -rn | head",read,12699.2196,25281.2464,136404813,0,0,true
+"echo 'one more line at the end' >> big.txt",write,2.1340,0.1104,544476,129,0,true
+"echo 'and a second one' >> big.txt",write,1.6909,0.0536,4478,146,0,true
+"echo 'and a third' >> big.txt",write,1.5355,0.0431,3387,116,0,true
+"sed -i 's/QDBUNIQUELINE/QDBCHANGEDLINE/' big.txt",write,4231.4334,1.8571,3097486,65557,0,true
+"grep -n QDBCHANGEDLINE big.txt",read,649.0103,0.3567,29703,0,0,true
+"tail -n 4 big.txt",read,2.6961,0.0225,2993,0,0,true
+"wc big.txt",read,15621.6846,2093.6758,2521,0,0,true
+"cp big.txt copy.txt",write,995.3327,2.5567,3130804,346212,0,true
+"cat big.txt > cat.txt",write,2700.2264,13490.4152,42530795,1114089578,64,true
+"grep -c e cat.txt",read,783.9889,507.6025,6449,0,0,true
+"tail -n 1 copy.txt",read,2.6264,0.0281,2904,0,0,true
+"rm copy.txt cat.txt",write,1082.0052,15.0369,801200,43,0,true
