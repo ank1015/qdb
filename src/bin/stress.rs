@@ -325,6 +325,21 @@ fn bigfile(opts: &Options) -> Result<bool, String> {
         ("wc -l big.txt".into(), false),
         ("tail -n 5 big.txt".into(), false),
         ("head -n 3 big.txt".into(), false),
+        // Stage 4: the text commands over the whole file. What they
+        // print is cut down by a last stage, because both outputs are
+        // held here to be compared.
+        ("sort --parallel=1 big.txt | tail -n 2".into(), false),
+        ("sort --parallel=1 -u big.txt | wc -l".into(), false),
+        ("sort --parallel=1 -k 2,2 big.txt | head -n 2".into(), false),
+        ("uniq -c big.txt | tail -n 2".into(), false),
+        ("uniq big.txt | wc -l".into(), false),
+        ("cut -c 1-16 big.txt | tail -n 2".into(), false),
+        ("cut -d ' ' -f 2 big.txt | wc -c".into(), false),
+        ("tr a-z A-Z < big.txt | tail -n 2".into(), false),
+        ("tr -d e < big.txt | wc -c".into(), false),
+        ("tr -s ' ' < big.txt | wc -c".into(), false),
+        ("nl big.txt | tail -n 1".into(), false),
+        ("grep -o '[a-z]*ing' big.txt | sort --parallel=1 | uniq -c | sort -rn | head".into(), false),
         ("echo 'one more line at the end' >> big.txt".into(), true),
         ("echo 'and a second one' >> big.txt".into(), true),
         ("echo 'and a third' >> big.txt".into(), true),
@@ -342,7 +357,7 @@ fn bigfile(opts: &Options) -> Result<bool, String> {
     let mut all_agree = true;
     println!("{:<50} {:>9} {:>10} {:>11} {:>13} {:>5}  result", "command", "GNU ms", "engine ms", "peak heap", "disk written", "syncs");
     for (command, changes) in &cases {
-        let reps = if *changes { 1 } else { 5 };
+        let reps = if *changes || command.contains("sort") { 1 } else if command.contains(" | ") { 3 } else { 5 };
         let mut gnu = Vec::new();
         let mut eng = Vec::new();
         let mut agree = true;

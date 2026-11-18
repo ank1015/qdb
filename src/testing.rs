@@ -26,6 +26,8 @@ pub fn order_is_unspecified(command: &str) -> bool {
         let has = |f: &[u8]| f.iter().any(|c| flags.contains(c));
         match words.first().map(|w| w.as_slice()) {
             Some(b"find") | Some(b"du") => true,
+            // What xargs runs walks in its own order too.
+            Some(b"xargs") => words.iter().any(|w| w == b"du" || w == b"find") || (words.iter().any(|w| w == b"grep" || w == b"rg") && has(b"rR")),
             Some(b"grep") => has(b"rR"),
             // The lines -v prints for a tree come in the order of the walk.
             Some(b"rm") | Some(b"cp") => has(b"v") && has(b"rRa"),

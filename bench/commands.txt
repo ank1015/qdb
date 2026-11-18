@@ -98,6 +98,100 @@ grep -rn {SOME} . | head -n 1
 find . -type f | head -n 3
 cat {GLOB} | head -n 2
 
+# Stage 4. Search with more flags
+grep -rno {FEW} .
+grep -rw {FEW} .
+grep -rnw {RARE} .
+grep -rn -C 2 {RARE} .
+grep -rn -A 1 -B 1 {FEW} .
+grep -rho '{PREFIX}_[a-z_]*' . | sort | uniq -c | sort -rn | head
+grep -rhow '[a-z]*{RARE}[a-z]*' . | sort | uniq -c | sort -rn | head -n 5
+
+# rg, against real rg on one thread. Both follow the ignore rules.
+rg -j 1 {ABSENT}
+rg -j 1 {ONE}
+rg -j 1 {RARE}
+rg -j 1 {FEW}
+rg -j 1 {SOME}
+rg -j 1 {COMMON}
+rg -j 1 -l {FEW}
+rg -j 1 -l {COMMON}
+rg -j 1 -c {SOME}
+rg -j 1 -i {RAREUP}
+rg -j 1 -w {FEW}
+rg -j 1 -F '{FEW}'
+rg -j 1 -n -C 2 {RARE}
+rg -j 1 -o '{PREFIX}_[a-z]+\('
+rg -j 1 '{RARE}|{ONE}'
+rg -j 1 '\b{RARE}\w*'
+rg -j 1 -t c {FEW}
+rg -j 1 -g '*.{EXT}' {FEW}
+rg -j 1 {FEW} {DIR}
+rg -j 1 -uu {FEW}
+rg -j 1 --sort path {RARE}
+rg -j 1 --files | wc -l
+rg -j 1 -l {SOME} | wc -l
+
+# Times and sizes
+ls -ltR
+ls -lt {GLOBDIR}
+ls -ltr {DIR} | tail -n 3
+find . -newer {FILE}
+find . -newer {FILE} -name '*.{EXT}'
+find . -type f -mtime +30
+# Not compared: a real folder's own size depends on its history, and the
+# engine counts every folder as 4096 bytes.
+nocmp: du -s .
+nocmp: du -sh {DIR}
+du -sb .
+du -sb {DIR}
+du -b -d 1 {DIR}
+
+# The new text commands
+sort {FILE}
+sort -r {FILE} | head -n 3
+sort -u {FILE} | wc -l
+sort -k 2 {FILE} | tail -n 3
+cat {GLOB} | sort | uniq -c | sort -rn | head -n 5
+uniq -c {FILE} | wc -l
+cut -c 1-20 {FILE}
+cut -d ' ' -f 1 {FILE} | sort | uniq | wc -l
+tr a-z A-Z < {FILE}
+tr -d '\n' < {FILE} | wc -c
+tr -s ' ' < {FILE} | wc -c
+nl {FILE}
+nl -ba {FILE} | tail -n 3
+seq 1 100000 | wc -l
+seq -w 1 1000 | tail -n 2
+basename {FILE}
+basename -s .{EXT} {FILE}
+dirname {FILE}
+printf '%s\n' a b c
+printf '%05d %-8s|%x\n' 42 name 255
+test -f {FILE} && echo yes
+[ -d {DIR} ] && echo folder
+date -u -d '2024-02-29 12:00:00' '+%Y-%m-%d %H:%M:%S %s %a'
+echo a b c | xargs -n 1 echo
+find {SMALLDIR} -name '*.{EXT}' | xargs cat | wc -l
+find . -name '*.{EXT}' | xargs grep -l {FEW} | wc -l
+
+# The new shell syntax
+echo {a,b,c}{1..3}
+echo {1..20..3} {a..e}
+echo $(wc -l < {FILE}) `basename {FILE}`
+echo "first line: $(head -n 1 {FILE})"
+wc -l < {FILE}
+cat {FILE} > /dev/null 2>&1
+cat qdb_no_such_file 2> /dev/null ; echo after
+cat qdb_no_such_file 2>&1 | wc -l
+grep -q {COMMON} {FILE} && echo found || echo none
+false || echo fallback
+true && grep -c {COMMON} {FILE}
+cat <<EOF⏎one $(echo two)⏎three⏎EOF
+wc -l <<'EOF'⏎a⏎b⏎EOF
+echo one \⏎two
+grep -c {COMMON} {FILE}⏎wc -l {FILE}
+
 # Add, edit, delete
 mut: mkdir -p bench_out/a/b
 mut: touch bench_out/empty.txt
@@ -117,6 +211,16 @@ mut: cat {FILE} > bench_out/same.txt
 mut: grep -rc QDBBENCHMANY bench_out
 mut: grep -rl QDBBENCHMANY .
 mut: grep -rl QDBBENCHONE .
+mut: cat {FILE} | tee bench_out/tee.txt | wc -l
+mut: sort {FILE} > bench_out/sorted.txt
+mut: sort -u {FILE} >> bench_out/sorted.txt
+mut: cat qdb_no_such_file &> bench_out/both.txt
+mut: cat qdb_no_such_file 2>> bench_out/both.txt
+mut: find {SMALLDIR} -name '*.{EXT}' | xargs cat > bench_out/joined.txt
+mut: cp bench_out/joined.txt bench_out/joined2.txt
+mut: sed -i '1d' bench_out/joined2.txt
+mut: wc -c bench_out/joined.txt bench_out/joined2.txt bench_out/tee.txt bench_out/sorted.txt
+mut: cat bench_out/both.txt
 mut: mv bench_out/dir_copy bench_out/dir_moved
 mut: mv bench_out/hello.txt bench_out/a/b
 mut: ls -R bench_out/a

@@ -532,3 +532,28 @@ $ sed -n "$(echo 2)p" README.md
 $ sed -n '/TODO/p' src/*.c
 $ sed -s -n '1p;$p' src/*.c
 $ sed -n '1p;$p' src/*.c
+
+# A range that starts at a line number, when that line never reaches the
+# command: it starts at the next line that does, once.
+$ seq 12 | sed -n -e 3d -e '3,5p'
+$ seq 12 | sed -n -e '3,6d' -e '3,5p'
+$ seq 12 | sed -n -e 3d -e '3,+2p'
+$ seq 12 | sed -n -e 3d -e '3,/7/p'
+$ seq 12 | sed -n -e '2,4d' -e '3,5p'
+$ seq 12 | sed -n -e '3,6d' -e '3,+1p'
+$ seq 12 | sed -n -e '3,6d' -e '3,/2/p'
+$ seq 12 | sed -n -e '3,6d' -e '3,2p'
+$ seq 12 | sed -n -e 3d -e '3,+0p'
+$ seq 12 | sed -n -e 3d -e '3,4!p'
+$ seq 12 | sed -n -e '1,3d' -e '2,/5/p'
+$ seq 12 | sed -e '1,2d' -e '2,4c\' -e 'changed'
+# The end of a range, when that line never reaches the command.
+$ seq 12 | sed -n -e 5d -e '3,5p'
+$ seq 12 | sed -n -e 5d -e '3,+2p'
+$ seq 12 | sed -n -e 5d -e '/3/,5p'
+$ seq 12 | sed -n -e 6d -e '/[36]/,+2p'
+$ echo 'a:b' | xargs -t echo
+$ seq -0 2
+$ seq -w -0 10
+$ seq -f '%e' -0 0.5 1
+$ printf '%#.1g|%#.3g|%#g|%#5.1G|\n' 1e3 1 0

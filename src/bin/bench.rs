@@ -361,6 +361,7 @@ fn read_output(path: &Path) -> Bytes {
 /// Run a command on the real tools. Under `--cap` its output goes to a
 /// file.
 fn real_run(root: &Path, command: &str) -> (Duration, i32, Bytes, Vec<u8>) {
+    let command = &command.replace('⏎', "\n");
     if !CAPPED.load(Relaxed) {
         let (t, real) = run_real(root, command);
         return (t, real.code, Bytes::Mem(real.stdout), real.stderr);
@@ -513,6 +514,7 @@ impl qdb::Sink for ToFile {
 /// Run a command on the engine through its streaming entry point. Output
 /// is kept (for comparing with the real tools) only when asked for.
 fn engine_run(db: &mut Db, command: &str, keep_output: bool) -> EngineRun {
+    let command = &command.replace('⏎', "\n");
     let mut stderr: Vec<u8> = Vec::new();
     if !keep_output {
         let mut out = Discard::default();
@@ -848,6 +850,42 @@ fn drop_caches() -> Result<(), String> {
     std::fs::write("/proc/sys/vm/drop_caches", "3").map_err(|e| format!("dropping the file cache: {}", e))
 }
 
+/// `ls -l` output with what the engine has no fact for taken out: owner
+/// and group, the size of a folder (the real one grows with its history)
+/// and the `total` lines that add those sizes up.
+fn long_listing_normal(out: &[u8]) -> Vec<u8> {
+    let mut to = Vec::with_capacity(out.len());
+    for line in out.split_inclusive(|c| *c == b'\n') {
+        if line.starts_with(b"total ") {
+            to.extend_from_slice(b"total\n");
+            continue;
+        }
+        let entry = line.len() > 11 && matches!(line[0], b'-' | b'd') && line[1..10].iter().all(|c| b"rwx-".contains(c)) && line[10] == b' ';
+        if !entry {
+            to.extend_from_slice(line);
+            continue;
+        }
+        let mut at = 0;
+        for field in 0..5 {
+            while line.get(at) == Some(&b' ') {
+                at += 1;
+            }
+            let start = at;
+            while line.get(at).is_some_and(|c| *c != b' ' && *c != b'\n') {
+                at += 1;
+            }
+            match field {
+                0 | 1 => to.extend_from_slice(&line[start..at]),
+                4 if line[0] != b'd' => to.extend_from_slice(&line[start..at]),
+                _ => to.push(b'-'),
+            }
+            to.push(b' ');
+        }
+        to.extend_from_slice(&line[at.min(line.len())..]);
+    }
+    to
+}
+
 /// The same lines, in any order.
 fn same_lines(a: &[u8], b: &[u8]) -> bool {
     if CAPPED.load(Relaxed) {
@@ -1032,9 +1070,12 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(|l| match l.strip_prefix("mut: ") {
             Some(c) => (c.to_string(), true),
-            None => (l.to_string(), false),
+            None => (l.strip_prefix("nocmp: ").unwrap_or(l).to_string(), false),
         })
         .collect();
+    // Timed on both sides, but the output is known to differ (see the
+    // command list for why) and is not compared.
+    let nocmp: std::collections::HashSet<String> = text.lines().filter_map(|l| l.trim().strip_prefix("nocmp: ")).map(|l| l.to_string()).collect();
 
     let (_, root) = scratch_root(name, opts);
     let _ = std::fs::remove_dir_all(root.join("bench_out"));
@@ -1136,8 +1177,13 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         if opts.filter.as_ref().is_some_and(|f| !command.contains(f.as_str())) && !mutating {
             continue;
         }
-        check_safe(&command, &root)?;
+        check_safe(&command.replace('⏎', "\n"), &root)?;
         let unordered = order_is_unspecified(&command);
+        let not_compared = nocmp.contains(template);
+        let long_listing = command.split(['|', ';', '&']).any(|c| {
+            let mut w = c.split_whitespace();
+            w.next() == Some("ls") && w.any(|f| f.starts_with('-') && !f.starts_with("--") && f.contains('l'))
+        });
 
         if opts.cold && !mutating {
             drop_caches()?;
@@ -1193,16 +1239,23 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
             }
         }
 
-        let agree = if real_code != first.code {
+        let (real_stdout, engine_stdout) = if long_listing && !CAPPED.load(Relaxed) {
+            (Bytes::Mem(long_listing_normal(&real_stdout)), Bytes::Mem(long_listing_normal(&first.stdout)))
+        } else {
+            (real_stdout, first.stdout)
+        };
+        let agree = if not_compared {
+            "not compared".to_string()
+        } else if real_code != first.code {
             format!("NO: exit status, real {}, engine {}", real_code, first.code)
         } else if order_dependent(&command) {
             let lines = |b: &[u8]| b.iter().filter(|c| **c == b'\n').count();
-            if lines(&real_stdout) == lines(&first.stdout) {
+            if lines(&real_stdout) == lines(&engine_stdout) {
                 "order differs".to_string()
             } else {
                 "NO: number of lines differs".to_string()
             }
-        } else if (unordered && !same_lines(&real_stdout, &first.stdout)) || (!unordered && real_stdout[..] != first.stdout[..]) {
+        } else if (unordered && !same_lines(&real_stdout, &engine_stdout)) || (!unordered && real_stdout[..] != engine_stdout[..]) {
             "NO: standard output differs".to_string()
         } else if real_stderr != first.stderr {
             "NO: standard error differs".to_string()

@@ -699,6 +699,8 @@ struct Exec {
     /// Some(end) inside, where end is the line number that ends it if a
     /// number does.
     ranges: Vec<Option<u64>>,
+    /// Ranges that start at a line number and have ended in this file.
+    closed: Vec<bool>,
     last_re: Option<usize>,
     /// Texts of `a` waiting for the end of the cycle, by command.
     appends: Vec<usize>,
@@ -709,7 +711,7 @@ struct Exec {
 
 impl Exec {
     fn new(prog: Rc<Program>) -> Exec {
-        let mut e = Exec { prog, line_no: 0, ranges: Vec::new(), last_re: None, appends: Vec::new(), open: false };
+        let mut e = Exec { prog, line_no: 0, ranges: Vec::new(), closed: Vec::new(), last_re: None, appends: Vec::new(), open: false };
         e.restart();
         e
     }
@@ -718,6 +720,7 @@ impl Exec {
     fn restart(&mut self) {
         self.line_no = 0;
         self.ranges = self.prog.cmds.iter().map(|c| (c.a1 == Some(Addr::Zero)).then_some(u64::MAX)).collect();
+        self.closed = vec![false; self.prog.cmds.len()];
     }
 
     fn emit(&mut self, text: &[u8], nl: bool, out: Out) {
@@ -775,8 +778,25 @@ impl Exec {
             (Some(a), None) => self.one(a, k, line, last)?,
             (Some(a1), Some(a2)) => match self.ranges[k] {
                 None => {
-                    if !self.one(a1, k, line, last)? {
+                    // A range that starts at a line number starts at the
+                    // first line from there on that reaches the command,
+                    // and only once in a file.
+                    let starts = match a1 {
+                        Addr::Line(n) => !self.closed[k] && self.line_no >= n,
+                        _ => self.one(a1, k, line, last)?,
+                    };
+                    if !starts {
                         false
+                    } else if let (Addr::Line(n), Addr::Line(m)) = (a1, a2) {
+                        if m <= self.line_no {
+                            // The end is already behind: one line, and
+                            // none when the start was missed as well.
+                            self.closed[k] = true;
+                            self.line_no == n || self.line_no == m
+                        } else {
+                            self.ranges[k] = Some(m);
+                            true
+                        }
                     } else {
                         // A range whose end is already behind is one line.
                         self.ranges[k] = match a2 {
@@ -785,6 +805,9 @@ impl Exec {
                             Addr::Last => (!last).then_some(u64::MAX),
                             _ => Some(u64::MAX),
                         };
+                        if self.ranges[k].is_none() && matches!(a1, Addr::Line(_)) {
+                            self.closed[k] = true;
+                        }
                         true
                     }
                 }
@@ -796,8 +819,13 @@ impl Exec {
                     };
                     if ends {
                         self.ranges[k] = None;
+                        if matches!(a1, Addr::Line(_)) {
+                            self.closed[k] = true;
+                        }
                     }
-                    true
+                    // A line past a numbered end, which never reached
+                    // the command itself, is not part of the range.
+                    !(matches!(a2, Addr::Line(_)) && self.line_no > end)
                 }
             },
         };
