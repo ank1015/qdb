@@ -1,0 +1,356 @@
+# Stage 4, part 5: printf, test and [, true, false, :, sleep, seq, basename, dirname, ln.
+@fixture basic
+
+# printf
+$ printf 'hello\n'
+$ printf 'no newline'
+$ printf '%s\n' a b c
+$ printf '%s %s\n' a b c
+$ printf '%s' a b; echo
+$ printf '%d %s\n' 1 2 3
+$ printf '%d %d\n' 1
+$ printf '%s|%d|%f|%c|\n'
+$ printf '%5.2f|%-5d|%05d|%+d|%x|%X|%o|%c|%%|%e|%g\n' 3.14159 42 42 42 255 255 8 hello 12345.678 0.0001
+$ printf '%i|%u|%F|%E|%G\n' 12 34 1.5 1234.5 0.00001234
+$ printf '%b\n' 'a\tb\n\x41\101\0101'
+$ printf '%b|\n' 'stop\chere' after
+$ printf 'a\x41\101\e[0m\q\n' | cat -A
+$ printf '%s\n'
+$ printf
+$ printf -x
+$ printf -- '-x\n'
+$ printf '%s\n' -n
+$ printf '%d\n' 0x10 010 -5 +5 ' 7' '"a' "'b" ''
+$ printf '%d\n' abc
+$ printf '%d\n' 3.5
+$ printf '%d\n' 12abc
+$ printf '%d\n' '1 2'
+$ printf '%d\n' 1e3
+$ printf '%f\n' abc
+$ printf '%f %g %e\n'
+$ printf '%*d|%-*d|%.*f\n' 5 1 5 2 2 3.14159
+$ printf '%*d|\n' -5 1
+$ printf '%z\n' 1
+$ printf '%5%|\n'
+$ printf '%'
+$ printf '%5'
+$ printf 'a\n' extra
+$ printf '%.3s|%5s|%-5s|%10.4s|\n' abcdef ab ab abcdefgh
+$ printf '%05s|%-05d|%+s\n' ab 3 x
+$ printf '%u\n' -1
+$ printf '%x\n' -1
+$ printf '%ld %lld %hd\n' 1 2 3
+$ printf '%c' '' | cat -A
+$ printf '%c%c\n' abc def
+$ printf '%.2d|%.0d|%5.3d\n' 5 0 7
+$ printf '%#x %#o % d %#X\n' 255 8 5 255
+$ printf '%#x %#o\n' 0 0
+$ printf '%g %g %g %g\n' 100000 1000000 0.0001 0.00001
+$ printf '%.10g %.3e %10.3f|\n' 3.14159265358979 31415.9 2.5
+$ printf '%g %g %g %g\n' 0 1 1.5 123456789
+$ printf '%.0f %.0f %.0f %.1f\n' 0.5 1.5 2.5 0.25
+$ printf '%.0e %#.0e %#.0f %#g\n' 12345 12345 3 1.5
+$ printf '%e\n' 0 1 -1 123.456 0.000123
+$ printf '%+.2f % .2f %08.3f %-8.2f|\n' 1 1 -1.5 2
+$ printf '%f\n' -inf nan inf
+$ printf '%5s|%-5s|%05d\n' inf nan 1
+$ printf '%d\n' 99999999999999999999
+$ printf '%d\n' -99999999999999999999
+$ printf '%s\n' 'a\nb'
+$ printf 'a\0b' | cat -A
+$ printf '\1012\n'
+$ printf '%b\n' '\1012 \0101'
+$ printf '\\ \" \101 \0101 \1 \x4 é\n' | cat -A
+$ printf 'tab\there\n'
+$ printf '%s\t%s\n' a b c d
+$ printf '%-10s|%10s|\n' left right
+$ printf '%3d|%-3d|%03d\n' 1 2 3 4 5 6
+$ printf 'x%sy\n' 1 2 3
+$ printf '%s\n' "$(echo sub)"
+$ printf '%s\n' *.md
+$ printf '%s\n' {a,b}{1,2}
+$ printf 'line1\nline2\n' > out.txt; cat out.txt
+$ printf '%s\n' a b | wc -l
+$ printf 'a\cb\n'
+$ printf '%bX\n' '\c'
+$ printf '%d%%\n' 50
+$ printf '%5d%%|\n' 50
+! printf '%q\n' 'a b' ## printf %q
+! printf -v x 1 ## printf -v
+! printf '%(%Y)T\n' ## printf %(
+! printf '%n' ## printf %n
+
+# test and [
+$ test
+$ test ''
+$ test a
+$ test -n
+$ test -z ''
+$ test -z a
+$ test -n a
+$ test -n ''
+$ test ! a
+$ test ! ''
+$ test -f README.md
+$ test -f src
+$ test -f nope
+$ test -d src
+$ test -d README.md
+$ test -d nope
+$ test -e README.md
+$ test -e src
+$ test -e nope
+$ test -s README.md
+$ test -s empty/nothing
+$ test -s nope
+$ test -s src
+$ test -s empty
+$ test a = a
+$ test a = b
+$ test a == a
+$ test a != b
+$ test a != a
+$ test '' = ''
+$ test 1 -eq 1
+$ test 1 -eq 2
+$ test 1 -ne 2
+$ test 1 -lt 2
+$ test 2 -lt 1
+$ test 1 -le 1
+$ test 2 -gt 1
+$ test 1 -ge 2
+$ test 01 -eq 1
+$ test -1 -lt 0
+$ test ' 1 ' -eq 1
+$ test +1 -eq 1
+$ test a -eq 1
+$ test 1 -eq b
+$ test 1.5 -eq 1
+$ test '' -eq 0
+$ test 0x10 -eq 16
+$ test ! a = a
+$ test ! a = b
+$ test ! -f README.md
+$ test ! -d README.md
+$ test a -a b
+$ test a -a ''
+$ test '' -o b
+$ test '' -o ''
+$ test -f README.md -a -d src
+$ test -f README.md -a -d README.md
+$ test -f nope -o -d src
+$ test -f nope -o -d nope
+$ test a = a -a b = b
+$ test a = a -a b = c
+$ test a = b -o b = b
+$ test ! a = b -a c = c
+$ test '(' a ')'
+$ test '(' '' ')'
+$ test '(' a = a ')'
+$ test '(' a = b ')' -o '(' c = c ')'
+$ test ! '(' a = b ')'
+$ test '(' -f README.md ')' -a '(' -d src -o -d nope ')'
+$ test a b
+$ test a b c
+$ test a b c d
+$ test a = a b
+$ test a = a -a
+$ test -f
+$ test -f -a -d
+$ test '(' a
+$ test '(' a = a
+$ test 1 -eq 1 -a 2 -eq 2 -a 3 -eq 4
+$ test -z '' -a -n x -o -f nope
+$ test -n = -n
+$ test -f = -f
+$ test = = =
+$ test ! ! a
+$ test ! ! ''
+$ test -a
+$ test -o
+$ test ! 
+$ test '!' = '!'
+$ test -n a -a ! -z b
+$ [ a = a ]
+$ [ a = b ]
+$ [ -f README.md ]
+$ [ -d src ] && echo dir
+$ [ -f nope ] || echo missing
+$ [ ]
+$ [ a
+$ [
+$ [ a = a
+$ [ ] ]
+$ [ 1 -lt 2 -a 2 -lt 3 ]
+$ [ ! -e nope ] && echo none
+$ [ "$(cat data/one.txt)" = one ] && echo same
+$ [ -n "$(grep -r TODO src)" ] && echo found
+$ [ -z "$(grep -r nothinghere src)" ] && echo empty
+$ [ $(wc -l < README.md) -gt 3 ] && echo long
+$ test -f README.md && test -d src && echo both
+$ test -f nope; test -d src
+$ test a = b || test c = c && echo ok
+! test -r README.md ## test -r
+! test -w README.md ## test -w
+! test -x README.md ## test -x
+! test -L README.md ## test -L
+! test README.md -nt notes.txt ## test -nt
+! [ -r README.md ] ## [ -r
+
+# true, false, :
+$ true
+$ false
+$ :
+$ true ignored args
+$ false ignored args
+$ : ignored args
+$ true && echo yes
+$ false || echo no
+$ false && echo never
+$ true || echo never
+$ : > made.txt; ls
+$ true | false
+$ false | true
+$ false; true
+$ true; false
+$ find . -type f -name '*.md' -exec true \;
+$ find . -type f -name '*.md' -exec false \;
+
+# sleep
+$ sleep 0
+$ sleep 0.01
+$ sleep 0 0
+$ sleep 0s
+$ sleep 0m 0h 0d
+$ sleep
+$ sleep x
+$ sleep 1x
+$ sleep -1
+$ sleep ''
+$ sleep 0 x 0 y
+$ sleep 0 && echo woke
+
+# basename
+$ basename src/main.c
+$ basename src/main.c .c
+$ basename src/main.c main.c
+$ basename src/main.c c
+$ basename src/
+$ basename /
+$ basename //
+$ basename ''
+$ basename a/b/c/
+$ basename .
+$ basename ..
+$ basename a .c d
+$ basename
+$ basename -a src/main.c src/util.h
+$ basename -s .c src/main.c src/util.c
+$ basename -a -s .c src/main.c docs/guide.md
+$ basename -s.c src/main.c
+$ basename --suffix=.c src/main.c src/util.c
+$ basename --multiple a/b c/d
+$ basename -s
+$ basename -z a/b | cat -A
+$ basename -- -x
+$ basename 'with space.txt' .txt
+$ basename "$(find src -name lex.c)"
+$ find src -name '*.c' -exec basename {} .c \;
+! basename -q a ## basename -q
+
+# dirname
+$ dirname src/main.c
+$ dirname src/lib/lex.c
+$ dirname README.md
+$ dirname /
+$ dirname //
+$ dirname /a
+$ dirname /a/b
+$ dirname a/
+$ dirname a//b//
+$ dirname ''
+$ dirname .
+$ dirname ..
+$ dirname a b/c d/e/f
+$ dirname
+$ dirname -z a/b | cat -A
+$ dirname --zero a/b c/d | cat -A
+$ dirname "$(find src -name lex.c)"
+! dirname -q a ## dirname -q
+
+# seq
+$ seq 5
+$ seq 2 5
+$ seq 1 2 9
+$ seq 5 1
+$ seq 5 -1 1
+$ seq 10 -3 1
+$ seq 0
+$ seq 1
+$ seq -2 2
+$ seq -5 -3
+$ seq 3 3
+$ seq 1 0 5
+$ seq 1 0.0 5
+$ seq
+$ seq 1 2 3 4
+$ seq a
+$ seq 1 x
+$ seq ''
+$ seq 0.5 2
+$ seq 1 0.5 3
+$ seq 0.1 0.1 0.5
+$ seq 1.0 3
+$ seq 1 3.5
+$ seq 1.50 0.25 2.5
+$ seq -1.5 0.5 0
+$ seq 0 0.1 1
+$ seq 0 0.3 1
+$ seq 1 .5 2
+$ seq 9 11
+$ seq -w 8 11
+$ seq -w 1 100 | tail -n 2
+$ seq -w -5 5
+$ seq -w 0.5 0.5 10.5
+$ seq -w 1 0.01 1.03
+$ seq -s , 5
+$ seq -s, 5
+$ seq -s ' ' 1 3
+$ seq -s '' 1 5
+$ seq -s : 0
+$ seq -s
+$ seq --separator=, 3
+$ seq --separator , 3
+$ seq --equal-width 9 10
+$ seq -f '%g' 3
+$ seq -f 'n%gx' 3
+$ seq -f '%03g' 8 11
+$ seq -f '%.2f' 1 0.5 2
+$ seq -f '%e' 2
+$ seq -f '%5.1f|' 2
+$ seq -f '%%%g%%' 2
+$ seq -f '%+g' -1 1
+$ seq -f x 3
+$ seq -f '%g%g' 3
+$ seq -f '%d' 3
+$ seq -f '%' 3
+$ seq -f
+$ seq --format=%.1f 2
+$ seq -w -f %g 3
+$ seq -ws, 8 10
+$ seq 1e2 | tail -n 1
+$ seq 1 1e0 3
+$ seq 100000 | wc -l
+$ seq 100000 | tail -n 1
+$ seq 1000000 | head -n 2
+$ seq 3 | wc -l
+$ seq 99999999999999999998 100000000000000000000
+$ seq 3 > nums.txt; cat nums.txt
+$ seq 1 3 | sed 's/^/n/'
+$ seq $(seq 3 | tail -n 1)
+! seq -x 3 ## seq -x
+! seq --help ## long options
+
+# ln
+! ln -s a b ## no links
+! ln README.md copy ## no links

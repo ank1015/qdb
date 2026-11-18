@@ -13,6 +13,7 @@ mod grep;
 mod ls;
 mod read;
 mod sed;
+mod small;
 
 /// Look a command up by name and check its arguments. The error names what
 /// is unsupported, for example `command: awk` or `flag: grep -w`.
@@ -34,6 +35,16 @@ pub fn prepare(name: &[u8], args: &[Vec<u8>]) -> Result<Prepared, String> {
         b"mv" => files::mv(args),
         b"rm" => files::rm(args),
         b"rmdir" => files::rmdir(args),
+        b"printf" => small::printf(args),
+        b"test" => small::test("test", args),
+        b"[" => small::test("[", args),
+        b"true" | b":" => small::status(0),
+        b"false" => small::status(1),
+        b"sleep" => small::sleep(args),
+        b"ln" => small::ln(args),
+        b"basename" => small::basename(args),
+        b"dirname" => small::dirname(args),
+        b"seq" => small::seq(args),
         _ => Err(format!("command: {}", lossy(name))),
     };
     plain.map(Prepared::from)
@@ -47,7 +58,8 @@ pub fn known(name: &[u8]) -> bool {
 /// Every command, for the check of a name that is all that is known of a
 /// command before it runs.
 pub const NAMES: &[&str] = &[
-    "echo", "cat", "head", "tail", "wc", "ls", "find", "grep", "sed", "mkdir", "touch", "cp", "mv", "rm", "rmdir",
+    "echo", "cat", "head", "tail", "wc", "ls", "find", "grep", "sed", "mkdir", "touch", "cp", "mv", "rm", "rmdir", "printf", "test", "[", "true", ":", "false",
+    "sleep", "ln", "basename", "dirname", "seq",
 ];
 
 /// Gathers input into whole lines for a command that reads its standard

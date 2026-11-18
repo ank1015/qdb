@@ -78,7 +78,9 @@ pub fn check_safe(command: &str, root: &Path) -> Result<(), String> {
     };
     let root = root.to_string_lossy().into_owned().into_bytes();
     for c in &script.all_commands() {
-        let words = c.words.iter().skip(1);
+        // Commands whose words are not paths.
+        let no_paths = c.words.first().is_some_and(|w| matches!(&w.text()[..], b"basename" | b"dirname" | b"printf" | b"echo" | b"seq" | b"sleep" | b"true" | b"false" | b":" | b"tr" | b"date"));
+        let words = c.words.iter().skip(if no_paths { c.words.len() } else { 1 });
         let targets = c.redirects.iter().filter_map(|r| r.target());
         // A sed script is not a path, though one can name a file to
         // read or write: that it must not do with a path from the root.

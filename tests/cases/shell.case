@@ -173,10 +173,10 @@ $ # only a comment
 ! cd src ## command: cd
 ! pwd ## command: pwd
 ! export A=1 ## command: export
-! test -f README.md ## command: test
-! [ -f README.md ] ## command: [
-! true ## command: true
-! printf hi ## command: printf
+$ test -f README.md
+$ [ -f README.md ]
+$ true
+$ printf hi
 ! diff a b ## command: diff
 ! less README.md ## command: less
 ! chmod +x README.md ## command: chmod
