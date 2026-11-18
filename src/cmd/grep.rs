@@ -206,7 +206,11 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         let implicit_dot = files.is_empty() && opts.recursive;
         let single_dir = files.len() == 1 && db.resolve(&files[0]).is_ok_and(|id| db.is_dir(id));
         let with_filename = files.len() > 1 || opts.recursive && (implicit_dot || single_dir);
-        let mut run = Run { opts, searcher, with_filename, selected: false, error: false, line: Vec::new(), only: None, probe: None, top: (db.root(), 0), rest: None };
+        let mut run = Run { opts, searcher, with_filename, selected: false, error: false, line: Vec::new(), only: None, probe: None, top: (db.root(), 0), rest: None, list_probe: None, list_only: None };
+        // Several files named: storage may know which of them can match.
+        if files.len() > 1 && !opts.invert {
+            run.list_probe = db.candidates_cost(run.searcher.query());
+        }
         if implicit_dot {
             let mut path = Vec::new();
             run.tree(db, io, db.root(), &mut path);
@@ -248,7 +252,7 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                     }
                     run.tree(db, io, id, &mut base);
                 }
-                Ok(id) => run.search(io, f, db.content(id), Some(id)),
+                Ok(id) => run.listed(db, io, f, id),
             }
         }
         if run.error {
@@ -279,6 +283,10 @@ struct Run {
     top: (NodeId, usize),
     /// Set to end a walk: the files still to read, from the given place.
     rest: Option<(Vec<Candidate>, usize)>,
+    /// For files named on the command line: how many more bytes to read
+    /// before asking storage, and what it answered.
+    list_probe: Option<usize>,
+    list_only: Option<Shortlist>,
 }
 
 enum Only {
@@ -316,6 +324,32 @@ impl Run {
                 self.search(io, path, db.content(file.id), Some(file.id));
                 path.truncate(base);
             }
+        }
+    }
+
+    /// Search a file that was named on the command line. As in a walk,
+    /// the first files are simply read, and storage is asked which files
+    /// can match once that much reading has cost what the answer costs.
+    fn listed(&mut self, db: &Db, io: &mut Io, label: &[u8], id: NodeId) {
+        if let Some(budget) = self.list_probe {
+            let cost = db.content(id).len() + 256;
+            if budget >= cost {
+                self.list_probe = Some(budget - cost);
+            } else {
+                self.list_probe = None;
+                self.list_only = db.shortlist(self.searcher.query());
+            }
+        }
+        let o = self.opts;
+        if self.list_only.as_ref().map_or(true, |set| db.passes(set, id)) {
+            self.search(io, label, db.content(id), Some(id));
+        } else if o.count && !o.list {
+            // No line of it matches, and it still gets its count.
+            self.search(io, label, b"", Some(id));
+        } else if io.out_file == Some(id) && !o.list {
+            // Writing into a file that is being searched is an error
+            // whatever the file holds.
+            self.search(io, label, db.content(id), Some(id));
         }
     }
 

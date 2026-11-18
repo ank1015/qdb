@@ -127,6 +127,9 @@ pub struct Db {
     /// False while searches are told to read every file although the
     /// index is there and kept current. See `set_index_consulted`.
     consult: bool,
+    /// Files a `>` has emptied in the command line now running, with the
+    /// content they had. See `veil`.
+    veils: Vec<(NodeId, Vec<u8>)>,
 }
 
 impl Default for Db {
@@ -153,7 +156,7 @@ impl Db {
             0,
             Node { id: 0, name: Vec::new(), parent: None, kind: NodeKind::Folder(BTreeMap::new()), aux: 0 },
         );
-        Db { nodes, root: 0, next_id: 1, index: Some(Index::new()), consult: true }
+        Db { nodes, root: 0, next_id: 1, index: Some(Index::new()), consult: true, veils: Vec::new() }
     }
 
     /// An empty database that answers every search by scanning.
@@ -502,12 +505,20 @@ impl Db {
         self.alloc(name, parent, NodeKind::File(content))
     }
 
+    /// Store new content for a file. Returns false, having done nothing,
+    /// when the file already holds exactly that: a write that changes
+    /// nothing costs a comparison and no more.
+    ///
     /// The caller must have checked the content with `is_valid_text`.
-    pub fn set_content(&mut self, id: NodeId, content: Vec<u8>) {
+    pub fn set_content(&mut self, id: NodeId, content: Vec<u8>) -> bool {
         debug_assert!(is_valid_text(&content));
+        self.unveil(id);
         let node = self.nodes.get_mut(&id).unwrap();
         match &mut node.kind {
             NodeKind::File(c) => {
+                if *c == content {
+                    return false;
+                }
                 if let Some(index) = &mut self.index {
                     index.retire(node.aux);
                     node.aux = index.add(id, &content);
@@ -517,6 +528,56 @@ impl Db {
             NodeKind::Folder(_) => panic!("set_content() on a folder"),
         }
         self.index_upkeep();
+        true
+    }
+
+    /// Make a file read as empty until the end of the command line, the
+    /// way `>` empties its file before the command runs, without storing
+    /// anything yet. What the command then writes is compared with what
+    /// the file held, so writing the same content back changes nothing.
+    /// `settle_veils` makes whatever is still veiled empty for good.
+    pub fn veil(&mut self, id: NodeId) {
+        if self.veils.iter().any(|v| v.0 == id) {
+            return;
+        }
+        if let NodeKind::File(c) = &mut self.nodes.get_mut(&id).unwrap().kind {
+            if !c.is_empty() {
+                let old = std::mem::take(c);
+                self.veils.push((id, old));
+            }
+        }
+    }
+
+    /// Take a veil off: the file reads as it did before.
+    pub fn unveil(&mut self, id: NodeId) {
+        if self.veils.is_empty() {
+            return;
+        }
+        if let Some(at) = self.veils.iter().position(|v| v.0 == id) {
+            let (_, old) = self.veils.swap_remove(at);
+            if let Some(Node { kind: NodeKind::File(c), .. }) = self.nodes.get_mut(&id) {
+                *c = old;
+            }
+        }
+    }
+
+    /// The command line is over: every file still veiled becomes empty.
+    pub fn settle_veils(&mut self) {
+        while let Some((id, _)) = self.veils.last() {
+            let id = *id;
+            self.unveil(id);
+            if self.exists(id) {
+                self.set_content(id, Vec::new());
+            }
+        }
+    }
+
+    /// Which files, wherever they are, can match the query? None means
+    /// any of them. For commands that are given a list of files and not a
+    /// folder: ask `passes` of each.
+    pub fn shortlist(&self, query: &Query) -> Option<Shortlist> {
+        let index = self.index.as_ref().filter(|_| self.consult)?;
+        Some(Shortlist { docs: index.docs(query)? })
     }
 
     /// Remove a node and everything under it. The root cannot be removed.
@@ -540,6 +601,9 @@ impl Db {
                 match node.kind {
                     NodeKind::Folder(c) => stack.extend(c.values().copied()),
                     NodeKind::File(_) => {
+                        if !self.veils.is_empty() {
+                            self.veils.retain(|v| v.0 != n);
+                        }
                         if let Some(index) = &mut self.index {
                             index.retire(node.aux);
                         }

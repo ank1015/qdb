@@ -3,6 +3,7 @@
 
 use super::{options, LineBuf};
 use crate::engine::{Filter, Input, Io, Prepared, Runner};
+use crate::scan::Searcher;
 use crate::regex::{Flavor, MatchError, Regex, Syntax};
 use crate::tree::is_valid_text;
 use crate::util::{lines, lossy};
@@ -422,6 +423,13 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                 io.err_line("sed: no input files");
                 return 4;
             }
+            // A file with no line the pattern matches comes out as it went
+            // in, so it is neither rewritten nor, where storage can tell
+            // without reading it, read. The first files are simply read;
+            // storage is asked once that has cost what its answer costs.
+            let mut finder = Searcher::regex(vec![subst.re.clone()]);
+            let mut probe = if files.len() > 1 { db.candidates_cost(finder.query()) } else { None };
+            let mut only = None;
             for f in &files {
                 let id = match db.resolve(f) {
                     Err(e) => {
@@ -436,6 +444,21 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                     }
                     Ok(id) => id,
                 };
+                if let Some(budget) = probe {
+                    let cost = db.content(id).len() + 256;
+                    if budget >= cost {
+                        probe = Some(budget - cost);
+                    } else {
+                        probe = None;
+                        only = db.shortlist(finder.query());
+                    }
+                }
+                if only.as_ref().is_some_and(|set| !db.passes(set, id)) {
+                    continue;
+                }
+                if let Ok(None) = finder.next_line(db.content(id), 0) {
+                    continue;
+                }
                 let mut out = Vec::new();
                 if subst.apply_all(db.content(id), &mut out).is_err() {
                     io.err_line(format!("qdb: sed: {}: {}", lossy(f), too_complex));

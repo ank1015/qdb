@@ -170,6 +170,13 @@ pub fn execute(db: &mut Db, line: &[u8]) -> Outcome {
 /// size of its output. If `out` returns false the commands that only read
 /// stop early; commands that change data always run to completion.
 pub fn execute_to(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
+    let code = run_line(db, line, out, err);
+    // A file that `>` emptied and nothing wrote to is now empty for good.
+    db.settle_veils();
+    code
+}
+
+fn run_line(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
     let pipeline = match shell::parse(line) {
         Ok(None) => return 0,
         Ok(Some(p)) => p,
@@ -329,7 +336,7 @@ impl Sink for Rest<'_> {
 /// What a redirection did before the command ran, so it can be undone.
 enum Undo {
     Created(NodeId),
-    Truncated(NodeId, Vec<u8>),
+    Truncated(NodeId),
 }
 
 fn open_redirect(db: &mut Db, op: RedirOp, path: &[u8], undo: &mut Vec<Undo>) -> Result<NodeId, Errno> {
@@ -337,9 +344,11 @@ fn open_redirect(db: &mut Db, op: RedirOp, path: &[u8], undo: &mut Vec<Undo>) ->
         Ok(id) if db.is_dir(id) => Err(Errno::IsDir),
         Ok(id) => {
             if op == RedirOp::Write {
-                let old = db.content(id).to_vec();
-                db.set_content(id, Vec::new());
-                undo.push(Undo::Truncated(id, old));
+                // Emptied for the command to see, but nothing is stored
+                // until the command's output is known: if that is what
+                // the file held, nothing is written at all.
+                db.veil(id);
+                undo.push(Undo::Truncated(id));
             }
             Ok(id)
         }
@@ -430,7 +439,7 @@ fn commit_redirect(db: &mut Db, target: Target, undo: Vec<Undo>, out: Vec<u8>, m
         for u in undo.into_iter().rev() {
             match u {
                 Undo::Created(id) if db.exists(id) => db.remove(id),
-                Undo::Truncated(id, old) if db.exists(id) => db.set_content(id, old),
+                Undo::Truncated(id) if db.exists(id) => db.unveil(id),
                 _ => {}
             }
         }

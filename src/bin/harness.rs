@@ -502,9 +502,12 @@ fn diff_run(steps: usize, seed: u64) -> Result<bool, String> {
         } else if roll < 50 {
             let (pattern, syntax) = diff_pattern(&mut rng, &words);
             let flags = ["rn", "rn", "rl", "rc", "rin", "ril", "rnv", "rlv", "rci", "r", "rcv"][rng.below(11)];
-            let target = match rng.below(4) {
+            let target = match rng.below(6) {
                 0 if !dirs.is_empty() => dirs[rng.below(dirs.len())].clone(),
                 1 if !dirs.is_empty() => format!("{} {}", dirs[rng.below(dirs.len())], files[rng.below(files.len())]),
+                // Lists of files, which are searched with the index too.
+                2 => "*.c *.txt d1/* d2/*.h d3/s1/*".to_string(),
+                3 => "* d0/* d4/*".to_string(),
                 _ => ".".to_string(),
             };
             let tail = match rng.below(12) {
@@ -529,6 +532,20 @@ fn diff_run(steps: usize, seed: u64) -> Result<bool, String> {
             let path = &files[rng.below(files.len())];
             write(&mut rng, path, &mut c);
             ("overwrite", c)
+        } else if roll < 70 {
+            // Writes that change nothing: they must not reach the index.
+            let others: Vec<&String> = files.iter().filter(|f| *f != "same.txt").collect();
+            let f = others[rng.below(others.len())];
+            let c = vec![
+                format!("cp {} same.txt", f),
+                format!("cp {} same.txt", f),
+                format!("cat {} > same.txt", f),
+                "sed -i 's/qqqq/y/' same.txt".to_string(),
+                "sed -i 's/qqqq/y/' *.c d1/*.txt same.txt".to_string(),
+                "grep -c '' same.txt > count.txt".to_string(),
+                "grep -c '' same.txt > count.txt".to_string(),
+            ];
+            ("same", c)
         } else if roll < 75 {
             ("append", vec![format!("echo '{}' >> {}", diff_line(&mut rng, &words), files[rng.below(files.len())])])
         } else if roll < 83 {
@@ -575,8 +592,13 @@ fn diff_run(steps: usize, seed: u64) -> Result<bool, String> {
             let pattern = if syntax == "F" { pattern.replace("\\n", "\n") } else { pattern };
             all.push(format!("grep -r{}{} '{}' .", ["n", "l", "c", "in"][rng.below(4)], syntax, pattern));
         }
-        for command in &all {
+        for (nth, command) in all.iter().enumerate() {
+            let before = on.index_work();
             let a = execute(&mut on, command.as_bytes());
+            if kind == "same" && matches!(nth, 1..=4 | 6) && on.index_work() != before {
+                println!("FAIL  seed {} step {}: a write that changes nothing reached the index: {}", seed, step + 1, command);
+                return Ok(false);
+            }
             let b = execute(&mut off, command.as_bytes());
             if a != b {
                 println!("FAIL  seed {} step {}: {}", seed, step + 1, command);
