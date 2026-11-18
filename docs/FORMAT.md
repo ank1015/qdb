@@ -1,6 +1,10 @@
 # The on-disk format
 
-This is the exact layout of a qdb database directory, format version 1.
+This is the exact layout of a qdb database directory, format version 2.
+Version 2 differs from version 1 in three things: nodes have a
+modification time (in checkpoints, and as change 6 in the log), a piece
+may be used by several files, and a write that changes no content may
+still log a time.
 The code that reads and writes it is `src/disk.rs` (the files) and
 `src/tree.rs` (what is put in them, and recovery). Everything goes through
 the I/O layer in `src/vfs.rs`.
@@ -34,8 +38,9 @@ large file at once stalls the write that does it). Such a file belongs to
 nothing; if the process ends first, the next open removes it.
 
 Every file starts with an 8-byte magic and a 4-byte format version.
-A version higher than the reader knows is refused ("written by a newer
-version of qdb"); nothing is guessed.
+Any version but the reader's own is refused, a higher one as "written by
+a newer version of qdb" and a lower one as "written in format N by an
+earlier version": nothing is guessed and nothing is converted.
 
 ## Pieces
 
@@ -63,11 +68,30 @@ eight numbers:
 When a piece is written into a checkpoint or a log record it is eight
 varints in this order: `seg ord off slen len lines crc enc`.
 
+**Shared pieces.** The same piece (the same `seg` and `ord`) may appear in
+the rows of several files, and more than once in one row. That is how a
+copy is stored: `cp` writes no content, only a splice that gives the copy
+the pieces of its source. Nothing on disk counts the uses of a piece. A
+reader finds them by reading the tree: a piece is in use while any file's
+row holds it, and its bytes may be reclaimed only when none does. A
+change to one of the files replaces pieces in that file's row and leaves
+the other rows as they were, so sharing never shows.
+
+## Modification times
+
+Every node has a modification time: a signed 64-bit count of nanoseconds
+since 1970-01-01 00:00:00 UTC. It is written as a varint of the same 64
+bits read as unsigned. The engine sets it as a filesystem would: a file's
+when its content is written (also when the content written is what it
+held, and when it is opened to be written anew) or it is touched; a
+folder's when an entry in it is made, removed or renamed. A moved node
+keeps its time. An import keeps the times the files had.
+
 ## Data files (`NNNNNNNN.seg`)
 
 ```
 offset 0   8 bytes   magic "QDBSEG1\n"
-       8   u32       format version (1)
+       8   u32       format version (2)
       12   u32       this file's number
       16   u32       folding rule of the index built over this file (1)
       20   8 bytes   zero
@@ -127,9 +151,19 @@ then   changes, to the end of the record, each starting with a varint:
 | 3 splice | varint id, varint version, varint at, varint del, varint n, then n pieces | in file `id`, replace `del` pieces starting at position `at` with the `n` given; the file is then at `version` |
 | 4 remove | varint id | one node; a folder removed with its contents is one of these per node |
 | 5 rename | varint id, varint parent id, string name | the node keeps its id |
+| 6 time | varint id, varint time | the node's modification time; nothing if there is no such node |
 
-Only command lines that change the tree are numbered and logged. A read,
-or a write that leaves everything as it was, writes nothing. A record
+Changes 1 and 2 carry no time. A record holds one change 6 for every node
+whose time the command line set and that still exists at its end, with
+the last time set; they follow the other changes of the command line,
+though moves made by upkeep may come after them. A node made by change 1
+or 2 has time 0 until a change 6 names it, which the same record always
+does.
+
+Only command lines that change the tree are numbered and logged. A read
+writes nothing. A write that leaves all content as it was writes no
+content, and a record only if it sets a time (as `touch` does, or `>`
+with the same output as before). A record
 may also hold splices that move a file's content from one data file to
 another without changing it (upkeep: see below); they ride in the record
 of the command line during which they were done. `--compact` and
@@ -150,7 +184,7 @@ A data file is at most 128 MB unless a single record needs more.
 
 ```
 offset 0   8 bytes   magic "QDBTREE\n"
-       8   u32       format version (1)
+       8   u32       format version (2)
       12   u32       this checkpoint's number
       16   u32       checksum of bytes 0..16
       20   blocks, one after another
@@ -165,8 +199,8 @@ with a varint tag:
 | Tag | Fields |
 |---|---|
 | 0 position | varint: number of the last command line the tree includes; varint: data file the log goes on in; varint: offset in it; varint: `ord` the next piece stored in it will get; varint: the next node id to hand out |
-| 1 folder | varint id, varint parent id plus 1 (0 for the root), string name |
-| 2 file | varint id, varint parent id plus 1, string name, varint version, varint n, then n pieces |
+| 1 folder | varint id, varint parent id plus 1 (0 for the root), string name, varint time |
+| 2 file | varint id, varint parent id plus 1, string name, varint time, varint version, varint n, then n pieces |
 
 The position entry comes first, in a block of its own. The root folder has
 id 0. Entries are in ascending order of id; a folder's children are found
@@ -190,7 +224,7 @@ restarts, and the id of a removed node is not given out again.
 
 ```
 offset 0   8 bytes   magic "QDBMANI\n"
-       8   u32       format version (1)
+       8   u32       format version (2)
       12   u32       number of the current checkpoint
       16   u32       checksum of bytes 0..16
 ```
@@ -203,7 +237,7 @@ the list of pieces it occurs in.
 
 ```
 header   offset 0   8 bytes  magic "QDBIDX1\n"
-                8   u32      format version (1)
+                8   u32      format version (2)
                12   u32      number of the data file
 lists    offset 16: every posting list, end to end, in ascending order of
          trigram
@@ -304,7 +338,9 @@ wrote, and `--compact` does all of it at once.
 - **Space.** When the bytes of data files that no file uses pass 30% of
   the bytes in use (plus 4 MB), content is moved out of the data file
   with the largest unused share into the one being written: a content
-  record for the piece, and a splice in the command line's record. A
+  record for the piece, and a splice in the command line's record (one
+  splice for every file that uses the piece, all naming the same new
+  piece, so that the files still share it). A
   command line moves at most 4 times the bytes it wrote (16 times once
   unused space passes 60%). A data file that holds nothing in use, and
   that the log from the current checkpoint does not run through, is
