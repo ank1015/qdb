@@ -797,7 +797,39 @@ fn parse_csv_line(line: &str) -> Vec<String> {
     fields
 }
 
-fn bench(name: &str, source: &str, db: Db, opts: &Options) -> Result<bool, String> {
+/// Where the real tools' copy of a dataset lives.
+fn scratch_root(name: &str, opts: &Options) -> (PathBuf, PathBuf) {
+    let base = opts.scratch.join(format!("qdb-bench-{}", name));
+    let root = base.join("root");
+    (base, root)
+}
+
+/// True if the copy for the real tools is already there. It is made once
+/// per dataset; `source` is recorded beside it and must still match.
+fn prepared(name: &str, source: &str, opts: &Options) -> bool {
+    let (base, _) = scratch_root(name, opts);
+    std::fs::read_to_string(base.join("stamp")).ok().as_deref() == Some(source)
+}
+
+/// Write the dataset out for the real tools: exactly what the engine
+/// holds, with anything the loader skips already gone.
+fn prepare(name: &str, source: &str, db: &Db, opts: &Options) -> Result<(), String> {
+    let (base, root) = scratch_root(name, opts);
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    store::dump_dir(db, &root).map_err(|e| format!("writing the dataset: {}", e))?;
+    std::fs::write(base.join("stamp"), source).map_err(|e| e.to_string())
+}
+
+/// Run this program again with the same arguments. Measuring starts in a
+/// fresh process so that memory used to prepare the data is not counted.
+fn run_again() -> Result<bool, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let status = Command::new(exe).args(std::env::args().skip(1)).status().map_err(|e| e.to_string())?;
+    Ok(status.success())
+}
+
+fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
     let text = std::fs::read_to_string(&opts.commands).map_err(|e| format!("{}: {}", opts.commands.display(), e))?;
     let templates: Vec<(String, bool)> = text
         .lines()
@@ -809,18 +841,8 @@ fn bench(name: &str, source: &str, db: Db, opts: &Options) -> Result<bool, Strin
         })
         .collect();
 
-    // The real tools work on a copy of exactly what the engine holds.
-    let base = opts.scratch.join(format!("qdb-bench-{}", name));
-    let root = base.join("root");
-    let stamp = format!("{} nodes, {} bytes\n", db.node_count(), db.content_bytes());
-    if std::fs::read_to_string(base.join("stamp")).ok().as_deref() != Some(&stamp) {
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        store::dump_dir(&db, &root).map_err(|e| format!("writing the dataset: {}", e))?;
-        std::fs::write(base.join("stamp"), &stamp).map_err(|e| e.to_string())?;
-    }
+    let (_, root) = scratch_root(name, opts);
     let _ = std::fs::remove_dir_all(root.join("bench_out"));
-    drop(db);
 
     let terms_path = PathBuf::from("bench/terms").join(format!("{}.txt", name));
     let live_before = LIVE.load(Relaxed);
@@ -1148,27 +1170,44 @@ fn run() -> Result<bool, String> {
         return Ok(true);
     }
     if let Some(dir) = dir {
-        let (db, _) = store::load_dir(&dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
         let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dir".into());
-        return bench(&name, &dir.display().to_string(), db, &opts);
+        let source = dir.display().to_string();
+        if !prepared(&name, &source, &opts) {
+            let (db, _) = store::load_dir(&dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
+            prepare(&name, &source, &db, &opts)?;
+            return run_again();
+        }
+        return bench(&name, &source, &opts);
     }
     if let Some(real) = real_datasets().into_iter().find(|d| d.name == dataset) {
         let path = data.join(&real.folder);
-        let (db, report) = store::load_dir(&path).map_err(|e| format!("{}: {} (see bench/fetch.sh)", path.display(), e))?;
-        let source = format!(
-            "{}. Skipped on import: {} symbolic links, {} files that are not valid text, {} other",
-            real.source, report.skipped_symlinks, report.skipped_not_text, report.skipped_other
-        );
-        return bench(&real.name, &source, db, &opts);
+        let skipped_note = PathBuf::from("bench/terms").join(format!("{}.skipped", real.name));
+        if !prepared(&real.name, &real.source, &opts) {
+            let (db, report) = store::load_dir(&path).map_err(|e| format!("{}: {} (see bench/fetch.sh)", path.display(), e))?;
+            let note = format!(
+                "Skipped on import: {} symbolic links, {} files that are not valid text, {} other",
+                report.skipped_symlinks, report.skipped_not_text, report.skipped_other
+            );
+            std::fs::create_dir_all("bench/terms").map_err(|e| e.to_string())?;
+            std::fs::write(&skipped_note, note).map_err(|e| e.to_string())?;
+            prepare(&real.name, &real.source, &db, &opts)?;
+            return run_again();
+        }
+        let source = format!("{}. {}", real.source, std::fs::read_to_string(&skipped_note).unwrap_or_default().trim());
+        return bench(&real.name, &source, &opts);
     }
     let spec = SPECS.iter().find(|s| s.name == dataset).ok_or(format!("unknown dataset {}", dataset))?;
-    let db = generate(spec);
+    let source = "generated by qdb-bench from a fixed seed";
     if let Some(dir) = &export {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        store::dump_dir(&db, dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
+        store::dump_dir(&generate(spec), dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
         return Ok(true);
     }
-    bench(spec.name, "generated by qdb-bench from a fixed seed", db, &opts)
+    if !prepared(spec.name, source, &opts) {
+        prepare(spec.name, source, &generate(spec), &opts)?;
+        return run_again();
+    }
+    bench(spec.name, source, &opts)
 }
 
 fn main() -> std::process::ExitCode {

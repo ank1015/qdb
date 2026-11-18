@@ -21,6 +21,9 @@ path = "src/bin/harness.rs"
 name = "qdb-bench"
 path = "src/bin/bench.rs"
 
+[dependencies]
+memchr = "2"
+
 [profile.release]
 opt-level = 3
 debug = false

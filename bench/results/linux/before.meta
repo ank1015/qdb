@@ -1,0 +1,13 @@
+source=Linux 6.8 source tree, from the Ubuntu source package linux_6.8.0.orig.tar.gz (sha256 26512115972bdf017a4ac826cc7d3e9b0ba397d4f85cd330e4e4ff54c78061c8). Skipped on import: 64 symbolic links, 6 files that are not valid text, 0 other
+files=83405
+folders=5451
+bytes=1396914445
+index=on
+load_ms=886.3
+load_with_index_ms=886.3
+heap_after_load=1416938287
+rss_after_load=2279235584
+startup_ms=52.944
+trees_agree=true
+all_agree=true
+tools=GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu); grep (GNU grep) 3.11; sed (GNU sed) 4.9; ls (GNU coreutils) 9.4; find (GNU findutils) 4.9.0; ripgrep 14.1.0

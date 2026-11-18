@@ -14,6 +14,10 @@
 //!   back-references and to recover the text of `\(...\)` groups.
 
 use crate::glob::class_by_name;
+use std::cell::RefCell;
+
+mod dfa;
+pub use dfa::Dfa;
 
 pub const DUP_MAX: u32 = 32767;
 const MAX_PROGRAM: usize = 2_000_000;
@@ -74,9 +78,36 @@ pub struct Regex {
     icase: bool,
     prog: Vec<Inst>,
     sets: Vec<Set>,
+    /// Work lists of the NFA simulation, kept between calls.
+    scratch: RefCell<Scratch>,
     /// Warnings GNU grep prints for this pattern, without the program name.
     pub warnings: Vec<String>,
 }
+
+#[derive(Debug, Clone, Default)]
+struct Scratch {
+    clist: Vec<(usize, usize)>,
+    nlist: Vec<(usize, usize)>,
+    /// `mark[pc]` is `epoch + pos` for the last position pc was added at.
+    mark: Vec<u64>,
+    stack: Vec<usize>,
+    /// Raised past every mark of a search when it ends, so the marks never
+    /// need clearing.
+    epoch: u64,
+}
+
+/// Fixed strings found in a pattern. With `fold`, the strings are stored
+/// in lower case and stand for either case of each ASCII letter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Literals {
+    pub strings: Vec<Vec<u8>>,
+    pub fold: bool,
+}
+
+/// More alternatives or longer strings than this and a pattern is not
+/// treated as a set of fixed strings.
+const MAX_LITERALS: usize = 16;
+const MAX_LITERAL_LEN: usize = 256;
 
 /// Group spans: index 0 is the whole match.
 pub type Caps = Vec<Option<(usize, usize)>>;
@@ -103,6 +134,36 @@ fn check_assert(a: Assert, hay: &[u8], pos: usize) -> bool {
         Assert::WordStart => !prev && next,
         Assert::WordEnd => prev && !next,
     }
+}
+
+fn has_assert(n: &Node) -> bool {
+    match n {
+        Node::Assert(_) => true,
+        Node::Cat(v) | Node::Alt(v) => v.iter().any(has_assert),
+        Node::Repeat { sub, .. } | Node::Group(sub, _) => has_assert(sub),
+        Node::Empty | Node::Set(_) | Node::Backref(_) => false,
+    }
+}
+
+/// Every string of `a` followed by every string of `b`, unless that is
+/// too many or too long.
+fn cross(a: &[Vec<u8>], b: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
+    if a.len() * b.len() > MAX_LITERALS {
+        return None;
+    }
+    let mut out = Vec::with_capacity(a.len() * b.len());
+    for x in a {
+        for y in b {
+            if x.len() + y.len() > MAX_LITERAL_LEN {
+                return None;
+            }
+            let joined = [x.as_slice(), y.as_slice()].concat();
+            if !out.contains(&joined) {
+                out.push(joined);
+            }
+        }
+    }
+    Some(out)
 }
 
 // ---------------------------------------------------------------- parsing
@@ -698,8 +759,163 @@ impl Regex {
             icase: syn.icase,
             prog: c.prog,
             sets: c.sets,
+            scratch: RefCell::default(),
             warnings: p.warnings,
         })
+    }
+
+    fn from_ast(ast: Node, icase: bool) -> Option<Regex> {
+        let mut c = Compiler { prog: Vec::new(), sets: Vec::new() };
+        c.compile(&ast).ok()?;
+        c.emit(Inst::Match).ok()?;
+        Some(Regex { ast, ngroups: 0, has_backref: false, icase, prog: c.prog, sets: c.sets, scratch: RefCell::default(), warnings: Vec::new() })
+    }
+
+    /// One pattern that matches wherever any of `parts` does. None if one
+    /// of them has a back-reference. Groups are not kept.
+    pub fn any_of(parts: &[Regex]) -> Option<Regex> {
+        if parts.iter().any(|r| r.has_backref) {
+            return None;
+        }
+        let icase = parts.iter().any(|r| r.icase);
+        Regex::from_ast(Node::Alt(parts.iter().map(|r| r.ast.clone()).collect()), icase)
+    }
+
+    /// A pattern that matches any of the given fixed strings.
+    pub fn from_strings(strings: &[Vec<u8>], icase: bool) -> Option<Regex> {
+        let lit = |c: u8| {
+            if icase && c.is_ascii_alphabetic() {
+                Node::Set(set_of(|b| b.eq_ignore_ascii_case(&c)))
+            } else {
+                Node::Set(set_of(|b| b == c))
+            }
+        };
+        let alt = strings.iter().map(|s| Node::Cat(s.iter().map(|c| lit(*c)).collect())).collect();
+        Regex::from_ast(Node::Alt(alt), icase)
+    }
+
+    pub fn has_backref(&self) -> bool {
+        self.has_backref
+    }
+
+    /// If a line matches exactly when it contains one of a few fixed
+    /// strings, those strings. An empty string among them means every line
+    /// matches.
+    pub fn as_literals(&self) -> Option<Literals> {
+        if self.has_backref || has_assert(&self.ast) {
+            return None;
+        }
+        Some(Literals { strings: self.exact(&self.ast)?, fold: self.icase })
+    }
+
+    /// Fixed strings of which every match contains at least one, chosen
+    /// to be as long as the pattern allows. A line without any of them
+    /// cannot match.
+    pub fn required_literals(&self) -> Option<Literals> {
+        Some(Literals { strings: self.required(&self.ast)?, fold: self.icase })
+    }
+
+    /// The one byte a set stands for, if it is a single byte or, in a
+    /// pattern that ignores case, the two cases of one letter (given in
+    /// lower case).
+    fn single(&self, set: &Set) -> Option<u8> {
+        let mut members = set.iter().enumerate().filter(|(_, m)| **m).map(|(b, _)| b as u8);
+        let first = members.next()?;
+        match (members.next(), members.next()) {
+            (None, _) if !(self.icase && first.is_ascii_alphabetic()) => Some(first),
+            (Some(second), None) if self.icase && first.is_ascii_uppercase() && second == first.to_ascii_lowercase() => Some(second),
+            _ => None,
+        }
+    }
+
+    /// Every string the node can match, if there are only a few.
+    fn exact(&self, n: &Node) -> Option<Vec<Vec<u8>>> {
+        match n {
+            Node::Empty | Node::Assert(_) => Some(vec![Vec::new()]),
+            Node::Set(s) => Some(vec![vec![self.single(s)?]]),
+            Node::Cat(v) => {
+                let mut all = vec![Vec::new()];
+                for x in v {
+                    all = cross(&all, &self.exact(x)?)?;
+                }
+                Some(all)
+            }
+            Node::Alt(v) => {
+                let mut all: Vec<Vec<u8>> = Vec::new();
+                for x in v {
+                    for s in self.exact(x)? {
+                        if !all.contains(&s) {
+                            all.push(s);
+                        }
+                    }
+                }
+                (all.len() <= MAX_LITERALS).then_some(all)
+            }
+            Node::Repeat { sub, min, max } if Some(*min) == *max && *min <= 8 => {
+                let one = self.exact(sub)?;
+                let mut all = vec![Vec::new()];
+                for _ in 0..*min {
+                    all = cross(&all, &one)?;
+                }
+                Some(all)
+            }
+            Node::Group(sub, _) => self.exact(sub),
+            Node::Repeat { .. } | Node::Backref(_) => None,
+        }
+    }
+
+    fn required(&self, n: &Node) -> Option<Vec<Vec<u8>>> {
+        let usable = |set: Vec<Vec<u8>>| if set.iter().all(|s| !s.is_empty()) { Some(set) } else { None };
+        if let Some(all) = self.exact(n) {
+            return usable(all);
+        }
+        match n {
+            Node::Cat(v) => {
+                // Neighbours that are fixed strings join into longer ones;
+                // the best of those runs and of what the other parts
+                // require is kept.
+                let mut best: Option<Vec<Vec<u8>>> = None;
+                let mut consider = |set: Option<Vec<Vec<u8>>>| {
+                    if let Some(set) = set.and_then(usable) {
+                        let score = |s: &Vec<Vec<u8>>| (s.iter().map(|x| x.len()).min().unwrap_or(0), std::cmp::Reverse(s.len()));
+                        if best.as_ref().map_or(true, |b| score(&set) > score(b)) {
+                            best = Some(set);
+                        }
+                    }
+                };
+                let mut run = vec![Vec::new()];
+                for x in v {
+                    match self.exact(x) {
+                        Some(e) => match cross(&run, &e) {
+                            Some(joined) => run = joined,
+                            None => {
+                                consider(Some(std::mem::replace(&mut run, e)));
+                            }
+                        },
+                        None => {
+                            consider(Some(std::mem::replace(&mut run, vec![Vec::new()])));
+                            consider(self.required(x));
+                        }
+                    }
+                }
+                consider(Some(run));
+                best
+            }
+            Node::Alt(v) => {
+                let mut all: Vec<Vec<u8>> = Vec::new();
+                for x in v {
+                    for s in self.required(x)? {
+                        if !all.contains(&s) {
+                            all.push(s);
+                        }
+                    }
+                }
+                (all.len() <= MAX_LITERALS).then_some(all)
+            }
+            Node::Repeat { sub, min, .. } if *min >= 1 => self.required(sub),
+            Node::Group(sub, _) => self.required(sub),
+            _ => None,
+        }
     }
 
     pub fn group_count(&self) -> usize {
@@ -752,17 +968,23 @@ impl Regex {
     /// an earlier start always wins, and for one start the last match seen
     /// is the longest.
     fn pike(&self, hay: &[u8], start: usize, earliest: bool) -> Option<(usize, usize)> {
+        let mut guard = self.scratch.borrow_mut();
+        let scratch = &mut *guard;
         let n = self.prog.len();
-        let mut clist: Vec<(usize, usize)> = Vec::with_capacity(n);
-        let mut nlist: Vec<(usize, usize)> = Vec::with_capacity(n);
-        let mut mark = vec![usize::MAX; n];
-        let mut stack: Vec<usize> = Vec::new();
+        if scratch.mark.len() != n {
+            scratch.mark = vec![0; n];
+            scratch.epoch = 1;
+        }
+        let epoch = scratch.epoch;
+        scratch.epoch += hay.len() as u64 + 2;
+        let Scratch { clist, nlist, mark, stack, .. } = scratch;
+        clist.clear();
         let mut best: Option<(usize, usize)> = None;
         let mut pos = start;
         loop {
             // The marks for position `pos` were set while building clist.
             if best.is_none() {
-                self.add_thread(&mut clist, &mut mark, &mut stack, 0, pos, hay, pos);
+                self.add_thread(clist, mark, stack, 0, pos, hay, pos, epoch);
             }
             if clist.is_empty() && best.is_some() {
                 break;
@@ -789,7 +1011,7 @@ impl Regex {
                     }
                     Inst::Set(s) => {
                         if pos < hay.len() && self.sets[*s][hay[pos] as usize] {
-                            self.add_thread(&mut nlist, &mut mark, &mut stack, pc + 1, st, hay, pos + 1);
+                            self.add_thread(nlist, mark, stack, pc + 1, st, hay, pos + 1, epoch);
                         }
                     }
                     _ => {}
@@ -799,30 +1021,32 @@ impl Regex {
                 break;
             }
             pos += 1;
-            std::mem::swap(&mut clist, &mut nlist);
+            std::mem::swap(clist, nlist);
         }
         best
     }
 
     /// Add a thread and everything reachable from it without consuming
-    /// input. `mark[pc]` holds the last position at which pc was added.
+    /// input. `mark[pc]` records the last position at which pc was added.
     #[allow(clippy::too_many_arguments)]
     fn add_thread(
         &self,
         list: &mut Vec<(usize, usize)>,
-        mark: &mut [usize],
+        mark: &mut [u64],
         stack: &mut Vec<usize>,
         pc: usize,
         st: usize,
         hay: &[u8],
         pos: usize,
+        epoch: u64,
     ) {
+        let stamp = epoch + pos as u64;
         stack.push(pc);
         while let Some(pc) = stack.pop() {
-            if mark[pc] == pos {
+            if mark[pc] == stamp {
                 continue;
             }
-            mark[pc] = pos;
+            mark[pc] = stamp;
             match &self.prog[pc] {
                 Inst::Jmp(t) => stack.push(*t),
                 Inst::Split(a, b) => {

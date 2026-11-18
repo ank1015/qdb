@@ -1,52 +1,15 @@
 //! grep with -r -i -n -l -v -c -E -F.
+//!
+//! This file is the command: options, which files, and what to print. The
+//! search itself, finding the matching lines of a buffer, is `scan.rs`.
 
 use super::{options, LineBuf};
+use crate::bytes::{count_newlines, memchr, push_decimal};
 use crate::engine::{Filter, Input, Io, Prepared, Runner};
 use crate::regex::{Flavor, Regex, Syntax};
+use crate::scan::Searcher;
 use crate::tree::{Db, NodeId};
-use crate::util::{lines, lossy};
-
-enum Matcher {
-    Regex(Vec<Regex>),
-    /// Fixed strings, lowercased when matching without regard to case.
-    Fixed(Vec<Vec<u8>>, bool),
-}
-
-impl Matcher {
-    fn is_match(&self, line: &[u8]) -> Result<bool, ()> {
-        match self {
-            Matcher::Regex(res) => {
-                for re in res {
-                    if re.is_match(line).map_err(|_| ())? {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            }
-            Matcher::Fixed(needles, icase) => {
-                let folded;
-                let hay = if *icase {
-                    folded = line.to_ascii_lowercase();
-                    &folded[..]
-                } else {
-                    line
-                };
-                Ok(needles.iter().any(|n| contains(hay, n)))
-            }
-        }
-    }
-}
-
-fn contains(hay: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    if needle.len() > hay.len() {
-        return false;
-    }
-    let first = needle[0];
-    (0..=hay.len() - needle.len()).any(|i| hay[i] == first && &hay[i..i + needle.len()] == needle)
-}
+use crate::util::lossy;
 
 #[derive(Clone, Copy)]
 struct Opts {
@@ -71,7 +34,7 @@ struct Plan {
 impl Plan {
     /// Compile the pattern. The error is the exit status, with the message
     /// already written.
-    fn matcher(&self, io: &mut Io) -> Result<Matcher, i32> {
+    fn searcher(&self, io: &mut Io) -> Result<Searcher, i32> {
         let pattern = match &self.pattern {
             Some(p) => p,
             None => {
@@ -86,9 +49,8 @@ impl Plan {
         }
         // A newline in the pattern separates alternative patterns.
         let parts: Vec<&[u8]> = pattern.split(|c| *c == b'\n').collect();
-        let matcher = if self.mode == Some(b'F') {
-            let needles = parts.iter().map(|p| if self.icase { p.to_ascii_lowercase() } else { p.to_vec() }).collect();
-            Matcher::Fixed(needles, self.icase)
+        let searcher = if self.mode == Some(b'F') {
+            Searcher::fixed(parts.iter().map(|p| p.to_vec()).collect(), self.icase)
         } else {
             let syn = Syntax { extended: self.mode == Some(b'E'), icase: self.icase, flavor: Flavor::Grep };
             let mut res = Vec::new();
@@ -106,29 +68,23 @@ impl Plan {
                     }
                 }
             }
-            Matcher::Regex(res)
+            Searcher::regex(res)
         };
         // GNU grep sees that nothing can be selected and stops at once.
         if self.opts.invert && pattern.is_empty() {
             return Err(1);
         }
-        Ok(matcher)
+        Ok(searcher)
     }
 }
 
-struct Run<'a> {
-    opts: &'a Opts,
-    matcher: &'a Matcher,
-    with_filename: bool,
-    selected: bool,
-    error: bool,
-}
+const TOO_COMPLEX: &str = "pattern too complex for the backtracking matcher";
 
 /// grep reading its standard input in pieces.
 struct GrepFilter {
     plan: Plan,
     /// Compiled when the first input arrives.
-    matcher: Option<Result<Matcher, i32>>,
+    searcher: Option<Result<Searcher, i32>>,
     lines: LineBuf,
     line_no: usize,
     count: usize,
@@ -137,10 +93,10 @@ struct GrepFilter {
 
 impl GrepFilter {
     fn start(&mut self, io: &mut Io) -> bool {
-        if self.matcher.is_none() {
-            self.matcher = Some(self.plan.matcher(io));
+        if self.searcher.is_none() {
+            self.searcher = Some(self.plan.searcher(io));
         }
-        matches!(self.matcher, Some(Ok(_)))
+        matches!(self.searcher, Some(Ok(_)))
     }
 
     /// One line, with or without its newline. Returns false when no more
@@ -149,10 +105,11 @@ impl GrepFilter {
         let o = self.plan.opts;
         let text = line.strip_suffix(b"\n").unwrap_or(line);
         self.line_no += 1;
-        let hit = match self.matcher.as_ref().unwrap().as_ref().ok().unwrap().is_match(text) {
+        let searcher = self.searcher.as_mut().and_then(|s| s.as_mut().ok()).expect("started");
+        let hit = match searcher.is_match(text) {
             Ok(h) => h,
-            Err(()) => {
-                io.err_line("qdb: grep: (standard input): pattern too complex for the backtracking matcher");
+            Err(_) => {
+                io.err_line(format!("qdb: grep: (standard input): {}", TOO_COMPLEX));
                 self.error = true;
                 return false;
             }
@@ -188,7 +145,7 @@ impl Filter for GrepFilter {
 
     fn finish(mut self: Box<Self>, io: &mut Io) -> i32 {
         if !self.start(io) {
-            return self.matcher.unwrap().err().unwrap();
+            return self.searcher.and_then(|s| s.err()).unwrap_or(2);
         }
         if !self.error && !(self.plan.opts.list && self.count > 0) {
             if let Some(last) = self.lines.rest() {
@@ -234,7 +191,7 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     let plan = Plan { opts, icase, conflicting, mode, pattern };
 
     let input = if files.is_empty() && !opts.recursive {
-        Input::Stream(Box::new(GrepFilter { plan: plan.clone(), matcher: None, lines: LineBuf::default(), line_no: 0, count: 0, error: false }))
+        Input::Stream(Box::new(GrepFilter { plan: plan.clone(), searcher: None, lines: LineBuf::default(), line_no: 0, count: 0, error: false }))
     } else if files.iter().any(|f| f == b"-") {
         Input::Whole
     } else {
@@ -242,16 +199,17 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     };
 
     let run: Runner = Box::new(move |db, io| {
-        let matcher = match plan.matcher(io) {
-            Ok(m) => m,
+        let searcher = match plan.searcher(io) {
+            Ok(s) => s,
             Err(code) => return code,
         };
         let implicit_dot = files.is_empty() && opts.recursive;
         let single_dir = files.len() == 1 && db.resolve(&files[0]).is_ok_and(|id| db.is_dir(id));
         let with_filename = files.len() > 1 || opts.recursive && (implicit_dot || single_dir);
-        let mut run = Run { opts: &opts, matcher: &matcher, with_filename, selected: false, error: false };
+        let mut run = Run { opts, searcher, with_filename, selected: false, error: false, line: Vec::new() };
         if implicit_dot {
-            run.walk(db, io, db.root(), b"");
+            let mut path = Vec::new();
+            run.walk(db, io, db.root(), &mut path);
         } else if files.is_empty() {
             let data = io.take_stdin();
             run.search(io, b"(standard input)", data, None);
@@ -288,7 +246,7 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                     if base != b"/" {
                         base.push(b'/');
                     }
-                    run.walk(db, io, id, &base);
+                    run.walk(db, io, id, &mut base);
                 }
                 Ok(id) => run.search(io, f, db.content(id), Some(id)),
             }
@@ -304,23 +262,51 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     Ok(Prepared { run, input })
 }
 
-impl Run<'_> {
+struct Run {
+    opts: Opts,
+    searcher: Searcher,
+    with_filename: bool,
+    selected: bool,
+    error: bool,
+    /// Scratch for putting an output line together.
+    line: Vec<u8>,
+}
+
+impl Run {
     /// Search every file under a folder, depth first in byte order.
-    /// `prefix` is what goes in front of each child's name.
-    fn walk(&mut self, db: &Db, io: &mut Io, dir: NodeId, prefix: &[u8]) {
+    /// `path` is what goes in front of each child's name; it is restored
+    /// before returning.
+    fn walk(&mut self, db: &Db, io: &mut Io, dir: NodeId, path: &mut Vec<u8>) {
+        let base = path.len();
         for (name, child) in db.children(dir) {
             if io.stopped() {
                 return;
             }
-            let mut path = prefix.to_vec();
             path.extend_from_slice(name);
             if db.is_dir(*child) {
                 path.push(b'/');
-                self.walk(db, io, *child, &path);
+                self.walk(db, io, *child, path);
             } else {
-                self.search(io, &path, db.content(*child), Some(*child));
+                self.search(io, path, db.content(*child), Some(*child));
             }
+            path.truncate(base);
         }
+    }
+
+    /// Print one selected line: `label:number:text`.
+    fn emit(&mut self, io: &mut Io, label: &[u8], number: usize, text: &[u8]) {
+        self.line.clear();
+        if self.with_filename {
+            self.line.extend_from_slice(label);
+            self.line.push(b':');
+        }
+        if self.opts.line_numbers {
+            push_decimal(&mut self.line, number);
+            self.line.push(b':');
+        }
+        io.put(&self.line);
+        io.put(text);
+        io.put(b"\n");
     }
 
     fn search(&mut self, io: &mut Io, label: &[u8], content: &[u8], id: Option<NodeId>) {
@@ -330,41 +316,75 @@ impl Run<'_> {
             self.error = true;
             return;
         }
+        let quiet = o.list || o.count;
         let mut count = 0usize;
-        for (idx, line) in lines(content).enumerate() {
-            let text = line.strip_suffix(b"\n").unwrap_or(line);
-            let hit = match self.matcher.is_match(text) {
-                Ok(h) => h,
-                Err(()) => {
-                    io.err_line(format!("qdb: grep: {}: pattern too complex for the backtracking matcher", lossy(label)));
+        // Line numbers are counted only up to the lines that are printed:
+        // `numbered` lines lie before offset `counted_to`.
+        let mut numbered = 0usize;
+        let mut counted_to = 0usize;
+        let mut pos = 0usize;
+        while pos < content.len() {
+            let found = match self.searcher.next_line(content, pos) {
+                Ok(f) => f,
+                Err(_) => {
+                    io.err_line(format!("qdb: grep: {}: {}", lossy(label), TOO_COMPLEX));
                     self.error = true;
                     return;
                 }
             };
-            if hit == o.invert {
-                continue;
+            if !o.invert {
+                let (start, end) = match found {
+                    Some(line) => line,
+                    None => break,
+                };
+                count += 1;
+                if o.list {
+                    break;
+                }
+                if !quiet {
+                    if o.line_numbers {
+                        numbered += count_newlines(&content[counted_to..start]) + 1;
+                        counted_to = (end + 1).min(content.len());
+                    }
+                    self.emit(io, label, numbered, &content[start..end]);
+                    if io.stopped() {
+                        return;
+                    }
+                }
+                pos = end + 1;
+            } else {
+                // Every line before the next match is selected.
+                let gap_end = found.map_or(content.len(), |(start, _)| start);
+                let mut at = pos;
+                while at < gap_end {
+                    let end = memchr(b'\n', &content[at..gap_end]).map_or(gap_end, |i| at + i);
+                    count += 1;
+                    if o.list {
+                        break;
+                    }
+                    if !quiet {
+                        numbered += 1;
+                        self.emit(io, label, numbered, &content[at..end]);
+                    }
+                    at = end + 1;
+                }
+                if (o.list && count > 0) || io.stopped() {
+                    break;
+                }
+                match found {
+                    // The matching line is skipped, but still numbered.
+                    Some((_, end)) => {
+                        numbered += 1;
+                        pos = end + 1;
+                    }
+                    None => break,
+                }
             }
-            count += 1;
-            if o.list {
-                break;
-            }
-            if o.count {
-                continue;
-            }
-            if self.with_filename {
-                io.put(label);
-                io.put(b":");
-            }
-            if o.line_numbers {
-                io.put(format!("{}:", idx + 1).as_bytes());
-            }
-            io.put(text);
-            io.put(b"\n");
         }
         if count > 0 {
             self.selected = true;
-            // Hand the lines on now: a reader that wants only a few
-            // can then stop the search after this file.
+            // Hand the lines on now: a reader that wants only a few can
+            // then stop the search after this file.
             io.flush();
         }
         if o.list {
@@ -373,11 +393,14 @@ impl Run<'_> {
                 io.put(b"\n");
             }
         } else if o.count {
+            self.line.clear();
             if self.with_filename {
-                io.put(label);
-                io.put(b":");
+                self.line.extend_from_slice(label);
+                self.line.push(b':');
             }
-            io.put(format!("{}\n", count).as_bytes());
+            push_decimal(&mut self.line, count);
+            self.line.push(b'\n');
+            io.put(&self.line);
         }
     }
 }

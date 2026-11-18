@@ -11,10 +11,12 @@
 //! assert_eq!(out.code, 0);
 //! ```
 
+pub mod bytes;
 mod cmd;
 pub mod engine;
 pub mod glob;
 pub mod regex;
+pub mod scan;
 pub mod shell;
 pub mod store;
 pub mod testing;
