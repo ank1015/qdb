@@ -51,7 +51,7 @@ cargo build --release
 ./target/release/qdb --db my.qdb --check --stats
 ./target/release/qdb --db my.qdb --compact
 
-# compare the engine with the real tools (4,676 cases): in memory, on
+# compare the engine with the real tools (4,689 cases): in memory, on
 # disk, and on disk closed and opened again after every step
 ./target/release/qdb-harness
 ./target/release/qdb-harness --no-index

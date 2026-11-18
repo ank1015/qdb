@@ -125,6 +125,19 @@ Measurements the command list does not make. Results are under
 - `qdb-stress codec --dataset NAME`: what the compression codec does to
   the dataset a piece at a time: stored size, and speed in both directions.
 
+`results/TARGETS-4.md` checks each stage 4 target. Its first half is
+`targets4-head.md`, written by hand; the second is written by
+`python3 bench/targets4.py` from the runs labelled `s4-*`.
+
+Stage 4 added to the command list: a prefix `nocmp:` for a command that
+is timed on both sides but whose output is known to differ (`du -s`,
+whose answer on the real side includes the size of real folders); the
+mark `⏎`, which stands for a newline in a command, for here-documents
+and lists over several lines; and the rule that the output of `ls -l`
+is compared after the owner, the group, a folder's size and the `total`
+lines are masked on both sides. The run labelled `s4-disk-small` was
+made in a control group limited to 1 GB of memory, file cache included.
+
 `results/TARGETS-3.md` checks each stage 3 target against these runs.
 
 `results/TARGETS.md` checks each stage 2 target against these runs, and

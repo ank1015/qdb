@@ -1425,7 +1425,10 @@ fn report_dataset(name: &str, opts: &Options) -> Result<(), String> {
         labels.push((opts.label.clone(), opts.label.clone()));
     }
     let runs: Vec<(String, String, Stored)> = labels.into_iter().filter_map(|(l, h)| read_stored(&dir, &l).map(|s| (l, h, s))).collect();
-    let last = match runs.last() {
+    // The real tools' times, and the facts about the index, come from the
+    // settled run on disk when there is one: the runs after it in the list
+    // were made under limits.
+    let last = match runs.iter().find(|r| r.0 == "s4-disk").or(runs.last()) {
         Some(r) => r,
         None => return Ok(()),
     };
