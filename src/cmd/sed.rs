@@ -444,6 +444,12 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                     }
                     Ok(id) => id,
                 };
+                // The real command writes a new file in the folder and
+                // gives it the old name, whether or not a line changed.
+                db.touch(id);
+                if let Some(parent) = db.parent(id) {
+                    db.touch(parent);
+                }
                 if let Some(budget) = probe {
                     let cost = db.size(id) as usize + 256;
                     if budget >= cost {

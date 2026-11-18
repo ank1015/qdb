@@ -75,6 +75,7 @@ pub fn load_into_db(db: &mut Db, path: &Path) -> io::Result<LoadReport> {
     let start = std::time::Instant::now();
     let mut pending = 0;
     load_into(db, root, path, &mut report, &mut pending)?;
+    db.set_mtime(root, mtime_of(&fs::metadata(path)?));
     db.commit();
     if let Some(e) = db.failure() {
         return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
@@ -97,12 +98,16 @@ fn load_into(db: &mut Db, parent: NodeId, path: &Path, report: &mut LoadReport, 
             let id = db.create_folder(parent, &name);
             report.folders += 1;
             load_into(db, id, &child, report, pending)?;
+            // After its entries, which each set its time on the way in.
+            db.set_mtime(id, mtime_of(&entry.metadata()?));
         } else if kind.is_file() {
-            let size = entry.metadata()?.len() as usize;
+            let meta = entry.metadata()?;
+            let size = meta.len() as usize;
             if size > LOAD_WHOLE {
                 // A large file is read and stored a stretch at a time.
-                if !load_large(db, parent, &name, &child, report)? {
-                    report.skipped_not_text += 1;
+                match load_large(db, parent, &name, &child, report)? {
+                    Some(id) => db.set_mtime(id, mtime_of(&meta)),
+                    None => report.skipped_not_text += 1,
                 }
                 *pending = usize::MAX;
             } else {
@@ -113,7 +118,8 @@ fn load_into(db: &mut Db, parent: NodeId, path: &Path, report: &mut LoadReport, 
                 }
                 report.files += 1;
                 report.bytes += content.len();
-                db.create_file(parent, &name, &content);
+                let id = db.create_file(parent, &name, &content);
+                db.set_mtime(id, mtime_of(&meta));
                 *pending = pending.saturating_add(content.len() + 64);
             }
             if *pending > 4 << 20 {
@@ -130,12 +136,19 @@ fn load_into(db: &mut Db, parent: NodeId, path: &Path, report: &mut LoadReport, 
     Ok(())
 }
 
+/// A file's modification time as the database keeps it: nanoseconds
+/// since 1970, UTC. The import keeps the times the files have.
+pub fn mtime_of(meta: &fs::Metadata) -> i64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.mtime().saturating_mul(1_000_000_000).saturating_add(meta.mtime_nsec())
+}
+
 /// Files larger than this are loaded a stretch at a time.
 const LOAD_WHOLE: usize = 8 << 20;
 
-/// Load one large file without ever holding all of it. False if it is
+/// Load one large file without ever holding all of it. None if it is
 /// not valid text, in which case no file is made.
-fn load_large(db: &mut Db, parent: NodeId, name: &[u8], path: &Path, report: &mut LoadReport) -> io::Result<bool> {
+fn load_large(db: &mut Db, parent: NodeId, name: &[u8], path: &Path, report: &mut LoadReport) -> io::Result<Option<NodeId>> {
     use std::io::Read;
     let mut file = fs::File::open(path)?;
     let mut buf = vec![0u8; 4 << 20];
@@ -147,11 +160,11 @@ fn load_large(db: &mut Db, parent: NodeId, name: &[u8], path: &Path, report: &mu
             break;
         }
         if !check.feed(&buf[..n]) {
-            return Ok(false);
+            return Ok(None);
         }
     }
     if !check.finish() {
-        return Ok(false);
+        return Ok(None);
     }
     use std::io::Seek;
     file.seek(io::SeekFrom::Start(0))?;
@@ -175,7 +188,7 @@ fn load_large(db: &mut Db, parent: NodeId, name: &[u8], path: &Path, report: &mu
     }
     report.files += 1;
     report.bytes += total;
-    Ok(true)
+    Ok(Some(id))
 }
 
 /// True if a database holds exactly the folders and files of a real

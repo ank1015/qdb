@@ -87,9 +87,11 @@ pub fn touch(args: Vec<Vec<u8>>) -> Result<Runner, String> {
         }
         let mut status = 0;
         for path in &p.operands {
-            // An existing file or folder is left alone: no times are stored.
             let err = match db.resolve(path) {
-                Ok(_) => continue,
+                Ok(id) => {
+                    db.touch(id);
+                    continue;
+                }
                 Err(e) => e,
             };
             let result = if path.ends_with(b"/") {
@@ -268,9 +270,6 @@ impl Copy {
             }
             return self.copy_dir(db, io, src_id, src, dst, top_src, top_dst);
         }
-        // A large file is copied a piece at a time.
-        let large = db.size(src_id) > 1 << 20;
-        let content = if large { Vec::new() } else { db.content(src_id).into_owned() };
         match db.resolve(dst) {
             Ok(d) if d == src_id => {
                 io.err_line(format!("cp: {} and {} are the same file", quote(src), quote(dst)));
@@ -281,11 +280,9 @@ impl Copy {
                 false
             }
             Ok(d) => {
-                if large {
-                    db.copy_content(src_id, d);
-                } else {
-                    db.set_content(d, &content);
-                }
+                // Nothing is copied: the two files share their content
+                // until one of them changes.
+                db.copy_content(src_id, d);
                 true
             }
             Err(Errno::NoEnt) => {
@@ -293,10 +290,8 @@ impl Copy {
                     Err(Errno::NotDir)
                 } else {
                     db.resolve_parent(dst).map(|(parent, name)| {
-                        let made = db.create_file(parent, &name, &content);
-                        if large {
-                            db.copy_content(src_id, made);
-                        }
+                        let made = db.create_file(parent, &name, &[]);
+                        db.copy_content(src_id, made);
                     })
                 };
                 if let Err(e) = made {

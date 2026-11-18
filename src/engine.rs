@@ -457,7 +457,8 @@ impl Sink for Rest<'_> {
 /// What a redirection did before the command ran, so it can be undone.
 enum Undo {
     Created(NodeId),
-    Truncated(NodeId),
+    /// And the modification time it had.
+    Truncated(NodeId, i64),
 }
 
 fn open_redirect(db: &mut Db, op: RedirOp, path: &[u8], undo: &mut Vec<Undo>) -> Result<NodeId, Errno> {
@@ -468,8 +469,12 @@ fn open_redirect(db: &mut Db, op: RedirOp, path: &[u8], undo: &mut Vec<Undo>) ->
                 // Emptied for the command to see, but nothing is stored
                 // until the command's output is known: if that is what
                 // the file held, nothing is written at all.
+                let before = db.mtime(id);
                 db.veil(id);
-                undo.push(Undo::Truncated(id));
+                // Opening a file to write it anew sets its time, whatever
+                // is then written.
+                db.touch(id);
+                undo.push(Undo::Truncated(id, before));
             }
             Ok(id)
         }
@@ -566,7 +571,10 @@ fn commit_redirect(db: &mut Db, target: Target, undo: Vec<Undo>, mut out: Spool,
         for u in undo.into_iter().rev() {
             match u {
                 Undo::Created(id) if db.exists(id) => db.remove(id),
-                Undo::Truncated(id) if db.exists(id) => db.unveil(id),
+                Undo::Truncated(id, before) if db.exists(id) => {
+                    db.unveil(id);
+                    db.set_mtime(id, before);
+                }
                 _ => {}
             }
         }

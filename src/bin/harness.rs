@@ -694,6 +694,28 @@ impl Gen {
                 _ => "*.c d1/*.txt".to_string(),
             };
             ("sed -i", vec![format!("sed -i 's/{}/{}/g' {}", &from[..from.len().min(4)].trim_end_matches(|c: char| !c.is_ascii()), to, target)])
+        } else if roll < 85 {
+            // A copy, then changes to either side: the two share their
+            // content until then and must not after.
+            (*next_name) += 1;
+            let src = files[rng.below(files.len())].clone();
+            let copy = format!("copy{}.txt", (*next_name) % 5);
+            let mut c = vec![format!("cp {} {}", src, copy)];
+            for _ in 0..1 + rng.below(4) {
+                let side = if rng.below(2) == 0 { &src } else { &copy };
+                c.push(match rng.below(5) {
+                    0 => format!("echo '{}' >> {}", diff_line(rng, words), side),
+                    1 => format!("sed -i 's/{}/{}/' {}", &words[rng.below(words.len())].chars().take(3).collect::<String>(), words[rng.below(words.len())], side),
+                    2 => format!("echo '{}' > {}", diff_line(rng, words), side),
+                    3 => format!("cp {} copy{}.txt", side, rng.below(5)),
+                    _ => format!("rm {}", side),
+                });
+                if c.last().unwrap().starts_with("rm ") {
+                    break;
+                }
+            }
+            c.push(format!("cat {} {}", src, copy));
+            ("cp, edit", c)
         } else if roll < 88 && !dirs.is_empty() {
             (*next_name) += 1;
             ("cp -r", vec![format!("cp -r {} c{}", dirs[rng.below(dirs.len())], (*next_name) % 7)])
@@ -746,10 +768,14 @@ fn diff_run(steps: usize, seed: u64, setup: &Setup, scratch: &mut Scratch) -> Re
             writes += 1;
         }
         for (nth, command) in all.iter().enumerate() {
-            let before = (on.db().index_work(), on.db().io_stats().bytes());
+            // One clock for both, moving on a second with every line.
+            let now = CLOCK_BASE + (step * 16 + nth) as i64 * 1_000_000_000;
+            on.db.as_mut().unwrap().set_clock(Some(now));
+            off.set_clock(Some(now));
+            let before = (on.db().index_work(), on.db().io_stats().content_bytes);
             let a = execute(on.db.as_mut().unwrap(), command.as_bytes());
-            if kind == "same" && matches!(nth, 1..=4 | 6) && (on.db().index_work(), on.db().io_stats().bytes()) != before {
-                println!("FAIL  seed {} step {}: a write that changes nothing reached the index or the disk: {}", seed, step + 1, command);
+            if kind == "same" && matches!(nth, 1..=4 | 6) && (on.db().index_work(), on.db().io_stats().content_bytes) != before {
+                println!("FAIL  seed {} step {}: a write that changes nothing reached the index or wrote content: {}", seed, step + 1, command);
                 return Ok(false);
             }
             if let Some(e) = on.db().failure() {
@@ -817,12 +843,18 @@ fn rebuild_check(db: &Db) -> Option<String> {
 // ------------------------------------------------------------ crash tests
 
 /// A number that stands for a whole tree: every path and every byte.
+/// Where the clock of the generated tests starts: 2023-11-14 22:13:20 UTC.
+const CLOCK_BASE: i64 = 1_700_000_000_000_000_000;
+
 fn digest(db: &Db) -> u64 {
     use std::hash::Hasher;
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    h.write_i64(db.mtime(db.root()));
     for (path, content) in db.snapshot() {
         h.write_usize(path.len());
         h.write(&path);
+        // Modification times are part of what must survive.
+        h.write_i64(db.mtime(db.resolve(&path).expect("a path of the snapshot")));
         match content {
             None => h.write_u8(0),
             Some(c) => {
@@ -1029,6 +1061,9 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
         for command in &commands {
             // The reference first, so that the state the line leads to is
             // known while the line runs.
+            let now = CLOCK_BASE + lines as i64 * 1_000_000_000;
+            shadow.set_clock(Some(now));
+            db.set_clock(Some(now));
             let want = execute(&mut shadow, command.as_bytes());
             {
                 let mut h = history.borrow_mut();

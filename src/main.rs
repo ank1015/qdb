@@ -24,6 +24,10 @@ Runs bash command lines against a tree of text files.
                    syncs once per 64 command lines or 4 MB written, so a
                    power cut can lose up to that many of the last lines
                    (never an earlier line while keeping a later one)
+  --batch-lines N  with --sync batch: sync once N command lines have changed
+                   something since the last sync (default 64)
+  --batch-bytes N  with --sync batch: or once N bytes have been written
+                   since the last sync (default 4194304)
   --piece BYTES    cut file content into pieces of at most BYTES (default
                    65536); applies to what is written from now on
   --compress       store what is written from now on compressed (LZ4, a
@@ -76,6 +80,8 @@ fn run() -> Result<i32, String> {
             // the tree frequent.
             "--segment" => cfg.segment = value("--segment")?.parse().ok().filter(|n| *n >= 4096).ok_or("--segment needs a number of bytes, at least 4096")?,
             "--checkpoint" => cfg.checkpoint = value("--checkpoint")?.parse().map_err(|_| "--checkpoint needs a number of bytes")?,
+            "--batch-lines" => cfg.batch_lines = value("--batch-lines")?.parse().ok().filter(|n| *n >= 1).ok_or("--batch-lines needs a number of command lines, at least 1")?,
+            "--batch-bytes" => cfg.batch_bytes = value("--batch-bytes")?.parse().ok().filter(|n| *n >= 1).ok_or("--batch-bytes needs a number of bytes, at least 1")?,
             "--no-index" => cfg.index = false,
             "--compress" => cfg.compress = true,
             "--index" => {

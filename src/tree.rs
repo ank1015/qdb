@@ -8,8 +8,10 @@
 //! ```
 //!
 //! Every node has an internal id that never changes; name and parent are
-//! properties, so a move keeps the node. No metadata is stored: size and line
-//! count are derived from content.
+//! properties, so a move keeps the node. The one piece of metadata is a
+//! modification time per node, in nanoseconds since 1970 UTC; size and line
+//! count are derived from content. Two files may use the same pieces (after
+//! `cp`): that is storage detail and never shows.
 //!
 //! # Where things are kept
 //!
@@ -30,7 +32,7 @@
 //! (`vfs::MemFs`) and writes no log; everything else is the same code.
 
 use crate::bytes::count_newlines;
-use crate::disk::{self, damage, Damage, Packed, PackedWriter, Piece, Reader, Segment, Stored, DEAD, REC_CONTENT, REC_HEADER, REC_META, REC_NEXT, SEG_HEADER};
+use crate::disk::{self, damage, Damage, Packed, PackedWriter, Piece, Reader, Segment, Stored, DEAD, REC_CONTENT, REC_HEADER, REC_META, REC_NEXT, SEG_HEADER, SHARED};
 use crate::index::{self, Index, Lists, Postings};
 pub use crate::index::{IndexStats, IndexWork};
 use crate::query::{Query, Trigram};
@@ -73,6 +75,8 @@ pub struct Node {
     /// Bookkeeping, not part of the data model: for a folder, how many
     /// files lie anywhere beneath it.
     aux: u32,
+    /// When the node was last modified: nanoseconds since 1970, UTC.
+    pub mtime: i64,
 }
 
 /// Every node by id. Ids are handed out in sequence and never reused, so
@@ -373,6 +377,7 @@ const OP_MKFILE: u64 = 2;
 const OP_SPLICE: u64 = 3;
 const OP_REMOVE: u64 = 4;
 const OP_RENAME: u64 = 5;
+const OP_MTIME: u64 = 6;
 
 /// The most content one record holds. A file up to this size is stored
 /// in one stretch and can be read without joining its pieces.
@@ -399,8 +404,14 @@ pub struct Db {
     dirty: bool,
     /// Pieces it has taken out of files. Their content is forgotten when
     /// the command line ends.
-    retired: Vec<Piece>,
+    retired: Vec<(NodeId, Piece)>,
     veils: Vec<NodeId>,
+    /// Nodes whose modification time it has set. The times go into the
+    /// log once, when the command line ends.
+    timed: std::collections::HashSet<NodeId>,
+    /// The time, when a test has set it; otherwise the system clock is
+    /// read.
+    clock: Option<i64>,
     /// Number of the last command line logged.
     seq: u64,
     /// How much of the active data file is known to be on disk.
@@ -468,19 +479,21 @@ impl Clone for Db {
         cfg.index = self.has_index();
         let mut db = Db::in_memory(cfg);
         db.next_id = self.next_id;
+        db.clock = self.clock;
+        db.nodes.get_mut(0).unwrap().mtime = self.nodes[self.root].mtime;
         let mut stack = vec![self.root];
         while let Some(id) = stack.pop() {
             let node = &self.nodes[id];
             match &node.kind {
                 NodeKind::Folder(children) => {
                     if id != self.root {
-                        db.nodes.insert(Node { id, name: node.name.clone(), parent: node.parent, kind: NodeKind::Folder(BTreeMap::new()), aux: 0 });
+                        db.nodes.insert(Node { id, name: node.name.clone(), parent: node.parent, kind: NodeKind::Folder(BTreeMap::new()), aux: 0, mtime: node.mtime });
                         db.link(id);
                     }
                     stack.extend(children.values().rev().copied());
                 }
                 NodeKind::File(_) => {
-                    db.nodes.insert(Node { id, name: node.name.clone(), parent: node.parent, kind: NodeKind::File(Text::default()), aux: 0 });
+                    db.nodes.insert(Node { id, name: node.name.clone(), parent: node.parent, kind: NodeKind::File(Text::default()), aux: 0, mtime: node.mtime });
                     db.link(id);
                     db.count_files(node.parent, 1);
                     let content = self.content(id);
@@ -610,7 +623,7 @@ impl Db {
     fn blank(vfs: Box<dyn Vfs>, cfg: Config) -> Db {
         let vfs: Rc<dyn Vfs> = Rc::from(vfs);
         let mut nodes = Nodes::default();
-        nodes.insert(Node { id: 0, name: Vec::new(), parent: None, kind: NodeKind::Folder(BTreeMap::new()), aux: 0 });
+        nodes.insert(Node { id: 0, name: Vec::new(), parent: None, kind: NodeKind::Folder(BTreeMap::new()), aux: 0, mtime: 0 });
         let volatile = vfs.volatile();
         Db {
             nodes,
@@ -626,6 +639,8 @@ impl Db {
             dirty: false,
             retired: Vec::new(),
             veils: Vec::new(),
+            timed: Default::default(),
+            clock: None,
             seq: 0,
             synced: SEG_HEADER,
             unsynced_lines: 0,
@@ -718,6 +733,7 @@ impl Db {
                     let id = r.u64();
                     let parent = r.u64().checked_sub(1);
                     let name = r.bytes().to_vec();
+                    let mtime = r.u64() as i64;
                     let kind = if tag == 1 {
                         NodeKind::Folder(BTreeMap::new())
                     } else {
@@ -732,7 +748,7 @@ impl Db {
                         }
                         NodeKind::File(Text { pieces, len, ver, veiled: false })
                     };
-                    db.nodes.insert(Node { id, name, parent, kind, aux: 0 });
+                    db.nodes.insert(Node { id, name, parent, kind, aux: 0, mtime });
                 }
                 _ => r.bad = true,
             }
@@ -907,8 +923,9 @@ impl Db {
                 if p.off as u64 + p.slen as u64 > seg.end {
                     return Err(format!("{}: is cut short: a file has {} bytes at offset {} and the data file has {}", seg.name(), p.slen, p.off, seg.end));
                 }
-                seg.adopt(p, id);
-                db.live_pieces += 1;
+                if seg.add_user(p, id) {
+                    db.live_pieces += 1;
+                }
             }
         }
         db.next_id = db.next_id.max(ids.iter().max().map_or(1, |m| m + 1));
@@ -983,7 +1000,7 @@ impl Db {
                     let (id, parent, name) = (r.u64(), r.u64(), r.bytes().to_vec());
                     if !r.bad && self.nodes.get(id).is_none() {
                         let kind = if op == OP_MKDIR { NodeKind::Folder(BTreeMap::new()) } else { NodeKind::File(Text::default()) };
-                        self.nodes.insert(Node { id, name, parent: Some(parent), kind, aux: 0 });
+                        self.nodes.insert(Node { id, name, parent: Some(parent), kind, aux: 0, mtime: 0 });
                     }
                     self.next_id = self.next_id.max(id + 1);
                 }
@@ -1022,6 +1039,12 @@ impl Db {
                         node.name = name;
                     }
                 }
+                OP_MTIME => {
+                    let (id, t) = (r.u64(), r.u64() as i64);
+                    if let Some(node) = self.nodes.get_mut(id).filter(|_| !r.bad) {
+                        node.mtime = t;
+                    }
+                }
                 other => return Err(format!("the log has a change of unknown kind {}", other)),
             }
         }
@@ -1057,7 +1080,7 @@ impl Db {
         // And those the command line now running has taken out of files:
         // until its record is in the log they are still in use as far as
         // the disk goes, and an index file must have them.
-        todo.extend(self.retired.iter().filter(|p| self.segs[p.seg as usize].as_ref().is_some_and(|s| p.ord >= s.indexed && s.owners[p.ord as usize] != DEAD)).cloned());
+        todo.extend(self.retired.iter().map(|(_, p)| p).filter(|p| self.segs[p.seg as usize].as_ref().is_some_and(|s| p.ord >= s.indexed && s.owners[p.ord as usize] != DEAD)).cloned());
         todo.sort_unstable_by_key(|p| (p.seg, p.ord));
         todo.dedup_by_key(|p| (p.seg, p.ord));
         let mut bytes = 0u64;
@@ -1389,13 +1412,25 @@ impl Db {
                     self.clean = None;
                     break;
                 }
-                let owner = seg.owners[ord as usize];
-                let found = match self.nodes.get(owner) {
-                    Some(Node { kind: NodeKind::File(t), .. }) => t.pieces.iter().position(|q| q.seg == id && q.ord == ord).map(|i| (i, t.pieces[i].clone())),
-                    _ => None,
-                };
-                // Not found: taken out of its file by this command line.
-                let Some((pos, piece)) = found else {
+                // Every place the piece is used: usually one, more after
+                // a copy. Places are taken from the back of each file so
+                // that replacing one does not move the others.
+                let mut users = Vec::new();
+                seg.users(ord, &mut users);
+                let mut found: Vec<(NodeId, usize)> = Vec::new();
+                let mut piece = None;
+                for &user in &users {
+                    if let Some(Node { kind: NodeKind::File(t), .. }) = self.nodes.get(user) {
+                        for (i, q) in t.pieces.iter().enumerate().rev() {
+                            if q.seg == id && q.ord == ord {
+                                found.push((user, i));
+                                piece = Some(*q);
+                            }
+                        }
+                    }
+                }
+                // Not found: taken out of its files by this command line.
+                let Some(piece) = piece else {
                     self.clean = Some((id, ord + 1));
                     continue;
                 };
@@ -1406,12 +1441,19 @@ impl Db {
                 }
                 self.clean_credit -= piece.len as u64;
                 let text = self.text_of(&piece).into_owned();
-                let new = self.store(owner, &text);
+                let new = self.store(found[0].0, &text);
                 if self.failed.is_some() {
                     return;
                 }
                 self.io.moved_bytes += text.len() as u64;
-                self.splice(owner, pos, 1, new);
+                for (n, &(user, pos)) in found.iter().enumerate() {
+                    if n > 0 {
+                        for q in &new {
+                            self.segs[q.seg as usize].as_mut().unwrap().add_user(q, user);
+                        }
+                    }
+                    self.splice(user, pos, 1, new.clone());
+                }
                 self.clean = Some((id, ord + 1));
             }
             if self.clean.is_some() {
@@ -1687,7 +1729,7 @@ impl Db {
         let added: u64 = new.iter().map(|p| p.len as u64).sum();
         let gone: Vec<Piece> = t.pieces.splice(at..at + del, new).collect();
         t.len = t.len + added - gone.iter().map(|p| p.len as u64).sum::<u64>();
-        self.retired.extend(gone);
+        self.retired.extend(gone.into_iter().map(|p| (id, p)));
     }
 
     fn text(&self, id: NodeId) -> &Text {
@@ -1721,6 +1763,7 @@ impl Db {
             pre += 1;
             at = end;
         }
+        self.touch(id);
         if pre == old.len() && at == content.len() {
             self.unveil(id);
             return false;
@@ -1762,6 +1805,7 @@ impl Db {
     /// The caller must know the content to be valid text.
     pub fn set_content_stream(&mut self, id: NodeId, next: &mut dyn FnMut(&Db, &mut Vec<u8>) -> bool) -> bool {
         let old = self.text(id).pieces.clone();
+        self.touch(id);
         let mut buf: Vec<u8> = Vec::new();
         // While the new content is what the file holds: `k` whole pieces
         // and `within` bytes of the next have been matched.
@@ -1831,19 +1875,26 @@ impl Db {
         true
     }
 
-    /// Give a file the content of another, a piece at a time. False if
-    /// it held that already.
+    /// Give a file the content of another. Nothing is copied: the file
+    /// comes to use the same pieces, and what is written is the record
+    /// that says so. False if it used exactly those pieces already.
     pub fn copy_content(&mut self, from: NodeId, to: NodeId) -> bool {
         let pieces = self.pieces(from).to_vec();
-        let mut i = 0;
-        self.set_content_stream(to, &mut |db, buf| {
-            if i == pieces.len() {
-                return false;
+        self.touch(to);
+        let old = &self.text(to).pieces;
+        let n = old.len();
+        if n == pieces.len() && old.iter().zip(&pieces).all(|(a, b)| a.seg == b.seg && a.ord == b.ord) {
+            self.unveil(to);
+            return false;
+        }
+        for p in &pieces {
+            if self.segs[p.seg as usize].as_mut().expect("a piece in a data file that is gone").add_user(p, to) {
+                self.live_pieces += 1;
             }
-            buf.extend_from_slice(&db.text_of(&pieces[i]));
-            i += 1;
-            true
-        })
+        }
+        self.splice(to, 0, n, pieces);
+        self.unveil(to);
+        true
     }
 
     /// Add to the end of a file. What is written is what is added, plus
@@ -1858,6 +1909,7 @@ impl Db {
             self.set_content(id, data);
             return;
         }
+        self.touch(id);
         let pieces = &self.text(id).pieces;
         let n = pieces.len();
         let (mut take, mut size) = (0, data.len());
@@ -1896,6 +1948,7 @@ impl Db {
         let new = self.store(id, text);
         let n = new.len();
         self.splice(id, at, del, new);
+        self.touch(id);
         n
     }
 
@@ -1910,7 +1963,7 @@ impl Db {
         let now = self.text(id).pieces.len();
         let keep: std::collections::HashSet<(u32, u32)> = saved.iter().map(|p| (p.seg, p.ord)).collect();
         self.splice(id, 0, now, saved);
-        self.retired.retain(|p| !keep.contains(&(p.seg, p.ord)));
+        self.retired.retain(|(user, p)| *user != id || !keep.contains(&(p.seg, p.ord)));
     }
 
     /// Make a file read as empty until the end of the command line, the
@@ -1952,6 +2005,18 @@ impl Db {
                     t.veiled = false;
                     let n = t.pieces.len();
                     self.splice(id, 0, n, Vec::new());
+                    self.touch(id);
+                }
+            }
+        }
+        if !self.timed.is_empty() {
+            let mut timed: Vec<NodeId> = self.timed.drain().collect();
+            timed.sort_unstable();
+            for id in timed {
+                if let Some(node) = self.nodes.get(id) {
+                    disk::put_u64(&mut self.ops, OP_MTIME);
+                    disk::put_u64(&mut self.ops, id);
+                    disk::put_u64(&mut self.ops, node.mtime as u64);
                 }
             }
         }
@@ -1973,10 +2038,9 @@ impl Db {
                 r = self.log_commit();
             }
         }
-        for p in std::mem::take(&mut self.retired) {
+        for (user, p) in std::mem::take(&mut self.retired) {
             if let Some(seg) = self.segs[p.seg as usize].as_mut() {
-                if seg.owners[p.ord as usize] != DEAD {
-                    seg.retire(&p);
+                if seg.drop_user(&p, user) {
                     self.live_pieces -= 1;
                 }
             }
@@ -2323,7 +2387,9 @@ impl Db {
         let mut files: Vec<NodeId> = Vec::new();
         for (seg, ords) in list.by_seg.iter().enumerate() {
             if let Some(s) = &self.segs[seg] {
-                files.extend(ords.iter().map(|o| s.owners[*o as usize]).filter(|f| *f != DEAD));
+                for o in ords {
+                    s.users(*o, &mut files);
+                }
             }
         }
         files.sort_unstable();
@@ -2376,7 +2442,9 @@ impl Db {
         let mut files: Vec<NodeId> = Vec::new();
         for (seg, ords) in list.by_seg.iter().enumerate() {
             if let Some(s) = &self.segs[seg] {
-                files.extend(ords.iter().map(|o| s.owners[*o as usize]).filter(|f| *f != DEAD));
+                for o in ords {
+                    s.users(*o, &mut files);
+                }
             }
         }
         files.sort_unstable();
@@ -2557,6 +2625,43 @@ impl Db {
         }
     }
 
+    /// The time now: the system clock, or what `set_clock` said.
+    pub fn now(&self) -> i64 {
+        match self.clock {
+            Some(t) => t,
+            None => match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                Ok(d) => d.as_nanos().min(i64::MAX as u128) as i64,
+                Err(_) => 0,
+            },
+        }
+    }
+
+    /// Fix the time the engine sees, for tests; None goes back to the
+    /// system clock.
+    pub fn set_clock(&mut self, t: Option<i64>) {
+        self.clock = t;
+    }
+
+    pub fn mtime(&self, id: NodeId) -> i64 {
+        self.nodes[id].mtime
+    }
+
+    /// Set a node's modification time. Like every change it is logged
+    /// when the command line ends.
+    pub fn set_mtime(&mut self, id: NodeId, t: i64) {
+        self.nodes.get_mut(id).unwrap().mtime = t;
+        self.dirty = true;
+        if !self.volatile {
+            self.timed.insert(id);
+        }
+    }
+
+    /// Set a node's modification time to now.
+    pub fn touch(&mut self, id: NodeId) {
+        let now = self.now();
+        self.set_mtime(id, now);
+    }
+
     fn log_name(&mut self, op: u64, id: NodeId, parent: NodeId, name: &[u8]) {
         self.dirty = true;
         if !self.volatile {
@@ -2572,9 +2677,12 @@ impl Db {
         let id = self.next_id;
         self.next_id += 1;
         let is_file = matches!(kind, NodeKind::File(_));
-        self.nodes.insert(Node { id, name: name.to_vec(), parent: Some(parent), kind, aux: 0 });
+        self.nodes.insert(Node { id, name: name.to_vec(), parent: Some(parent), kind, aux: 0, mtime: 0 });
         self.link(id);
         self.log_name(if is_file { OP_MKFILE } else { OP_MKDIR }, id, parent, name);
+        let now = self.now();
+        self.set_mtime(id, now);
+        self.set_mtime(parent, now);
         if is_file {
             self.count_files(Some(parent), 1);
         }
@@ -2610,6 +2718,7 @@ impl Db {
         };
         self.count_files(Some(parent), -gone);
         self.dirty = true;
+        self.touch(parent);
         let mut stack = vec![id];
         while let Some(n) = stack.pop() {
             if let Some(node) = self.nodes.remove(n) {
@@ -2623,7 +2732,7 @@ impl Db {
                         if t.veiled {
                             self.veils.retain(|v| *v != n);
                         }
-                        self.retired.extend(t.pieces);
+                        self.retired.extend(t.pieces.into_iter().map(|p| (n, p)));
                     }
                 }
             }
@@ -2664,6 +2773,9 @@ impl Db {
         self.count_files(Some(old_parent), -moved);
         self.count_files(Some(new_parent), moved);
         self.log_name(OP_RENAME, id, new_parent, new_name);
+        let now = self.now();
+        self.set_mtime(old_parent, now);
+        self.set_mtime(new_parent, now);
         Ok(())
     }
 
@@ -2714,6 +2826,9 @@ impl Db {
     /// saved. Nothing is done if no data file holds anything unused.
     pub fn compact(&mut self) -> Result<(), String> {
         self.commit();
+        // Whatever was logged before this is on disk before anything is
+        // moved, so that a power cut during the work loses none of it.
+        self.sync();
         self.clean = None;
         self.clean_credit = 0;
         let unused: usize = self.segs.iter().flatten().map(|s| s.owners.len() - s.live_pieces as usize).sum();
@@ -2722,6 +2837,9 @@ impl Db {
                 let sync = std::mem::replace(&mut self.cfg.sync, SyncMode::Batch);
                 self.roll(0)?;
                 let first_new = self.active;
+                // Where a piece that several files use went, so that they
+                // still share it afterwards.
+                let mut moved: std::collections::HashMap<(u32, u32), Vec<Piece>> = std::collections::HashMap::new();
                 for id in self.files_in_order() {
                     let old = self.text(id).pieces.clone();
                     if old.is_empty() || old.iter().all(|p| p.seg >= first_new) {
@@ -2730,10 +2848,29 @@ impl Db {
                     let mut new = Vec::with_capacity(old.len());
                     let mut buf: Vec<u8> = Vec::new();
                     for (i, p) in old.iter().enumerate() {
-                        buf.extend_from_slice(&self.text_of(p));
-                        if buf.len() >= 16 << 20 || i + 1 == old.len() {
+                        let shared = p.seg < first_new && self.seg(p.seg).owners[p.ord as usize] == SHARED;
+                        if !shared {
+                            buf.extend_from_slice(&self.text_of(p));
+                        }
+                        if !buf.is_empty() && (shared || buf.len() >= 16 << 20 || i + 1 == old.len()) {
                             new.extend(self.store(id, &buf));
                             buf.clear();
+                        }
+                        if shared {
+                            match moved.get(&(p.seg, p.ord)) {
+                                Some(there) => {
+                                    for q in there {
+                                        self.segs[q.seg as usize].as_mut().unwrap().add_user(q, id);
+                                    }
+                                    new.extend(there.iter().copied());
+                                }
+                                None => {
+                                    let text = self.text_of(p).into_owned();
+                                    let there = self.store(id, &text);
+                                    new.extend(there.iter().copied());
+                                    moved.insert((p.seg, p.ord), there);
+                                }
+                            }
                         }
                     }
                     self.splice(id, 0, old.len(), new);
@@ -2847,7 +2984,12 @@ impl Db {
                     let mut len = 0u64;
                     for (i, p) in t.pieces.iter().enumerate() {
                         let seg = self.segs.get(p.seg as usize).and_then(|s| s.as_ref()).ok_or(format!("file {} has content in data file {}, which is not there", node.id, p.seg))?;
-                        if seg.owners.get(p.ord as usize) != Some(&node.id) {
+                        let recorded = match seg.owners.get(p.ord as usize) {
+                            Some(&SHARED) => seg.shared.get(&p.ord).is_some_and(|l| l.contains(&node.id)),
+                            Some(o) => *o == node.id,
+                            None => false,
+                        };
+                        if !recorded {
                             return Err(format!("{}: piece {} is not recorded as belonging to file {}", seg.name(), p.ord, node.id));
                         }
                         let text = self.text_of(p);
@@ -2864,10 +3006,28 @@ impl Db {
                     if len != t.len {
                         return Err(format!("the tree is not sound: file {} is {} bytes and its pieces are {}", node.id, t.len, len));
                     }
-                    pieces += t.pieces.len() as u64;
                     bytes += len;
                 }
             }
+        }
+        // A piece that several files use is one piece; the uses must be
+        // the ones recorded.
+        for (id, live) in by_seg.iter_mut().enumerate() {
+            live.sort_by_key(|p| p.0.ord);
+            let mut i = 0;
+            while i < live.len() {
+                let mut j = i + 1;
+                while j < live.len() && live[j].0.ord == live[i].0.ord {
+                    j += 1;
+                }
+                let seg = self.segs[id].as_ref().unwrap();
+                if live[i..j].iter().any(|l| l.0 != live[i].0) || seg.uses(live[i].0.ord) != j - i {
+                    return Err(format!("{}: piece {} is used {} times by files, and {} uses are recorded", seg.name(), live[i].0.ord, j - i, seg.uses(live[i].0.ord)));
+                }
+                i = j;
+            }
+            live.dedup_by_key(|p| p.0.ord);
+            pieces += live.len() as u64;
         }
         if pieces != self.live_pieces {
             return Err(format!("the tree is not sound: {} pieces are counted as in use and files have {}", self.live_pieces, pieces));
@@ -2981,12 +3141,14 @@ fn encode_node(node: &Node, out: &mut Vec<u8>) {
             disk::put_u64(out, node.id);
             disk::put_u64(out, node.parent.map_or(0, |p| p + 1));
             disk::put_bytes(out, &node.name);
+            disk::put_u64(out, node.mtime as u64);
         }
         NodeKind::File(t) => {
             disk::put_u64(out, 2);
             disk::put_u64(out, node.id);
             disk::put_u64(out, node.parent.map_or(0, |p| p + 1));
             disk::put_bytes(out, &node.name);
+            disk::put_u64(out, node.mtime as u64);
             disk::put_u64(out, t.ver as u64);
             disk::put_u64(out, t.pieces.len() as u64);
             for p in &t.pieces {

@@ -87,10 +87,15 @@ fn a_read_writes_nothing() {
     run(&mut db, "grep -rn needle .");
     run(&mut db, "cat src/f1.txt | wc -l");
     run(&mut db, "find . -name '*.txt' | head -n 3");
-    // Writes that change nothing are reads as far as the disk goes.
+    assert_eq!(db.io_stats(), before);
+    // Writes that change nothing write no content: only the record that
+    // carries the new modification time.
     run(&mut db, "cp src/f7.txt docs/copy.txt");
     run(&mut db, "sed -i 's/absent/x/' src/f1.txt");
-    assert_eq!(db.io_stats(), before);
+    let after = db.io_stats();
+    assert_eq!(after.content_bytes, before.content_bytes);
+    assert_eq!(after.commits, before.commits + 2);
+    assert!(after.log_bytes - before.log_bytes < 200);
 }
 
 #[test]
@@ -212,21 +217,23 @@ fn a_damaged_tree_or_manifest_is_an_error() {
 
 #[test]
 fn a_newer_format_is_refused() {
+    for (version, said) in [(3u8, "newer version"), (1u8, "earlier version")] {
     for ext in [".seg", ".ckp", "MANIFEST"] {
-        let dir = Dir::new(&format!("newer{}", ext.trim_start_matches('.')));
+        let dir = Dir::new(&format!("version{}{}", version, ext.trim_start_matches('.')));
         make(&dir.0);
         let file = files(&dir.0, ext).remove(0);
         // The format version is the four bytes after the magic. Give it
         // a version from the future, with a checksum that is right, by
         // asking the engine's own checksum.
         let mut bytes = std::fs::read(&file).unwrap();
-        bytes[8] = 2;
+        bytes[8] = version;
         let covered = if ext == ".seg" { 28 } else { 16 };
         let sum = qdb::disk::crc(&bytes[..covered]).to_le_bytes();
         bytes[covered..covered + 4].copy_from_slice(&sum);
         std::fs::write(&file, bytes).unwrap();
         let err = Db::open_dir(&dir.0, Config::default()).err().unwrap();
-        assert!(err.contains("newer version"), "{}: {}", ext, err);
+        assert!(err.contains(said), "{}: {}", ext, err);
+    }
     }
 }
 

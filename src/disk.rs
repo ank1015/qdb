@@ -20,9 +20,10 @@ use crate::query::Trigram;
 use crate::tree::NodeId;
 use crate::vfs::{VFile, Vfs};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io;
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 /// How content was folded for the index: 1 means ASCII letters lowered
 /// and nothing else (`bytes::fold`).
 pub const FOLD_ASCII: u32 = 1;
@@ -50,6 +51,18 @@ pub const ENC_PLAIN: u8 = 0;
 pub const ENC_LZ4: u8 = 1;
 
 pub const DEAD: NodeId = NodeId::MAX;
+/// In `Segment::owners`: several files use the piece, and `Segment::shared`
+/// lists them.
+pub const SHARED: NodeId = NodeId::MAX - 1;
+
+/// The message for a file in another format than this version writes.
+pub fn wrong_version(name: &str, found: u32) -> String {
+    if found < FORMAT_VERSION {
+        format!("{}: written in format {} by an earlier version of qdb; this version reads only format {} and there is no conversion", name, found, FORMAT_VERSION)
+    } else {
+        format!("{}: written by a newer version of qdb (format {})", name, found)
+    }
+}
 
 pub fn seg_name(id: u32) -> String {
     format!("{:08}.seg", id)
@@ -237,8 +250,10 @@ pub struct Segment {
     pub end: u64,
     /// How large the file may grow.
     pub cap: u64,
-    /// The owner of each piece by `ord`: a file, or `DEAD`.
+    /// The owner of each piece by `ord`: a file, `DEAD`, or `SHARED`.
     pub owners: Vec<NodeId>,
+    /// The files that use a piece marked `SHARED`, one entry per use.
+    pub shared: HashMap<u32, Vec<NodeId>>,
     pub live_pieces: u32,
     /// Stored bytes of the pieces that have an owner.
     pub live_bytes: u64,
@@ -286,6 +301,7 @@ impl Segment {
             // record and is now full.
             cap: if cap > 0 { cap.max(end + 4096) } else { end },
             owners: Vec::new(),
+            shared: HashMap::new(),
             live_pieces: 0,
             live_bytes: 0,
             checked: RefCell::new(Vec::new()),
@@ -315,7 +331,7 @@ impl Segment {
             return Err(format!("{}: not a qdb data file, or its header is damaged", self.name));
         }
         if u32_at(h, 8) != FORMAT_VERSION {
-            return Err(format!("{}: written by a newer version of qdb (format {})", self.name, u32_at(h, 8)));
+            return Err(wrong_version(&self.name, u32_at(h, 8)));
         }
         if u32_at(h, 12) != self.id {
             return Err(format!("{}: is data file {} under another name", self.name, u32_at(h, 12)));
@@ -532,17 +548,88 @@ impl Segment {
         }
     }
 
-    /// Note that a piece is owned by a file. Used when the tree is read
-    /// at open.
-    pub fn adopt(&mut self, p: &Piece, owner: NodeId) {
+    /// Note that a file uses a piece (once more, if it does already).
+    /// True if the piece had no user before.
+    pub fn add_user(&mut self, p: &Piece, user: NodeId) -> bool {
         self.grow_owners(p.ord + 1);
-        self.owners[p.ord as usize] = owner;
-        self.live_pieces += 1;
-        self.live_bytes += p.slen as u64;
+        let o = &mut self.owners[p.ord as usize];
+        match *o {
+            DEAD => {
+                *o = user;
+                self.live_pieces += 1;
+                self.live_bytes += p.slen as u64;
+                true
+            }
+            SHARED => {
+                self.shared.get_mut(&p.ord).expect("a shared piece has its list").push(user);
+                false
+            }
+            one => {
+                *o = SHARED;
+                self.shared.insert(p.ord, vec![one, user]);
+                false
+            }
+        }
+    }
+
+    /// A file stops using a piece (one use of it). True if that was the
+    /// last use, and the piece's content is now in no file.
+    pub fn drop_user(&mut self, p: &Piece, user: NodeId) -> bool {
+        match self.owners[p.ord as usize] {
+            DEAD => false,
+            SHARED => {
+                let list = self.shared.get_mut(&p.ord).expect("a shared piece has its list");
+                if let Some(i) = list.iter().position(|u| *u == user) {
+                    list.swap_remove(i);
+                }
+                if list.len() == 1 {
+                    self.owners[p.ord as usize] = list[0];
+                    self.shared.remove(&p.ord);
+                }
+                false
+            }
+            one => {
+                if one != user {
+                    return false;
+                }
+                self.retire(p);
+                true
+            }
+        }
+    }
+
+    /// The files that use a piece, each once.
+    pub fn users(&self, ord: u32, out: &mut Vec<NodeId>) {
+        match self.owners.get(ord as usize) {
+            None | Some(&DEAD) => {}
+            Some(&SHARED) => {
+                let at = out.len();
+                out.extend_from_slice(&self.shared[&ord]);
+                out[at..].sort_unstable();
+                let mut keep = at;
+                for i in at..out.len() {
+                    if i == at || out[i] != out[keep - 1] {
+                        out[keep] = out[i];
+                        keep += 1;
+                    }
+                }
+                out.truncate(keep);
+            }
+            Some(&one) => out.push(one),
+        }
+    }
+
+    /// How many uses of a piece are recorded.
+    pub fn uses(&self, ord: u32) -> usize {
+        match self.owners.get(ord as usize) {
+            None | Some(&DEAD) => 0,
+            Some(&SHARED) => self.shared[&ord].len(),
+            Some(_) => 1,
+        }
     }
 
     /// The piece's content is no longer in any file.
-    pub fn retire(&mut self, p: &Piece) {
+    fn retire(&mut self, p: &Piece) {
         let o = &mut self.owners[p.ord as usize];
         if *o == DEAD {
             return;
@@ -657,7 +744,7 @@ impl Packed {
             return Err(format!("{}: not a complete index file", p.name));
         }
         if u32_at(head, 8) != FORMAT_VERSION {
-            return Err(format!("{}: written by a newer version of qdb (format {})", p.name, u32_at(head, 8)));
+            return Err(wrong_version(&p.name, u32_at(head, 8)));
         }
         if u32_at(foot, 56) != FOLD_ASCII {
             return Err(format!("{}: built with folding rule {}, which this version does not know", p.name, u32_at(foot, 56)));
@@ -1026,7 +1113,7 @@ pub fn read_manifest(vfs: &dyn Vfs) -> Result<Option<u32>, String> {
         return Err(format!("{}: damaged: not a qdb manifest, or its checksum does not match", name));
     }
     if u32_at(m, 8) != FORMAT_VERSION {
-        return Err(format!("{}: written by a newer version of qdb (format {})", name, u32_at(m, 8)));
+        return Err(wrong_version(&name, u32_at(m, 8)));
     }
     Ok(Some(u32_at(m, 12)))
 }
@@ -1044,7 +1131,7 @@ pub fn read_checkpoint(vfs: &dyn Vfs, number: u32) -> Result<(Vec<u8>, u64), Str
         return Err(format!("{}: damaged: not a qdb checkpoint, or its header does not match its checksum", name));
     }
     if u32_at(all, 8) != FORMAT_VERSION {
-        return Err(format!("{}: written by a newer version of qdb (format {})", name, u32_at(all, 8)));
+        return Err(wrong_version(&name, u32_at(all, 8)));
     }
     let mut out = Vec::with_capacity(len);
     let mut at = 20usize;
