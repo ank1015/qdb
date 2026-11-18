@@ -15,7 +15,7 @@
 //!
 //! Nothing is split into lines or allocated until there is a candidate.
 
-use crate::bytes::{memchr, memrchr, Finder};
+use crate::bytes::{fold_all, memchr, memrchr, Finder};
 use crate::query::Query;
 use crate::regex::{Dfa, Literals, MatchError, Regex};
 
@@ -105,7 +105,7 @@ fn line_around(hay: &[u8], at: usize) -> (usize, usize) {
 impl Searcher {
     /// Lines that contain any of the fixed strings.
     pub fn fixed(strings: Vec<Vec<u8>>, ignore_case: bool) -> Searcher {
-        let strings: Vec<Vec<u8>> = if ignore_case { strings.iter().map(|s| s.to_ascii_lowercase()).collect() } else { strings };
+        let strings: Vec<Vec<u8>> = if ignore_case { strings.iter().map(|s| fold_all(s)).collect() } else { strings };
         if strings.iter().any(|s| s.is_empty()) {
             return Searcher { kind: Kind::All, query: Query::All };
         }

@@ -1,0 +1,63 @@
+command,ignored_ms,used_ms,ratio
+"ls",0.00084,0.00082,0.977
+"ls -a",0.00155,0.00157,1.010
+"ls -R",0.45295,0.45078,0.995
+"ls -aR src/backend",0.05609,0.05579,0.995
+"ls -p src/backend",0.00157,0.00157,1.000
+"find .",0.98181,0.95413,0.972
+"find . -name '*.html'",1.39891,1.37725,0.985
+"find . -name '*.c'",1.46081,1.46128,1.000
+"find . -type d",0.94325,0.97865,1.038
+"find . -type f",1.02576,0.99627,0.971
+"find . -maxdepth 2 -type f",0.00883,0.00883,1.000
+"find src/backend -name '*.html' -type f",0.12211,0.11832,0.969
+"find . -name 'Makefile'",1.00551,0.99038,0.985
+"cat doc/src/sgml/html/bug-reporting.html",0.00109,0.00110,1.006
+"cat -n doc/src/sgml/html/bug-reporting.html",0.02632,0.02637,1.002
+"head -n 20 doc/src/sgml/html/bug-reporting.html",0.00303,0.00302,0.998
+"tail -n 20 doc/src/sgml/html/bug-reporting.html",0.00265,0.00260,0.984
+"tail -n +100 doc/src/sgml/html/bug-reporting.html",0.00585,0.00585,0.999
+"wc doc/src/sgml/html/bug-reporting.html",0.02045,0.02051,1.003
+"wc -l doc/src/sgml/html/*.html",28.07001,28.05312,0.999
+"cat doc/src/sgml/html/*.html | wc -l",30.11408,30.15033,1.001
+"cat doc/src/sgml/html/bug-reporting.html | head -n 50 | tail -n 10",0.00964,0.00968,1.004
+"grep -c not doc/src/sgml/html/bug-reporting.html",0.00506,0.00505,0.997
+"grep -n not doc/src/sgml/html/bug-reporting.html",0.00708,0.00702,0.991
+"sed 's/not/XX/g' doc/src/sgml/html/bug-reporting.html",0.23583,0.23681,1.004
+"sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' doc/src/sgml/html/bug-reporting.html",0.54911,0.55347,1.008
+"cat doc/src/sgml/html/bug-reporting.html | sed 's/^/> /' | wc -c",0.08248,0.08689,1.053
+"grep -rn qdbzzabsentterm .",22.30110,0.03805,0.002
+"grep -rl qdbzzabsentterm .",21.96461,0.03154,0.001
+"grep -rn abcdefghijklabcdefgh .",22.69048,0.11906,0.005
+"grep -rl abcdefghijklabcdefgh .",22.40892,0.13833,0.006
+"grep -rn btvarstrequalimage .",22.32220,2.15120,0.096
+"grep -rl btvarstrequalimage .",21.63395,1.77846,0.082
+"grep -rn undesirable .",21.62354,3.37895,0.156
+"grep -rl undesirable .",20.78631,2.68191,0.129
+"grep -rn passed .",26.82490,18.05741,0.673
+"grep -rl passed .",14.04445,5.72610,0.408
+"grep -rn not .",38.42196,38.50738,1.002
+"grep -rl not .",3.59982,3.37343,0.937
+"grep -rc undesirable .",22.49868,4.26510,0.190
+"grep -rin BTVARSTREQUALIMAGE .",26.18237,2.37848,0.091
+"grep -ri undesirable .",25.76032,3.86565,0.150
+"grep -rn undesirable src/backend",4.67430,1.64044,0.351
+"grep -rl passed src/backend",2.60470,1.48334,0.569
+"grep -rF 'undesirable' .",20.56500,2.94750,0.143
+"grep -rE 'size_[a-z]+\(' .",22.33696,8.81233,0.395
+"grep -rE 'btvarstrequalimage|abcdefghijklabcdefgh' .",32.00214,3.85385,0.120
+"grep -rE 'passed|undesirable' .",39.15663,26.92943,0.688
+"grep -rE '[0-9]{4,}' .",190.76677,182.79978,0.958
+"grep -rn '^#include' .",23.49761,10.45140,0.445
+"grep -rE '^(import|from) ' .",35.61377,35.07708,0.985
+"grep -rin 'return [a-z_]*;$' src/backend",17.85885,15.96429,0.894
+"grep -rv e src/include/access",0.47183,0.47472,1.006
+"grep -r '\(undesirable\).*\1' .",22.36488,3.73361,0.167
+"grep -rl passed . | wc -l",15.22644,7.08938,0.466
+"grep -rc not . | grep -v ':0$' | wc -l",30.59045,29.97983,0.980
+"find . -name '*.html' | wc -l",1.65727,1.63137,0.984
+"find . -type f | grep -c html",1.43417,1.45607,1.015
+"grep -rn not . | head -n 5",0.00734,0.00731,0.997
+"grep -rn passed . | head -n 1",0.01179,0.01191,1.009
+"find . -type f | head -n 3",0.04215,0.04070,0.965
+"cat doc/src/sgml/html/*.html | head -n 2",0.29326,0.29108,0.993

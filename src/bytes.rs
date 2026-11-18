@@ -2,8 +2,19 @@
 //! `memchr` crate, and a substring search that ignores ASCII case is
 //! written here because that crate has none.
 //!
-//! Case is folded the one way the engine folds it anywhere: ASCII letters
-//! only, as in the C locale. `fold` below is that definition.
+//! Two definitions the whole engine shares live here, so that a change of
+//! locale has one place to start from.
+//!
+//! One character is one byte. That is the C locale, which the engine
+//! applies to everything: `.` and a bracket expression in a pattern, `?`
+//! and `[...]` in a glob, and the word and character counts of `wc` all
+//! work on single bytes. The code that relies on it is the byte sets in
+//! `regex.rs` and `glob.rs`, the trigrams in `query.rs`, and `wc` in
+//! `cmd/read.rs`; none of them decodes UTF-8.
+//!
+//! Case is folded one way: ASCII letters only, as in the C locale. `fold`
+//! below is that definition, and `same_folded`, `fold_all` and
+//! `other_case` are the only other forms of it.
 
 pub use memchr::{memchr, memrchr};
 
@@ -12,6 +23,24 @@ pub use memchr::{memchr, memrchr};
 #[inline]
 pub fn fold(b: u8) -> u8 {
     b.to_ascii_lowercase()
+}
+
+/// Whether two bytes are the same when case is ignored.
+#[inline]
+pub fn same_folded(a: u8, b: u8) -> bool {
+    fold(a) == fold(b)
+}
+
+/// A copy of `s` with every byte folded.
+pub fn fold_all(s: &[u8]) -> Vec<u8> {
+    s.iter().map(|b| fold(*b)).collect()
+}
+
+/// The byte that folds to the same as `b` and is not `b`, if there is one:
+/// the capital of a small letter and the other way round.
+#[inline]
+pub fn other_case(b: u8) -> Option<u8> {
+    (0..=255u8).find(|c| *c != b && fold(*c) == fold(b)).filter(|_| b.is_ascii_alphabetic())
 }
 
 /// How many newlines are in `hay`.
@@ -108,7 +137,7 @@ impl Finder {
         }
         let last_start = hay.len() - n;
         let lower = self.needle[first];
-        let upper = lower.to_ascii_uppercase();
+        let upper = other_case(lower).unwrap_or(lower);
         let mut start = from;
         while start <= last_start {
             let window = &hay[start + first..last_start + first + 1];

@@ -29,6 +29,9 @@ Times a list of commands on the real GNU tools and on the engine.
   --label NAME      what to call this run in the results (default dev);
                     one file per label is kept under bench/results/DATASET/
   --no-index        run the engine with the trigram index switched off
+  --paired          instead of the usual run: time each read-only command on
+                    the engine alone, with searches using the index and
+                    ignoring it by turns in one process
   --commands FILE   the command list (default bench/commands.txt)
   --reps N          timed runs per read-only command (default 5; fewer
                     for commands that take longer than 0.3 s)
@@ -343,7 +346,7 @@ fn engine_facts(db: &Db) -> Vec<(String, String)> {
         .iter()
         .enumerate()
         .filter(|(_, n)| **n > 0)
-        .map(|(i, n)| if i == 0 { format!("1:{}", n) } else { format!("{}-{}:{}", (1usize << (i - 1)) + 1, 1usize << i, n) })
+        .map(|(i, n)| if i < 2 { format!("{}:{}", i + 1, n) } else { format!("{}-{}:{}", (1usize << (i - 1)) + 1, 1usize << i, n) })
         .collect();
     let fact = |k: &str, v: String| (format!("index_{}", k), v);
     vec![
@@ -871,6 +874,7 @@ struct Options {
     scratch: PathBuf,
     label: String,
     index: bool,
+    paired: bool,
     filter: Option<String>,
 }
 
@@ -882,6 +886,20 @@ fn more_reps(first: Duration, reps: usize) -> usize {
         reps.min(3) - 1
     } else {
         reps - 1
+    }
+}
+
+/// The same for the engine. Its runs cost little, so a quick command gets
+/// many more of them: a difference of a tenth between two runs of the
+/// benchmark should mean something even for a command that takes
+/// microseconds.
+fn more_engine_reps(first: Duration, reps: usize) -> usize {
+    if first < Duration::from_millis(2) {
+        reps * 10
+    } else if first < Duration::from_millis(50) {
+        reps * 3
+    } else {
+        more_reps(first, reps)
     }
 }
 
@@ -988,6 +1006,8 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
     run_real(&root, "true");
     let (mut db, report, load, load_with_index) = engine_load(&root, opts)?;
     let heap_after_load = LIVE.load(Relaxed) - live_before;
+    // Taken now, before any command has changed the data.
+    let facts = engine_facts(&db);
     let rss_after_load = resident_bytes();
     eprintln!("{}: {} files, {} folders, {:.1} MB, loaded in {} ms", name, report.files, report.folders, report.bytes as f64 / 1e6, ms(millis(load_with_index)));
 
@@ -1001,8 +1021,41 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         }
     };
 
+    if opts.paired {
+        return paired(name, &mut db, &terms, &templates, opts);
+    }
+
     // What starting a process costs the real tools, for reference.
     let startup = median((0..5).map(|_| run_real(&root, "echo -n").0).collect());
+
+    // The same write on every dataset: a new file with the same 64 KB of
+    // generated text, to show what a write costs as the data grows.
+    let fixed_write = {
+        let mut rng = Rng(0xF1BED);
+        let vocab = vocabulary(&mut rng);
+        let mut texts: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..9 {
+            let mut text = Vec::new();
+            while text.len() < 64 * 1024 {
+                text.extend_from_slice(&file_content(&mut rng, &vocab, "c", 200));
+                if !text.ends_with(b"\n") {
+                    text.push(b'\n');
+                }
+            }
+            text.truncate(64 * 1024);
+            texts.push(text);
+        }
+        let top = db.root();
+        let folder = db.create_folder(top, b"qdb_bench_fixed");
+        let mut times = Vec::new();
+        for (i, text) in texts.into_iter().enumerate() {
+            let t = Instant::now();
+            db.create_file(folder, format!("{}.c", i).as_bytes(), text);
+            times.push(t.elapsed());
+        }
+        db.remove(folder);
+        median(times)
+    };
 
     let mut rows: Vec<Row> = Vec::new();
     let mut all_agree = true;
@@ -1057,7 +1110,7 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         let mut engine_times = vec![first.time];
         let mut peak = first.peak;
         if !mutating {
-            for _ in 0..more_reps(first.time, opts.reps) {
+            for _ in 0..more_engine_reps(first.time, opts.reps) {
                 let again = engine_run(&mut db, &command, false);
                 engine_times.push(again.time);
                 peak = again.peak;
@@ -1120,10 +1173,11 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
     let _ = writeln!(meta, "heap_after_load={}", heap_after_load);
     let _ = writeln!(meta, "rss_after_load={}", rss_after_load);
     let _ = writeln!(meta, "startup_ms={:.3}", millis(startup));
+    let _ = writeln!(meta, "fixed_write_ms={:.4}", millis(fixed_write));
     let _ = writeln!(meta, "trees_agree={}", trees_agree);
     let _ = writeln!(meta, "all_agree={}", all_agree);
     let _ = writeln!(meta, "tools={}; {}; {}; {}; {}; {}", tool_version("bash"), tool_version("grep"), tool_version("sed"), tool_version("ls"), tool_version("find"), tool_version("rg"));
-    for (k, v) in engine_facts(&db) {
+    for (k, v) in facts {
         let _ = writeln!(meta, "{}={}", k, v);
     }
     if opts.filter.is_none() {
@@ -1135,6 +1189,50 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
         eprintln!("{}: the trees differ after the command list", name);
     }
     Ok(all_agree)
+}
+
+/// Index used against index ignored, for commands that only read, in one
+/// process and by turns. Two separate runs of the benchmark differ by more
+/// than a tenth for reasons that have nothing to do with the index (where
+/// memory happens to land, mostly), so a difference that small can only be
+/// seen this way.
+fn paired(name: &str, db: &mut Db, terms: &Terms, templates: &[(String, bool)], opts: &Options) -> Result<bool, String> {
+    let mut csv = String::from("command,ignored_ms,used_ms,ratio\n");
+    for (template, mutating) in templates {
+        let command = match terms.fill(template) {
+            Some(c) if !mutating => c,
+            _ => continue,
+        };
+        if opts.filter.as_ref().is_some_and(|f| !command.contains(f.as_str())) {
+            continue;
+        }
+        let first = engine_run(db, &command, false).time;
+        let pairs = if first > Duration::from_millis(300) {
+            3
+        } else if first > Duration::from_millis(20) {
+            9
+        } else {
+            41
+        };
+        let (mut used, mut ignored) = (Vec::new(), Vec::new());
+        for i in 0..pairs * 2 {
+            // Alternate which goes first.
+            let consult = (i % 2 == 0) == (i % 4 < 2);
+            db.set_index_consulted(consult);
+            let t = engine_run(db, &command, false).time;
+            if consult { used.push(t) } else { ignored.push(t) }
+        }
+        db.set_index_consulted(true);
+        let (u, i) = (millis(median(used)), millis(median(ignored)));
+        eprintln!("  {:>10} ignored {:>10} used  {:>5.2}  {}", ms(i), ms(u), u / i.max(1e-9), command);
+        let _ = writeln!(csv, "{},{:.5},{:.5},{:.3}", csv_field(&command), i, u, u / i.max(1e-9));
+    }
+    if opts.filter.is_none() {
+        let dir = opts.out.join(name);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join(format!("{}.csv", opts.label)), csv).map_err(|e| e.to_string())?;
+    }
+    Ok(true)
 }
 
 fn have_rg() -> bool {
@@ -1187,22 +1285,25 @@ fn report_dataset(name: &str, opts: &Options) -> Result<(), String> {
     let _ = writeln!(md, "- Size: {} files in {} folders, {:.1} MB of text", get(&last.2, "files"), get(&last.2, "folders"), num(&last.2, "bytes") / 1e6);
     let _ = writeln!(md, "- Tools: {}", get(&last.2, "tools"));
     let _ = writeln!(md, "- GNU and rg times are from the latest run ({}), and include starting bash and the tool ({} ms for `bash -c 'echo -n'`). Their output is captured through a pipe. rg runs on one thread with `-j 1 --no-ignore --hidden` and is there for timing only.", last.1, get(&last.2, "startup_ms"));
-    let _ = writeln!(md, "- Engine times are in process, on one thread, and include parsing the command. Read-only commands: median of up to 5 runs, fewer above 0.3 s. Commands that change data: one run.");
+    let _ = writeln!(md, "- Engine times are in process, on one thread, and include parsing the command. Read-only commands: median of up to 5 runs, fewer above 0.3 s; from Part 3 on, 16 runs for a command under 50 ms and 51 for one under 2 ms. Commands that change data: one run.");
     let _ = writeln!(md, "- Peak memory is the most heap the engine held during the command, above what it held before it.\n");
 
     let _ = writeln!(md, "## Loading and memory\n");
-    let _ = writeln!(md, "| Run | Index | Load (ms) | Load with index build (ms) | Heap after load | Resident after load | Agrees with GNU |");
-    let _ = writeln!(md, "|---|---|---:|---:|---:|---:|---|");
-    for (_, heading, s) in &runs {
+    let _ = writeln!(md, "| Run | Index | Load (ms) | Load with index build (ms) | Heap after load | Resident after load | New 64 KB file (ms) | Agrees with GNU |");
+    let _ = writeln!(md, "|---|---|---:|---:|---:|---:|---:|---|");
+    for (label, heading, s) in &runs {
+        // The engine had no index before part 4.
+        let index = if matches!(label.as_str(), "before" | "part2" | "part3") { "none".to_string() } else { get(s, "index") };
         let _ = writeln!(
             md,
-            "| {} | {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {} | {} |",
             heading,
-            get(s, "index"),
+            index,
             ms(num(s, "load_ms")),
             ms(num(s, "load_with_index_ms")),
             size(num(s, "heap_after_load") as usize),
             size(num(s, "rss_after_load") as usize),
+            if s.meta.contains_key("fixed_write_ms") { format!("{:.3}", num(s, "fixed_write_ms")) } else { String::new() },
             if get(s, "all_agree") == "true" { "yes" } else { "NO" }
         );
     }
@@ -1233,7 +1334,7 @@ fn report_dataset(name: &str, opts: &Options) -> Result<(), String> {
             share("index_top1000_posting_bytes"),
             share("index_top10000_posting_bytes")
         );
-        let _ = writeln!(md, "- These figures are taken after the command list has run, so they include its writes.");
+        let _ = writeln!(md, "- These figures are taken straight after loading.");
         let _ = writeln!(md, "\n| Files in a trigram's list | Trigrams |\n|---:|---:|");
         for part in get(s, "index_lists_by_length").split_whitespace() {
             if let Some((range, n)) = part.split_once(':') {
@@ -1322,6 +1423,7 @@ fn run() -> Result<bool, String> {
         scratch: std::env::temp_dir(),
         label: "dev".into(),
         index: true,
+        paired: false,
         filter: None,
     };
     let mut args = std::env::args().skip(1);
@@ -1340,6 +1442,7 @@ fn run() -> Result<bool, String> {
             "--scratch" => opts.scratch = value("--scratch")?.into(),
             "--export" => export = Some(value("--export")?.into()),
             "--report" => report_only = true,
+            "--paired" => opts.paired = true,
             "-h" | "--help" => {
                 println!("{}", USAGE);
                 return Ok(true);

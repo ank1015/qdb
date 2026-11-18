@@ -1,0 +1,63 @@
+command,ignored_ms,used_ms,ratio
+"ls",0.00096,0.00084,0.881
+"ls -a",0.00182,0.00178,0.980
+"ls -R",5.89050,5.95338,1.011
+"ls -aR Documentation",1.29487,1.28757,0.994
+"ls -p Documentation",0.00447,0.00438,0.980
+"find .",19.65852,20.91839,1.064
+"find . -name '*.h'",27.51889,24.32341,0.884
+"find . -name '*.c'",23.58696,26.85401,1.139
+"find . -type d",16.42555,16.52721,1.006
+"find . -type f",13.84610,13.62508,0.984
+"find . -maxdepth 2 -type f",0.09378,0.09898,1.055
+"find Documentation -name '*.h' -type f",1.61794,1.61070,0.996
+"find . -name 'Makefile'",18.32388,20.39149,1.113
+"cat include/linux/kernfs.h",0.00099,0.00097,0.987
+"cat -n include/linux/kernfs.h",0.05354,0.05377,1.004
+"head -n 20 include/linux/kernfs.h",0.00172,0.00175,1.017
+"tail -n 20 include/linux/kernfs.h",0.00173,0.00170,0.986
+"tail -n +100 include/linux/kernfs.h",0.00311,0.00310,0.995
+"wc include/linux/kernfs.h",0.02203,0.02185,0.992
+"wc -l include/linux/*.h",23.68031,23.72728,1.002
+"cat include/linux/*.h | wc -l",30.70585,31.17551,1.015
+"cat include/linux/kernfs.h | head -n 50 | tail -n 10",0.00934,0.00923,0.988
+"grep -c define include/linux/kernfs.h",0.00840,0.00841,1.001
+"grep -n define include/linux/kernfs.h",0.00940,0.00928,0.988
+"sed 's/define/XX/g' include/linux/kernfs.h",0.24442,0.25256,1.033
+"sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' include/linux/kernfs.h",0.62310,0.61635,0.989
+"cat include/linux/kernfs.h | sed 's/^/> /' | wc -c",0.12414,0.12244,0.986
+"grep -rn qdbzzabsentterm .",205.54726,0.05944,0.000
+"grep -rl qdbzzabsentterm .",202.22805,0.04030,0.000
+"grep -rn ausgabenspezifisches .",206.12130,0.32345,0.002
+"grep -rl ausgabenspezifisches .",207.86035,0.30434,0.001
+"grep -rn mispredicted .",204.10269,18.93611,0.093
+"grep -rl mispredicted .",206.47020,18.84479,0.091
+"grep -rn separately .",209.00857,23.88105,0.114
+"grep -rl separately .",203.83928,21.19830,0.104
+"grep -rn conditions .",215.26213,127.91475,0.594
+"grep -rl conditions .",144.75190,55.26840,0.382
+"grep -rn define .",413.27219,452.05644,1.094
+"grep -rl define .",67.79832,68.01224,1.003
+"grep -rc separately .",206.65192,38.22039,0.185
+"grep -rin MISPREDICTED .",247.41900,22.61037,0.091
+"grep -ri separately .",265.44109,29.41172,0.111
+"grep -rn separately Documentation",5.79181,2.34591,0.405
+"grep -rl conditions Documentation",5.24045,3.51348,0.670
+"grep -rF 'separately' .",199.71612,23.07127,0.116
+"grep -rE 'atomic_[a-z]+\(' .",223.34035,82.53776,0.370
+"grep -rE 'mispredicted|ausgabenspezifisches' .",273.47076,30.00799,0.110
+"grep -rE 'conditions|separately' .",302.43093,189.51118,0.627
+"grep -rE '[0-9]{4,}' .",1702.37972,1647.52549,0.968
+"grep -rn '^#include' .",232.84910,229.80473,0.987
+"grep -rE '^(import|from) ' .",316.50671,330.93427,1.046
+"grep -rin 'return [a-z_]*;$' Documentation",8.62563,8.66392,1.004
+"grep -rv e drivers/usb",18.08801,18.11071,1.001
+"grep -r '\(separately\).*\1' .",210.33351,27.44343,0.130
+"grep -rl conditions . | wc -l",150.39712,59.76235,0.397
+"grep -rc define . | grep -v ':0$' | wc -l",353.62778,347.00318,0.981
+"find . -name '*.h' | wc -l",21.31397,21.35873,1.002
+"find . -type f | grep -c h",18.76140,18.37179,0.979
+"grep -rn define . | head -n 5",0.01525,0.01530,1.004
+"grep -rn conditions . | head -n 1",0.02345,0.02357,1.005
+"find . -type f | head -n 3",0.04414,0.04434,1.004
+"cat include/linux/*.h | head -n 2",0.28001,0.28535,1.019

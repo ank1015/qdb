@@ -13,6 +13,7 @@
 //! * a backtracking matcher that explores every path, used for
 //!   back-references and to recover the text of `\(...\)` groups.
 
+use crate::bytes::{fold, other_case, same_folded};
 use crate::glob::class_by_name;
 use std::cell::RefCell;
 
@@ -229,7 +230,7 @@ impl<'a> Parser<'a> {
 
     fn lit(&self, c: u8) -> Node {
         if self.syn.icase && c.is_ascii_alphabetic() {
-            Node::Set(set_of(|b| b.eq_ignore_ascii_case(&c)))
+            Node::Set(set_of(|b| same_folded(b, c)))
         } else {
             Node::Set(set_of(|b| b == c))
         }
@@ -642,11 +643,12 @@ impl<'a> Parser<'a> {
             return Err("character class syntax is [[:space:]], not [:space:]".into());
         }
         if self.syn.icase {
-            for b in b'a'..=b'z' {
-                let u = b.to_ascii_uppercase();
-                let either = set[b as usize] || set[u as usize];
-                set[b as usize] = either;
-                set[u as usize] = either;
+            for b in 0..=255u8 {
+                if let Some(u) = other_case(b) {
+                    let either = set[b as usize] || set[u as usize];
+                    set[b as usize] = either;
+                    set[u as usize] = either;
+                }
             }
         }
         if negate {
@@ -786,7 +788,7 @@ impl Regex {
     pub fn from_strings(strings: &[Vec<u8>], icase: bool) -> Option<Regex> {
         let lit = |c: u8| {
             if icase && c.is_ascii_alphabetic() {
-                Node::Set(set_of(|b| b.eq_ignore_ascii_case(&c)))
+                Node::Set(set_of(|b| same_folded(b, c)))
             } else {
                 Node::Set(set_of(|b| b == c))
             }
@@ -823,8 +825,8 @@ impl Regex {
         let mut members = set.iter().enumerate().filter(|(_, m)| **m).map(|(b, _)| b as u8);
         let first = members.next()?;
         match (members.next(), members.next()) {
-            (None, _) if !(self.icase && first.is_ascii_alphabetic()) => Some(first),
-            (Some(second), None) if self.icase && first.is_ascii_uppercase() && second == first.to_ascii_lowercase() => Some(second),
+            (None, _) if !(self.icase && other_case(first).is_some()) => Some(first),
+            (Some(second), None) if self.icase && first != second && fold(first) == second => Some(second),
             _ => None,
         }
     }
@@ -1150,7 +1152,7 @@ impl<'a> Backtracker<'a> {
                         return false;
                     }
                     let (x, y) = (&self.hay[a..b], &self.hay[pos..pos + len]);
-                    let same = if self.icase { x.eq_ignore_ascii_case(y) } else { x == y };
+                    let same = if self.icase { x.iter().zip(y).all(|(p, q)| same_folded(*p, *q)) } else { x == y };
                     same && k(self, pos + len)
                 }
             },

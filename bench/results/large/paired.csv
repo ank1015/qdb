@@ -1,0 +1,60 @@
+command,ignored_ms,used_ms,ratio
+"ls",0.00063,0.00064,1.011
+"ls -a",0.00104,0.00106,1.022
+"ls -R",2.14834,2.15602,1.004
+"ls -aR tests",0.26519,0.27798,1.048
+"ls -p tests",0.00580,0.00580,0.999
+"find .",3.11554,3.06834,0.985
+"find . -name '*.c'",3.58588,3.43880,0.959
+"find . -name '*.h'",3.56977,3.53015,0.989
+"find . -type d",3.09102,3.08970,1.000
+"find . -type f",2.57361,2.53401,0.985
+"find . -maxdepth 2 -type f",0.13243,0.13280,1.003
+"find tests -name '*.c' -type f",0.27072,0.26155,0.966
+"find . -name 'Makefile'",2.63370,2.64009,1.002
+"cat src/main.c",0.00077,0.00078,1.009
+"cat -n src/main.c",0.05123,0.05090,0.993
+"head -n 20 src/main.c",0.00186,0.00185,0.995
+"tail -n 20 src/main.c",0.00193,0.00194,1.003
+"tail -n +100 src/main.c",0.00406,0.00406,0.999
+"wc src/main.c",0.03426,0.03498,1.021
+"wc -l src/*.c",12.75922,12.42918,0.974
+"cat src/*.c | wc -l",14.15282,13.62017,0.962
+"cat src/main.c | head -n 50 | tail -n 10",0.01131,0.01143,1.011
+"grep -c werefo src/main.c",0.00908,0.00909,1.001
+"grep -n werefo src/main.c",0.00955,0.00959,1.004
+"sed 's/werefo/XX/g' src/main.c",0.26711,0.26176,0.980
+"sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' src/main.c",0.72216,0.72100,0.998
+"cat src/main.c | sed 's/^/> /' | wc -c",0.12214,0.12499,1.023
+"grep -rn qdbzzabsentterm .",10.64759,0.01688,0.002
+"grep -rl qdbzzabsentterm .",7.01669,0.01833,0.003
+"grep -rn enpaze .",9.41739,1.27359,0.135
+"grep -rl enpaze .",7.70570,1.07776,0.140
+"grep -rn enpaze .",11.71551,1.28661,0.110
+"grep -rl enpaze .",12.23246,1.23549,0.101
+"grep -rn lefijo .",11.96791,4.19575,0.351
+"grep -rl lefijo .",10.82682,3.45381,0.319
+"grep -rn werefo .",14.31595,14.25390,0.996
+"grep -rl werefo .",5.23008,5.45902,1.044
+"grep -rc enpaze .",12.19802,2.72496,0.223
+"grep -rin ENPAZE .",15.10609,1.55024,0.103
+"grep -ri enpaze .",16.39495,1.69309,0.103
+"grep -rn enpaze tests",0.91510,0.41698,0.456
+"grep -rl lefijo tests",0.90465,0.59521,0.658
+"grep -rF 'enpaze' .",12.29942,1.22454,0.100
+"grep -rE 'neze_[a-z]+\(' .",11.78427,4.10949,0.349
+"grep -rE 'lefijo|enpaze' .",17.18672,17.04478,0.992
+"grep -rE '[0-9]{4,}' .",92.76068,93.43749,1.007
+"grep -rn '^#include' .",14.41006,14.44151,1.002
+"grep -rE '^(import|from) ' .",17.15535,4.31717,0.252
+"grep -rin 'return [a-z_]*;$' tests",7.89149,8.10552,1.027
+"grep -rv e tests/mod_05",0.54798,0.53996,0.985
+"grep -r '\(enpaze\).*\1' .",15.46368,2.72905,0.176
+"grep -rl lefijo . | wc -l",11.78135,3.82607,0.325
+"grep -rc werefo . | grep -v ':0$' | wc -l",16.53989,16.19013,0.979
+"find . -name '*.c' | wc -l",3.00951,3.06156,1.017
+"find . -type f | grep -c c",2.54689,2.54632,1.000
+"grep -rn werefo . | head -n 5",0.00772,0.00783,1.015
+"grep -rn lefijo . | head -n 1",0.00968,0.00971,1.003
+"find . -type f | head -n 3",0.05981,0.05959,0.996
+"cat src/*.c | head -n 2",0.16755,0.16980,1.013

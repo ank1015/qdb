@@ -1,0 +1,63 @@
+command,ignored_ms,used_ms,ratio
+"ls",0.00117,0.00111,0.951
+"ls -a",0.00181,0.00180,0.996
+"ls -R",0.04485,0.04550,1.014
+"ls -aR tests",0.01394,0.01387,0.995
+"ls -p tests",0.00142,0.00143,1.004
+"find .",0.13467,0.13458,0.999
+"find . -name '*.json'",0.17263,0.17055,0.988
+"find . -name '*.c'",0.17175,0.17096,0.995
+"find . -type d",0.12760,0.12727,0.997
+"find . -type f",0.13358,0.13486,1.010
+"find . -maxdepth 2 -type f",0.01735,0.01726,0.995
+"find tests -name '*.json' -type f",0.02672,0.02672,1.000
+"find . -name 'Makefile'",0.13088,0.13262,1.013
+"cat src/commands/xinfo-stream.json",0.00103,0.00103,0.999
+"cat -n src/commands/xinfo-stream.json",0.04777,0.04551,0.953
+"head -n 20 src/commands/xinfo-stream.json",0.00178,0.00179,1.007
+"tail -n 20 src/commands/xinfo-stream.json",0.00249,0.00252,1.013
+"tail -n +100 src/commands/xinfo-stream.json",0.00537,0.00531,0.990
+"wc src/commands/xinfo-stream.json",0.01867,0.01883,1.009
+"wc -l src/commands/*.json",1.17820,1.16549,0.989
+"cat src/commands/*.json | wc -l",1.12645,1.10943,0.985
+"cat src/commands/xinfo-stream.json | head -n 50 | tail -n 10",0.00616,0.00606,0.984
+"grep -c for src/commands/xinfo-stream.json",0.00395,0.00393,0.994
+"grep -n for src/commands/xinfo-stream.json",0.00453,0.00462,1.019
+"sed 's/for/XX/g' src/commands/xinfo-stream.json",0.19452,0.19447,1.000
+"sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' src/commands/xinfo-stream.json",0.25151,0.24482,0.973
+"cat src/commands/xinfo-stream.json | sed 's/^/> /' | wc -c",0.06793,0.06903,1.016
+"grep -rn qdbzzabsentterm .",1.14690,0.02099,0.018
+"grep -rl qdbzzabsentterm .",1.27287,0.02862,0.022
+"grep -rn nestedcallreplyarray .",1.49854,0.16239,0.108
+"grep -rl nestedcallreplyarray .",1.97682,0.21055,0.107
+"grep -rn xmallctlmibnametomib .",1.77609,0.06790,0.038
+"grep -rl xmallctlmibnametomib .",1.07372,0.04431,0.041
+"grep -rn implementing .",1.32661,0.84900,0.640
+"grep -rl implementing .",1.23187,0.73373,0.596
+"grep -rn between .",1.51616,0.90280,0.595
+"grep -rl between .",0.91827,0.22110,0.241
+"grep -rn for .",3.63319,3.63352,1.000
+"grep -rl for .",0.33580,0.31994,0.953
+"grep -rc implementing .",1.29960,0.89184,0.686
+"grep -rin XMALLCTLMIBNAMETOMIB .",1.72879,0.06595,0.038
+"grep -ri implementing .",1.77316,0.98339,0.555
+"grep -rn implementing tests",0.19113,0.09436,0.494
+"grep -rl between tests",0.15430,0.04262,0.276
+"grep -rF 'implementing' .",1.30931,0.79740,0.609
+"grep -rE 'arena_[a-z]+\(' .",1.81647,0.56032,0.308
+"grep -rE 'xmallctlmibnametomib|nestedcallreplyarray' .",2.10642,0.29111,0.138
+"grep -rE 'between|implementing' .",1.82000,1.29737,0.713
+"grep -rE '[0-9]{4,}' .",16.08150,16.09805,1.001
+"grep -rn '^#include' .",1.50158,1.20292,0.801
+"grep -rE '^(import|from) ' .",2.23241,2.26784,1.016
+"grep -rin 'return [a-z_]*;$' tests",0.96202,0.91587,0.952
+"grep -rv e .github",0.05257,0.05364,1.020
+"grep -r '\(implementing\).*\1' .",1.44427,0.92636,0.641
+"grep -rl between . | wc -l",0.86096,0.23006,0.267
+"grep -rc for . | grep -v ':0$' | wc -l",1.99481,1.97731,0.991
+"find . -name '*.json' | wc -l",0.14543,0.14769,1.016
+"find . -type f | grep -c json",0.16659,0.16256,0.976
+"grep -rn for . | head -n 5",0.00416,0.00415,0.998
+"grep -rn between . | head -n 1",0.00555,0.00559,1.008
+"find . -type f | head -n 3",0.02767,0.02770,1.001
+"cat src/commands/*.json | head -n 2",0.07786,0.07916,1.017

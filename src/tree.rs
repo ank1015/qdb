@@ -124,6 +124,9 @@ pub struct Db {
     /// Derived from file content and kept current by every change to it.
     /// None when indexing is switched off.
     index: Option<Index>,
+    /// False while searches are told to read every file although the
+    /// index is there and kept current. See `set_index_consulted`.
+    consult: bool,
 }
 
 impl Default for Db {
@@ -150,7 +153,7 @@ impl Db {
             0,
             Node { id: 0, name: Vec::new(), parent: None, kind: NodeKind::Folder(BTreeMap::new()), aux: 0 },
         );
-        Db { nodes, root: 0, next_id: 1, index: Some(Index::new()) }
+        Db { nodes, root: 0, next_id: 1, index: Some(Index::new()), consult: true }
     }
 
     /// An empty database that answers every search by scanning.
@@ -179,6 +182,14 @@ impl Db {
                 }
             }
         }
+    }
+
+    /// Have searches ignore the index (false) or use it again (true),
+    /// without throwing it away: it is still kept current by writes. This
+    /// is for measuring what the index does for a search, both ways in
+    /// one process.
+    pub fn set_index_consulted(&mut self, consulted: bool) {
+        self.consult = consulted;
     }
 
     /// Build the index again from the files, in the order a walk visits
@@ -228,7 +239,7 @@ impl Db {
     pub fn candidates_cost(&self, query: &Query) -> Option<usize> {
         // Reading a byte of a list takes about as long as searching
         // sixteen bytes of text.
-        Some(self.index.as_ref()?.cost(query)?.saturating_mul(16))
+        Some(self.index.as_ref().filter(|_| self.consult)?.cost(query)?.saturating_mul(16))
     }
 
     /// Which files under `folder` can match `query`? This is the one
@@ -236,8 +247,8 @@ impl Db {
     /// here.
     pub fn candidates(&self, folder: NodeId, query: &Query) -> Candidates {
         let index = match &self.index {
-            Some(i) => i,
-            None => return Candidates::All,
+            Some(i) if self.consult => i,
+            _ => return Candidates::All,
         };
         let docs = match index.docs(query) {
             Some(d) => d,

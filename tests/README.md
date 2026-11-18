@@ -11,6 +11,8 @@ cargo build --release
 ./target/release/qdb-harness tests/cases/grep.case # one file
 ./target/release/qdb-harness --filter 'sed -E'     # cases containing text
 ./target/release/qdb-harness --fuzz 5000 --seed 7  # plus generated regex cases
+./target/release/qdb-harness --no-index            # the same cases with the search index off
+./target/release/qdb-harness --diff 10000 --seed 1 # index on against index off
 ```
 
 The real side runs under `bash --noprofile --norc -c` with an empty
@@ -20,6 +22,33 @@ command whose paths could leave the scratch directory.
 The expected results were produced with bash 5.2.21, grep 3.11, sed 4.9,
 coreutils 9.4 and findutils 4.9.0. Other versions word some messages
 differently, so a handful of error cases can fail on them.
+
+## Index on against index off (`--diff`)
+
+The search index must never change a result. `--diff N` runs N generated
+steps on two engines that start empty, one with the index and one without.
+About half the steps are searches: `grep -r` with a random pattern (words,
+pieces of words, alternations, classes, repeats, anchors, back-references,
+fixed strings, terms that are in no file), random flags out of
+`-n -l -c -i -v -E -F`, on the whole tree or on a folder, sometimes piped
+into `head` or `wc`, sometimes redirected into a file that is itself
+searched. The other half are writes: create, overwrite, append, `sed -i`,
+`cp -r`, `rm -r`, `mv`, and files copied onto themselves until they are
+large. Every write is followed by a search over everything.
+
+After every command the two engines must have produced the same standard
+output, standard error and exit status, and the trees are compared every
+50 steps. Every 1,000 steps and at the end, the maintained index is
+compared with one built from scratch over the same files: both must give
+the same files for a few hundred queries. The run prints how many
+searches selected something and how much work the index did, so that an
+empty test cannot pass for a good one. `--seed` picks the sequence.
+
+`cargo test` also runs `tests/index.rs` (each kind of answer storage can
+give, and a fixed list of commands with the index on and off),
+`tests/stream.rs` (bounded memory and stopping early) and
+`tests/scan_fuzz.rs` (the fast search paths against the reference
+matcher).
 
 ## Case files (`tests/cases/*.case`)
 
@@ -63,4 +92,5 @@ F path/to/file          a file; its lines follow
 | `copy_move.case` | `cp`, `mv` |
 | `remove.case` | `rm`, `rmdir` |
 | `shell.case` | quoting, globs, pipes, and everything that must be refused |
+| `pipes.case` | pipelines that stop early: what is printed, what is written, and which errors are reported |
 | `text.case` | the text-only rule and awkward content |
