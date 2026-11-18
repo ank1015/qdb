@@ -85,8 +85,13 @@ impl Spool {
         self.mem.clear();
     }
 
+    /// How many bytes were written.
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
     /// The output has ended. True if it is valid text.
-    fn end(&mut self) -> bool {
+    pub fn end(&mut self) -> bool {
         if self.file.is_some() && !self.mem.is_empty() && self.error.is_none() {
             self.to_file();
         }
@@ -94,7 +99,7 @@ impl Spool {
     }
 
     /// Up to `max` bytes of the output from offset `at`. After `end`.
-    fn read(&self, at: u64, max: usize) -> &[u8] {
+    pub fn read(&self, at: u64, max: usize) -> &[u8] {
         let n = ((self.len - at) as usize).min(max);
         match &self.file {
             None => &self.mem[at as usize..at as usize + n],
@@ -152,9 +157,15 @@ pub struct Io<'a> {
     exact: bool,
     stdin_size: Option<u64>,
     piped: bool,
+    scratch: Scratch,
 }
 
 impl<'a> Io<'a> {
+    /// Where a command may keep what does not fit in memory.
+    pub fn scratch(&self) -> Scratch {
+        self.scratch.clone()
+    }
+
     /// Say that the command's errors overtake its output. The GNU tools
     /// write out what they have buffered before they report an error, so
     /// with `2>&1` output and errors appear in the order they were
@@ -706,6 +717,7 @@ struct Stage {
     stdin_size: Option<u64>,
     /// Standard input is a pipe or a file.
     piped: bool,
+    scratch: Scratch,
 }
 
 enum State {
@@ -739,13 +751,13 @@ impl Stage {
             Input::Unused => State::Closed(None),
         };
         let spools = redirs.iter().map(|_| Spool::new(scratch.clone())).collect();
-        Stage { run: Some(prepared.run), state, stream, redirs, plan, spools, buf: Vec::new(), err: Vec::new(), to_err: Vec::new(), stdin_size: None, piped: false }
+        Stage { run: Some(prepared.run), state, stream, redirs, plan, spools, buf: Vec::new(), err: Vec::new(), to_err: Vec::new(), stdin_size: None, piped: false, scratch }
     }
 
     /// Give `f` the streams of this command. Returns what `f` returned and
     /// whether the reader of the output wants no more.
     fn with_io<R>(&mut self, stdin: &[u8], down: &mut dyn Sink, out_file: Option<NodeId>, f: impl FnOnce(&mut Io) -> R) -> (R, bool) {
-        let Stage { plan, spools, buf, err, to_err, stdin_size, piped, .. } = self;
+        let Stage { plan, spools, buf, err, to_err, stdin_size, piped, scratch, .. } = self;
         let mut nowhere = Nowhere;
         let out: &mut dyn Sink = match plan.d1 {
             Dest::Down => down,
@@ -753,7 +765,7 @@ impl Stage {
             Dest::File(i) => &mut spools[i],
             Dest::Null => &mut nowhere,
         };
-        let mut io = Io { stdin, out, buf, stopped: false, err, out_file, merged: plan.d1 == plan.d2, exact: true, stdin_size: *stdin_size, piped: *piped };
+        let mut io = Io { stdin, out, buf, stopped: false, err, out_file, merged: plan.d1 == plan.d2, exact: true, stdin_size: *stdin_size, piped: *piped, scratch: scratch.clone() };
         let r = f(&mut io);
         io.flush();
         (r, io.stopped)
@@ -878,8 +890,8 @@ impl Stage {
         let mut late = Vec::new();
         for (i, t) in opened.into_iter().enumerate() {
             if let Some(t) = t {
-                let spool = std::mem::replace(&mut self.spools[i], Spool::nowhere());
-                code = store_redirect(db, t, spool, code, &mut late);
+                let mut spool = std::mem::replace(&mut self.spools[i], Spool::nowhere());
+                code = store_redirect(db, t, &mut spool, code, &mut late);
             }
         }
         uerr.write(&late);
@@ -986,7 +998,13 @@ fn open_redirects(db: &mut Db, redirs: &[Redir], undo: &mut Vec<Undo>) -> (Vec<O
 }
 
 /// Store redirected output, already found to be valid text, in its file.
-fn store_redirect(db: &mut Db, target: Target, mut out: Spool, mut code: i32, stderr: &mut Vec<u8>) -> i32 {
+/// Store what a command gathered for a file of its own, as tee does.
+/// The output must have ended and been found to be valid text.
+pub fn store_output(db: &mut Db, id: NodeId, append: bool, path: &[u8], out: &mut Spool, stderr: &mut Vec<u8>) -> i32 {
+    store_redirect(db, (append, id, path.to_vec()), out, 0, stderr)
+}
+
+fn store_redirect(db: &mut Db, target: Target, out: &mut Spool, mut code: i32, stderr: &mut Vec<u8>) -> i32 {
     let (append, id, path) = target;
     if let Some(e) = out.error.take() {
         // Reported when the command line ends, like any failure to store.

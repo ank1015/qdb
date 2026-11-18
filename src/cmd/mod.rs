@@ -15,6 +15,8 @@ mod read;
 mod rg;
 mod sed;
 mod small;
+mod sort;
+mod text;
 
 /// Look a command up by name and check its arguments. The error names what
 /// is unsupported, for example `command: awk` or `flag: grep -w`.
@@ -47,6 +49,12 @@ pub fn prepare(name: &[u8], args: &[Vec<u8>]) -> Result<Prepared, String> {
         b"basename" => small::basename(args),
         b"dirname" => small::dirname(args),
         b"seq" => small::seq(args),
+        b"sort" => return sort::sort(args),
+        b"cut" => return text::cut(args),
+        b"tr" => return text::tr(args),
+        b"uniq" => return text::uniq(args),
+        b"nl" => return text::nl(args),
+        b"tee" => return text::tee(args),
         _ => Err(format!("command: {}", lossy(name))),
     };
     plain.map(Prepared::from)
@@ -61,7 +69,7 @@ pub fn known(name: &[u8]) -> bool {
 /// command before it runs.
 pub const NAMES: &[&str] = &[
     "echo", "cat", "head", "tail", "wc", "ls", "find", "grep", "sed", "mkdir", "touch", "cp", "mv", "rm", "rmdir", "printf", "test", "[", "true", ":", "false",
-    "sleep", "ln", "basename", "dirname", "seq", "rg",
+    "sleep", "ln", "basename", "dirname", "seq", "rg", "sort", "cut", "tr", "uniq", "nl", "tee",
 ];
 
 /// Gathers input into whole lines for a command that reads its standard
