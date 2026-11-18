@@ -570,7 +570,11 @@ fn shell_quote(arg: &[u8]) -> String {
 /// one thread and without its ignore rules, or None if there is no direct
 /// equivalent. Used for timing only: its output is never compared.
 fn rg_equivalent(command: &str) -> Option<String> {
-    let pipeline = shell::parse(command.as_bytes()).ok()??;
+    let script = shell::parse(command.as_bytes()).ok()?;
+    if script.items.len() != 1 || !script.items[0].rest.is_empty() {
+        return None;
+    }
+    let pipeline = &script.items[0].first;
     if pipeline.commands.len() != 1 || !pipeline.commands[0].redirects.is_empty() {
         return None;
     }
@@ -942,12 +946,12 @@ fn more_engine_reps(first: Duration, reps: usize) -> usize {
 /// Whether a later stage keeps only part of what an unordered stage
 /// printed, so that the real result depends on directory order.
 fn order_dependent(command: &str) -> bool {
-    let pipeline = match shell::parse(command.as_bytes()) {
-        Ok(Some(p)) => p,
+    let script = match shell::parse(command.as_bytes()) {
+        Ok(s) => s,
         _ => return false,
     };
     order_is_unspecified(command)
-        && pipeline.commands.iter().skip(1).any(|c| matches!(c.words.first().map(|w| w.text()).as_deref(), Some(b"head") | Some(b"tail")))
+        && script.all_commands().iter().skip(1).any(|c| matches!(c.words.first().map(|w| w.text()).as_deref(), Some(b"head") | Some(b"tail")))
 }
 
 struct Row {

@@ -39,6 +39,17 @@ pub fn prepare(name: &[u8], args: &[Vec<u8>]) -> Result<Prepared, String> {
     plain.map(Prepared::from)
 }
 
+/// True if there is a command of this name.
+pub fn known(name: &[u8]) -> bool {
+    NAMES.iter().any(|n| n.as_bytes() == name)
+}
+
+/// Every command, for the check of a name that is all that is known of a
+/// command before it runs.
+pub const NAMES: &[&str] = &[
+    "echo", "cat", "head", "tail", "wc", "ls", "find", "grep", "sed", "mkdir", "touch", "cp", "mv", "rm", "rmdir",
+];
+
 /// Gathers input into whole lines for a command that reads its standard
 /// input in pieces.
 #[derive(Default)]

@@ -1,0 +1,459 @@
+# Stage 4, part 2: command lists, redirections of all three streams, the
+# null device, here-documents, command substitution, brace expansion and
+# line continuation.
+@fixture basic
+
+# Lists: ; and newline.
+$ echo a; echo b
+$ echo a;echo b;
+$ echo a ; echo b ; echo c
+$ echo a⏎echo b
+$ echo a⏎⏎⏎echo b⏎
+$ echo a # comment⏎echo b
+$ ls nope; echo after
+$ echo x > new.txt; cat new.txt
+$ rm README.md; ls
+$ mkdir d; touch d/x; ls d
+$ touch a.c; ls *.c
+$ echo one > f; echo two >> f; cat f; wc -l f
+$ cat nope; cat README.md | head -n 1
+! ls ;; ls ## syntax error
+! ; ls ## syntax error
+! ls ; ; ls ## syntax error
+! ls ;| ls ## syntax error
+
+# Lists: && and ||, with the exit status of the last command run.
+$ ls nope && echo yes
+$ ls nope || echo no
+$ ls src && echo yes
+$ ls src || echo no
+$ ls nope && echo yes || echo no
+$ ls src && echo yes || echo no
+$ ls src || echo no && echo both
+$ ls nope || ls nope2 || echo third
+$ ls nope && ls nope2 && echo third
+$ grep -q zzz README.md && echo found
+$ grep -q zzz README.md || echo missing
+$ ls nope &&⏎echo yes
+$ ls src ||⏎echo no
+$ ls src &&⏎⏎echo yes
+$ echo a && echo b; echo c || echo d
+$ ls nope; ls src && echo ok
+$ rm README.md && ls
+$ rm nope && ls
+$ echo a | grep b && echo matched
+$ echo a | grep a && echo matched
+$ echo a | grep b || echo none | cat
+# No rollback: the first write stays when the second command fails.
+$ echo kept > k.txt && cat nope
++ cat k.txt
+$ mkdir m && rmdir nope || ls
+! ls && ## syntax error
+! && ls ## syntax error
+! ls || || ls ## syntax error
+! ls & ls ## background jobs
+
+# Standard input from a file.
+$ cat < README.md
+$ wc -l < README.md
+$ wc < README.md
+$ head -n 2 < README.md
+$ tail -n 2 < README.md
+$ grep -n the < README.md
+$ grep -c e < README.md
+$ sed s/e/E/ < README.md
+$ cat < README.md | wc -l
+$ cat <README.md
+$ cat 0< README.md
+$ < README.md cat
+$ cat < README.md < notes.txt
+$ cat - < README.md
+$ cat notes.txt - < README.md
+$ cat notes.txt < README.md
+$ echo hi < README.md
+$ cat < nope
+$ cat < nope; echo after
+$ cat < src/*.c
+$ cat < 'README.md'
+$ echo piped | cat < README.md
+$ echo piped | wc -l < README.md
+$ cat < README.md > copy.txt; cat copy.txt
+$ sed s/a/b/ < notes.txt > notes.txt; cat notes.txt
+$ wc -c < empty/nothing
+! cat <> README.md ## read-write redirection
+! cat <& 3 ## duplication
+! cat 3< README.md ## file descriptor redirection
+
+# Standard error to a file.
+$ ls nope 2> err.txt; cat err.txt
+$ ls nope 2>err.txt; cat err.txt
+$ ls src 2> err.txt; cat err.txt
+$ ls nope src 2> err.txt; cat err.txt
+$ ls nope 2> err.txt; ls nope2 2>> err.txt; cat err.txt
+$ ls nope 2>> err.txt; ls nope2 2>> err.txt; cat err.txt
+$ cat nope README.md 2> err.txt > out.txt; cat err.txt out.txt
+$ cat nope README.md > out.txt 2> err.txt; cat err.txt out.txt
+$ ls nope 2> src
+$ ls nope 2> nodir/err.txt
+$ ls nope 2> a.txt 2> b.txt; cat a.txt; cat b.txt
+$ grep x nope 2> e | wc -l; cat e
+$ echo hi | cat nope - 2> e; cat e
+$ echo hi | grep h nope - 2> e; cat e
+
+# Merged streams.
+$ ls nope 2>&1
+$ ls nope src 2>&1
+$ ls nope src 2>&1 | cat
+$ ls nope src 2>&1 | wc -l
+$ ls nope 2>&1 | grep -c such
+$ ls nope > out.txt 2>&1; cat out.txt
+$ ls nope src > out.txt 2>&1; cat out.txt
+$ ls nope src 2>&1 > out.txt; cat out.txt
+$ ls nope src >> out.txt 2>&1; ls nope2 >> out.txt 2>&1; cat out.txt
+$ cat README.md nope notes.txt 2>&1
+$ cat README.md nope notes.txt 2>&1 | cat
+$ cat README.md nope notes.txt > out.txt 2>&1; cat out.txt
+$ cat nope README.md nope2 2>&1 | wc -l
+$ grep the nope README.md 2>&1
+$ grep the README.md nope 2>&1 | cat
+$ head -n 1 README.md nope notes.txt 2>&1 | cat
+$ wc -l README.md nope notes.txt 2>&1 | cat
+$ find nope src -name '*.h' 2>&1 | cat
+$ sed -n 1p README.md nope 2>&1 | cat
+$ ls nope 2>&1 2> e; cat e
+$ ls nope 2>&2
+$ ls src 1>&1
+$ echo hi 2>&1
+
+# Standard output to standard error.
+$ echo oops >&2
+$ echo oops 1>&2
+$ echo oops >&2 | cat
+$ echo oops >&2 2> e; cat e
+$ echo oops 2> e >&2; cat e
+$ ls src nope >&2
+$ ls src nope >&2 2>&1
+$ ls src nope 2>&1 >&2
+$ echo to-err >&2; echo to-out
+$ ls nope 2>&1 >&2 | wc -l
+
+# Both streams to a file.
+$ ls nope src &> out.txt; cat out.txt
+$ ls nope src &>out.txt; cat out.txt
+$ ls nope src >& out.txt; cat out.txt
+$ ls nope &> out.txt; ls nope2 &>> out.txt; cat out.txt
+$ ls src &>> out.txt; ls nope &>> out.txt; cat out.txt
+$ cat README.md nope &> out.txt; cat out.txt
+$ ls nope &> src
+$ ls &> a.txt > b.txt nope src; cat a.txt; cat b.txt
+$ ls > a.txt &> b.txt nope src; cat a.txt; cat b.txt
+! ls 2>&3 ## duplication
+! ls >&- ## closing
+! ls 2>&- ## file descriptor
+! ls 4>&1 ## file descriptor redirection
+! ls |& cat ## |&
+
+# The null device.
+$ ls nope 2> /dev/null
+$ ls nope src 2>/dev/null
+$ ls nope src > /dev/null
+$ ls nope src > /dev/null 2>&1
+$ ls nope src &> /dev/null
+$ ls nope src &>> /dev/null
+$ ls src >> /dev/null
+$ cat < /dev/null
+$ wc -l < /dev/null
+$ wc -c /dev/null
+$ cat /dev/null
+$ cat /dev/null README.md | wc -l
+$ grep x /dev/null
+$ grep -c x /dev/null
+$ grep -c x /dev/null README.md
+$ head /dev/null
+$ cp /dev/null blank.txt; wc -c blank.txt
+$ cat /dev/null > README.md; wc -c README.md
+$ ls nope 2> /dev/null || echo failed
+$ grep -r the . > /dev/null && echo found
+$ echo x > /dev/null; ls
+$ cat README.md > /dev/null; ls | wc -l
+
+# Here-documents.
+$ cat <<EOF⏎one⏎two⏎EOF
+$ cat << EOF⏎one⏎two⏎EOF
+$ cat <<EOF⏎EOF
+$ cat <<EOF⏎⏎EOF
+$ cat <<EOF | wc -l⏎one⏎two⏎three⏎EOF
+$ cat <<EOF > here.txt⏎stored⏎text⏎EOF⏎cat here.txt
+$ cat > here.txt <<EOF⏎stored⏎EOF⏎cat here.txt
+$ cat <<EOF >> README.md⏎appended⏎EOF⏎tail -n 2 README.md
+$ wc -l <<EOF⏎a⏎b⏎EOF
+$ grep -n b <<EOF⏎abc⏎xyz⏎cba⏎EOF
+$ sed s/a/A/ <<EOF⏎banana⏎EOF
+$ cat <<EOF; echo after⏎body⏎EOF
+$ cat <<EOF && echo after⏎body⏎EOF
+$ cat <<EOF⏎one⏎EOF⏎echo next
+$ cat <<'EOF'⏎no $(echo expansion) `here` \$ \\ "q"⏎EOF
+$ cat <<"EOF"⏎no $(echo expansion) `here`⏎EOF
+$ cat <<\EOF⏎no $(echo expansion)⏎EOF
+$ cat <<E'O'F⏎no $(echo expansion)⏎EOF
+$ cat <<EOF⏎with $(echo expansion) and `echo ticks`⏎EOF
+$ cat <<EOF⏎escaped \$(echo no) \`no\` \\ back \" 'single' "double"⏎EOF
+$ cat <<EOF⏎a \⏎joined⏎EOF
+$ cat <<EOF⏎$(cat notes.txt)⏎EOF
+$ cat <<EOF⏎glob * and {a,b} stay⏎EOF
+$ cat <<-EOF⏎	tabbed⏎		twice⏎	EOF
+$ cat <<-EOF⏎	tabbed⏎  spaces stay⏎EOF
+$ cat <<- 'EOF'⏎	$(no)⏎	EOF
+$ cat <<EOF⏎	tab kept⏎EOF
+$ cat <<A <<B⏎first⏎A⏎second⏎B
+$ cat <<A; cat <<B⏎first⏎A⏎second⏎B
+$ cat <<A | cat - <<B⏎first⏎A⏎second⏎B
+$ cat <<EOF⏎EOF not alone ⏎ EOF⏎EOF
+$ cat <<EOF⏎line⏎EOFX⏎EOF
+$ cat <<END-OF⏎x⏎END-OF
+$ cat <<1⏎x⏎1
+$ cat < README.md <<EOF⏎wins⏎EOF
+$ cat <<EOF < notes.txt⏎loses⏎EOF
+$ echo $(cat <<EOF⏎inner here⏎EOF⏎)
+$~ cat <<EOF⏎never closed
+$ cat <<EOF⏎
+$ cat <<EOF
+! cat <<< word ## here-strings
+! cat <<EOF⏎$HOME⏎EOF ## variable expansion
+! cat <<EOF⏎${x}⏎EOF ## parameter expansion
+! cat <<EOF⏎$((1+1))⏎EOF ## arithmetic expansion
+! cat <<$(echo EOF)⏎x⏎EOF ## here-document delimiter
+! cat <<EOF⏎$(cd x)⏎EOF ## command: cd
+
+# Command substitution.
+$ echo $(echo hi)
+$ echo `echo hi`
+$ echo "$(echo hi)"
+$ echo "`echo hi`"
+$ echo a$(echo b)c
+$ echo "a$(echo b)c"
+$ echo $(ls)
+$ echo "$(ls)"
+$ echo $(ls src)
+$ echo "$(ls src)"
+$ echo $(cat README.md)
+$ echo "$(cat README.md)"
+$ echo $(echo "a   b")
+$ echo "$(echo "a   b")"
+$ echo $(echo 'a	b')
+$ echo x$(echo "  a  b  ")y
+$ echo "x$(echo "  a  b  ")y"
+$ echo $(echo)
+$ echo "$(echo)"
+$ echo [$(echo)]
+$ echo $(echo a; echo; echo; echo)
+$ echo "$(echo a; echo; echo)"x
+$ echo $(echo a; echo b)
+$ echo "$(echo a; echo b)"
+$ echo $(echo $(echo deep))
+$ echo "$(echo "$(echo "deep quoted")")"
+$ echo `echo \`echo nested\``
+$ echo $(echo `echo mixed`)
+$ echo $(echo a | sed s/a/b/)
+$ echo $(grep -c e README.md)
+$ echo $(wc -l < README.md)
+$ cat $(echo README.md)
+$ cat $(echo README.md notes.txt) | wc -l
+$ cat "$(echo README.md notes.txt)"
+$ wc -l $(find src -name '*.c')
+$ grep -l the $(ls *.md *.txt)
+$ ls $(echo src)
+$ ls $(echo 'sr*')
+$ ls "$(echo 'sr*')"
+$ echo $(echo '*.md')
+$ echo "$(echo '*.md')"
+$ echo $(echo 'a\b')
+$ echo $(echo "a'b")
+$ echo $(echo 'a"b')
+$ echo '$(echo no)'
+! echo \$(echo no\) ## syntax error
+$ echo "\$(echo no)"
+$ echo "\`echo no\`"
+$ echo $(ls nope)
+$ echo $(ls nope) after
+$ echo $(ls nope 2>&1)
+$ echo $(ls nope 2> /dev/null)
+$ echo before $(echo mid >&2) after
+$ $(echo echo) run
+$ $(echo ls) src
+$ `echo ls`
+$ $(echo)
+$ $(echo); echo status
+$ $(ls nope); echo status
+$ echo $(echo a) $(echo b) "$(echo c)"
+$ echo $(echo a)$(echo b)
+$ echo $(echo "a b")$(echo "c d")
+$ echo "$(echo a)"$(echo " b")
+$ echo -n $(echo x); echo y
+$ echo $(echo x > made.txt); cat made.txt
+$ echo "$(touch t1 t2)"; ls
+$ echo $(ls | wc -l) files
+$ echo "$(ls | head -n 2)"
+$ echo $(   echo spaced   )
+$ echo $(⏎echo newline⏎)
+$ echo $(echo a # comment⏎)
+$ echo "pre $(echo "in $(echo "deep")") post"
+$ ls > $(echo out.txt); cat out.txt
+$ ls > "$(echo out.txt)"; cat out.txt
+$ ls > $(echo a b)
+$ cat < $(echo README.md)
+$ echo $(echo {a,b})
+$ echo {$(echo a),b}
+$ echo $(echo x)*
+$ echo *$(echo .md)
+$ mkdir $(echo n1 n2); ls -d n1 n2
+$ rm $(echo README.md notes.txt); ls
+! echo $(echo $x) ## variable expansion
+! echo $(cd src) ## command: cd
+! echo "$(awk 1)" ## command: awk
+! echo `cd x` ## command: cd
+! ls; echo $(ls --frobnicate) ## flag: ls --frobnicate
+! echo $((1+2)) ## arithmetic expansion
+! echo $(ls ## matching `)'
+! echo `ls ## matching ``'
+! echo $(ls & ls) ## background jobs
+! echo $(ls)) ## syntax error
+
+# Brace expansion.
+$ echo {a,b}
+$ echo {a,b,c}
+$ echo x{a,b}y
+$ echo {a,b}{c,d}
+$ echo {a,{b,c}}
+$ echo {a,{b,{c,d}}}e
+$ echo a{,b}
+$ echo a{b,}
+$ echo {,}
+$ echo a{,}b
+$ echo {a,b}{,}
+$ echo {1..3}
+$ echo {3..1}
+$ echo {1..10..3}
+$ echo {10..1..3}
+$ echo {1..3..2}
+$ echo {1..9..-2}
+$ echo {1..3..0}
+$ echo {-3..3}
+$ echo {3..-3..2}
+$ echo {01..10}
+$ echo {1..010}
+$ echo {001..3}
+$ echo {-05..5}
+$ echo {08..11}
+$ echo {a..e}
+$ echo {e..a}
+$ echo {a..z}
+$ echo {a..z..5}
+$ echo {A..E}
+$ echo {a..a}
+$ echo {1..1}
+$ echo x{1..3}y{a,b}
+$ echo {a,b}{1..2}
+$ echo {{a,b},{1..2}}
+$ echo {a..c}{a..c}
+$ echo {}
+$ echo {a}
+$ echo {a
+$ echo a}
+$ echo {a,b
+$ echo a,b}
+$ echo {a..}
+$ echo {..b}
+$ echo {1..a}
+$ echo {a..1}
+$ echo {1..2..}
+$ echo {1..2..x}
+$ echo {1...3}
+$ echo {1.5..3}
+$ echo {ab..cd}
+$ echo {a}{b,c}
+$ echo {a{b,c}}
+$ echo {a,b}}
+$ echo {{a,b}
+$ echo '{a,b}'
+$ echo "{a,b}"
+$ echo \{a,b}
+$ echo {a\,b}
+$ echo {a,b\}
+$ echo {'a,b',c}
+$ echo {"a b",c}
+$ echo {a,'b c'}d
+$ echo "x"{a,b}
+$ echo {a,b}"y z"
+$ echo {a,b}/README.md
+$ echo src/{main,util}.c
+$ cat src/{main,util}.c | wc -l
+$ ls src/lib/{lex,parse}.c
+$ ls {src,empty}
+$ ls {src,nope}
+$ echo {src,empty}/*
+$ echo *.{md,txt}
+$ echo *.{md,zzz}
+$ mkdir -p x/{a,b}/{c,d}; find x
+$ touch f{1..5}.txt; ls f*
+$ touch {a,b}.new; ls *.new
+$ cp README.md{,.bak}; ls
+$ mv notes.txt{,.old}; ls
+$ rm f{1..3}; ls
+$ echo {a,b} > out.txt; cat out.txt
+$ ls > {a,b}
+$ echo {a,b}$(echo c)
+$ echo $(echo x){a,b}
+$ echo {1..3} | wc -w
+$ echo a{b,c}d{e,f}g{h,i}
+$ echo {a,b},{c,d}
+$ echo {a,b}.{c,d}
+$ echo -{a,b}
+$ echo {-a,-b}
+$ echo {a,b}{
+$ echo }{a,b}
+$ echo {a,b}{}
+$ echo {1..3}{}
+$ echo ,{a,b},
+$ echo {a,,b}
+$ echo x{a,,b}y
+$ echo {0..0}
+$ echo {-1..-3}
+$ echo {+1..3}
+$ echo {1..+3}
+$ echo {9..11}
+$ echo {09..11}
+$ echo {a,b}=c
+$ echo {x..z}{1..2}
+! echo ${a,b} ## parameter expansion
+
+# Line continuation.
+$ echo one \⏎two
+$ echo one\⏎two
+$ echo "one\⏎two"
+$ echo 'one\⏎two'
+$ ls \⏎src
+$ ls | \⏎wc -l
+$ ls |⏎wc -l
+$ echo a && \⏎echo b
+$ ec\⏎ho split
+$ cat README.md \⏎  | head -n 1 \⏎  | wc -c
+$ echo a \⏎ > out.txt; cat out.txt
+
+# Still refused by name, inside a longer unit too: nothing runs.
+! echo one > made.txt; cd src ## command: cd
+! echo one > made.txt && awk 1 ## command: awk
+! echo one > made.txt; ls --frobnicate ## flag: ls --frobnicate
+! rm README.md; for f in a; do ls; done ## for loop
+! rm README.md⏎if ls; then ls; fi ## if statement
+! rm README.md; x=1 ## variable assignment
+! rm README.md; echo $x ## variable expansion
+! rm README.md; ( ls ) ## subshell
+! rm README.md; { ls; } ## group command
+! rm README.md; ! ls ## pipeline negation
+! rm README.md; ls ~ ## tilde expansion
+! rm README.md; [[ -f x ]] ## [[ conditional ]]
+! rm README.md; ls & ## background jobs
+! rm README.md; cat <(ls) ## process substitution
+! rm README.md; ls ) ## syntax error
+! rm README.md; echo 'open ## matching `''

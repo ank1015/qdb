@@ -44,6 +44,12 @@ use std::io;
 
 pub type NodeId = u64;
 
+/// `/dev/null`: the one path that is not in the database. It resolves to
+/// this id, which reads as an empty file and ignores what is written.
+pub const NULL: NodeId = NodeId::MAX - 2;
+
+static NULL_NODE: std::sync::OnceLock<Node> = std::sync::OnceLock::new();
+
 #[derive(Debug)]
 pub enum NodeKind {
     /// Children are keyed by name. A BTreeMap keeps them in byte order, which
@@ -97,6 +103,16 @@ struct Page {
 impl Nodes {
     #[inline]
     fn get(&self, id: NodeId) -> Option<&Node> {
+        if id == NULL {
+            return Some(NULL_NODE.get_or_init(|| Node {
+                id: NULL,
+                name: b"null".to_vec(),
+                parent: None,
+                kind: NodeKind::File(Text::default()),
+                aux: 0,
+                mtime: 0,
+            }));
+        }
         self.pages.get(id as usize / PAGE)?.as_ref()?.slots[id as usize % PAGE].as_deref()
     }
 
@@ -1751,6 +1767,9 @@ impl Db {
     ///
     /// The caller must have checked the content with `is_valid_text`.
     pub fn set_content(&mut self, id: NodeId, content: &[u8]) -> bool {
+        if id == NULL {
+            return false;
+        }
         debug_assert!(is_valid_text(content));
         let old = self.text(id).pieces.clone();
         // Pieces kept at the start.
@@ -1804,6 +1823,9 @@ impl Db {
     ///
     /// The caller must know the content to be valid text.
     pub fn set_content_stream(&mut self, id: NodeId, next: &mut dyn FnMut(&Db, &mut Vec<u8>) -> bool) -> bool {
+        if id == NULL {
+            return false;
+        }
         let old = self.text(id).pieces.clone();
         self.touch(id);
         let mut buf: Vec<u8> = Vec::new();
@@ -1879,6 +1901,9 @@ impl Db {
     /// comes to use the same pieces, and what is written is the record
     /// that says so. False if it used exactly those pieces already.
     pub fn copy_content(&mut self, from: NodeId, to: NodeId) -> bool {
+        if to == NULL {
+            return false;
+        }
         let pieces = self.pieces(from).to_vec();
         self.touch(to);
         let old = &self.text(to).pieces;
@@ -1902,6 +1927,9 @@ impl Db {
     /// it so that a file appended to a line at a time does not end up in
     /// a piece per line.
     pub fn append(&mut self, id: NodeId, data: &[u8]) {
+        if id == NULL {
+            return;
+        }
         if data.is_empty() {
             return;
         }
@@ -1944,6 +1972,9 @@ impl Db {
     /// text must be empty or end with a newline. Returns how many pieces
     /// the text became.
     pub fn replace_pieces(&mut self, id: NodeId, at: usize, del: usize, text: &[u8]) -> usize {
+        if id == NULL {
+            return 0;
+        }
         debug_assert!(text.is_empty() || text.ends_with(b"\n") || at + del == self.text(id).pieces.len());
         let new = self.store(id, text);
         let n = new.len();
@@ -1960,6 +1991,9 @@ impl Db {
     }
 
     pub fn restore_pieces(&mut self, id: NodeId, saved: Vec<Piece>) {
+        if id == NULL {
+            return;
+        }
         let now = self.text(id).pieces.len();
         let keep: std::collections::HashSet<(u32, u32)> = saved.iter().map(|p| (p.seg, p.ord)).collect();
         self.splice(id, 0, now, saved);
@@ -1972,6 +2006,9 @@ impl Db {
     /// the file held, so writing the same content back changes nothing.
     /// At the end of the command line a file still veiled becomes empty.
     pub fn veil(&mut self, id: NodeId) {
+        if id == NULL {
+            return;
+        }
         if let NodeKind::File(t) = &mut self.nodes.get_mut(id).unwrap().kind {
             if !t.veiled && !t.pieces.is_empty() {
                 t.veiled = true;
@@ -2569,6 +2606,9 @@ impl Db {
         if path.is_empty() {
             return Err(Errno::NoEnt);
         }
+        if path == b"/dev/null" {
+            return Ok(NULL);
+        }
         let mut cur = self.root;
         for comp in path.split(|b| *b == b'/') {
             let children = match &self.nodes[cur].kind {
@@ -2643,12 +2683,18 @@ impl Db {
     }
 
     pub fn mtime(&self, id: NodeId) -> i64 {
+        if id == NULL {
+            return self.now();
+        }
         self.nodes[id].mtime
     }
 
     /// Set a node's modification time. Like every change it is logged
     /// when the command line ends.
     pub fn set_mtime(&mut self, id: NodeId, t: i64) {
+        if id == NULL {
+            return;
+        }
         self.nodes.get_mut(id).unwrap().mtime = t;
         self.dirty = true;
         if !self.volatile {
@@ -2704,6 +2750,9 @@ impl Db {
 
     /// Remove a node and everything under it. The root cannot be removed.
     pub fn remove(&mut self, id: NodeId) {
+        if id == NULL {
+            return;
+        }
         assert!(id != self.root, "cannot remove the root");
         let (parent, name) = {
             let n = &self.nodes[id];
@@ -2742,6 +2791,9 @@ impl Db {
     /// Move a node to a new parent and name, keeping its id. The destination
     /// name must be free, and a folder cannot move into its own descendant.
     pub fn rename(&mut self, id: NodeId, new_parent: NodeId, new_name: &[u8]) -> Result<(), Errno> {
+        if id == NULL {
+            return Err(Errno::Inval);
+        }
         assert!(id != self.root);
         assert!(is_valid_name(new_name));
         if self.is_same_or_descendant(new_parent, id) {

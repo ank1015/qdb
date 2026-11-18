@@ -201,39 +201,39 @@ $ # only a comment
 ! echo $? ## special parameter ($?)
 ! echo "$@" ## special parameter ($@)
 ! echo $$ ## special parameter ($$)
-! echo $(ls) ## command substitution $(...)
-! echo "$(ls)" ## command substitution $(...)
-! echo `ls` ## command substitution (`...`)
-! echo "`ls`" ## command substitution (`...`)
+$ echo $(ls)
+$ echo "$(ls)"
+$ echo `ls`
+$ echo "`ls`"
 ! echo $((1 + 2)) ## arithmetic expansion
 ! echo $[1+2] ## arithmetic expansion
 ! echo $'a\nb' ## ANSI-C quoting
 ! echo $"hi" ## locale translation
-! ls && ls ## && lists
-! ls nope || ls ## || lists
-! ls ; ls ## command lists (;)
-! ls; ## command lists (;)
+$ ls && ls
+$ ls nope || ls
+$ ls ; ls
+$ ls;
 ! ls & ## background jobs
-! ls⏎ls ## more than one command
-! rm README.md && ls ## && lists
-! rm README.md; ls ## command lists (;)
-! mkdir z; cd z ## command lists (;)
-! cat < README.md ## input redirection (<)
-! wc -l < README.md ## input redirection (<)
-! cat << EOF ## here-documents
-! cat <<EOF⏎hi⏎EOF ## here-documents
-! cat <<- EOF ## here-documents
+$ ls⏎ls
+$ rm README.md && ls
+$ rm README.md; ls
+! mkdir z; cd z ## command: cd
+$ cat < README.md
+$ wc -l < README.md
+$ cat << EOF
+$ cat <<EOF⏎hi⏎EOF
+$ cat <<- EOF
 ! cat <<< hello ## here-strings
-! ls 2> err.txt ## standard error redirection (2>)
-! ls 2>> err.txt ## standard error redirection (2>>)
-! ls 2>&1 ## standard error redirection (2>&)
-! ls > out.txt 2>&1 ## standard error redirection (2>&)
-! ls &> out.txt ## &>
-! ls &>> out.txt ## &>
-! ls >& out.txt ## file descriptor duplication (>&)
+$ ls 2> err.txt
+$ ls 2>> err.txt
+$ ls 2>&1
+$ ls > out.txt 2>&1
+$ ls &> out.txt
+$ ls &>> out.txt
+$ ls >& out.txt
 ! ls >| out.txt ## noclobber override
 ! ls 3> out.txt ## file descriptor redirection (3>)
-! cat 0< README.md ## file descriptor redirection (0<)
+$ cat 0< README.md
 ! cat <> README.md ## read-write redirection
 ! ls |& cat ## |&
 ! diff <(ls) <(ls -a) ## process substitution
@@ -258,16 +258,16 @@ $ # only a comment
 ! ! ls ## pipeline negation
 ! time ls ## time keyword
 ! coproc ls ## coprocess
-! echo {a,b} ## brace expansion
-! echo {1..3} ## brace expansion
-! echo x{a,b}y ## brace expansion
-! mkdir -p x/{a,b} ## brace expansion
+$ echo {a,b}
+$ echo {1..3}
+$ echo x{a,b}y
+$ mkdir -p x/{a,b}
 ! ls ~ ## tilde expansion
 ! ls ~/src ## tilde expansion
 ! cat ~root/x ## tilde expansion
 ! ls | ## syntax error
 ! | ls ## syntax error
-! ls || ## || lists
+! ls || ## syntax error
 ! ls | | ls ## syntax error
 ! echo 'unterminated ## matching `''
 ! echo "unterminated ## matching `"'

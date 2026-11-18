@@ -48,8 +48,10 @@ Runs bash command lines against a tree of text files.
   --dump DIR       when done, write the tree into the empty directory DIR
   -c COMMAND       run COMMAND; can be given more than once
 
-With no -c (and none of --check, --stats, --compact), command lines are
-read from standard input, one per line. The exit status is that of the
+Each -c is one unit: all of what it changes is there after a crash, or
+none of it. With no -c (and none of --check, --stats, --compact), units
+are read from standard input: one line, or as many lines as it takes to
+close a quote, a here-document or a line ending in |, && or ||. The exit status is that of the
 last command, or 2 if the database cannot be used.";
 
 fn run() -> Result<i32, String> {
@@ -176,9 +178,23 @@ fn run() -> Result<i32, String> {
             run_line(&mut db, c.as_bytes());
         }
     } else if !(check || stats || compact) {
+        // A unit is one complete command as bash would read it: lines are
+        // gathered while a quote, a substitution or a here-document is
+        // open, or the last one ends in `|`, `&&`, `||` or a backslash.
+        let mut unit: Vec<u8> = Vec::new();
         for line in std::io::stdin().lock().split(b'\n') {
             let line = line.map_err(|e| e.to_string())?;
-            run_line(&mut db, &line);
+            if !unit.is_empty() {
+                unit.push(b'\n');
+            }
+            unit.extend_from_slice(&line);
+            if qdb::engine::is_complete(&unit) {
+                run_line(&mut db, &unit);
+                unit.clear();
+            }
+        }
+        if !unit.is_empty() {
+            run_line(&mut db, &unit);
         }
     }
     if db.failure().is_some() {

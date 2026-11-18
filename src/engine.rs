@@ -1,13 +1,13 @@
 //! Runs one command line against the database.
 //!
-//! A line is parsed, every word is expanded against the current tree, every
-//! command is checked for unsupported flags, and only then does anything
-//! run. A line that uses something unsupported therefore fails before it
-//! changes any data.
+//! One call is one unit: it is parsed whole, every command in it is
+//! checked for unsupported flags, and only then does anything run. A unit
+//! that uses something unsupported therefore fails before it changes any
+//! data, and what a unit changes is logged as one record.
 
 use crate::cmd;
 use crate::glob;
-use crate::shell::{self, ParseError, RedirOp, Word};
+use crate::shell::{self, Connector, ParseError, Part, Pipeline, Redirect, Script, Word};
 use crate::tree::{is_valid_text, Db, Errno, NodeId, Scratch, TextCheck};
 use crate::vfs::VFile;
 use crate::util::lossy;
@@ -145,9 +145,30 @@ pub struct Io<'a> {
     /// The file standard output is redirected to, if any. GNU cat and grep
     /// refuse to read the file they are writing to.
     pub out_file: Option<NodeId>,
+    /// Standard error goes where standard output goes (`2>&1`, `&>`).
+    merged: bool,
+    /// The command writes without a buffer of its own, as cat does, so
+    /// merged output and errors appear in the order they were written.
+    exact: bool,
+    stdin_size: Option<u64>,
 }
 
 impl<'a> Io<'a> {
+    /// Say that the command's errors overtake its output. The GNU tools
+    /// write out what they have buffered before they report an error, so
+    /// with `2>&1` output and errors appear in the order they were
+    /// written; that is what happens here unless a command says
+    /// otherwise. sed, rg and the shell's own commands do not: their
+    /// errors come out ahead of the output still in the buffer.
+    pub fn errors_first(&mut self) {
+        self.exact = false;
+    }
+
+    /// The size of the file standard input was redirected from, if it was.
+    pub fn stdin_size(&self) -> Option<u64> {
+        self.stdin_size
+    }
+
     /// Read standard input. It is a stream: the first reader gets all of
     /// it and later readers get nothing, as `cat - -` shows.
     pub fn take_stdin(&mut self) -> &'a [u8] {
@@ -155,6 +176,9 @@ impl<'a> Io<'a> {
     }
 
     pub fn err_line(&mut self, msg: impl AsRef<[u8]>) {
+        if self.merged && self.exact {
+            self.flush();
+        }
         self.err.extend_from_slice(msg.as_ref());
         self.err.push(b'\n');
     }
@@ -178,6 +202,14 @@ impl<'a> Io<'a> {
 
     /// Hand on what has been written so far.
     pub fn flush(&mut self) {
+        if self.merged && !self.err.is_empty() {
+            // Errors are not buffered: they go ahead of the output that
+            // still is.
+            if !self.stopped && !self.out.write(self.err) {
+                self.stopped = true;
+            }
+            self.err.clear();
+        }
         if !self.buf.is_empty() {
             if !self.stopped && !self.out.write(self.buf) {
                 self.stopped = true;
@@ -203,6 +235,10 @@ pub trait Filter {
     fn push(&mut self, data: &[u8], io: &mut Io) -> bool;
     /// The input has ended. Returns the exit status.
     fn finish(self: Box<Self>, io: &mut Io) -> i32;
+    /// The same, for a filter that then changes data, as tee does.
+    fn finish_db(self: Box<Self>, _db: &mut Db, io: &mut Io) -> i32 {
+        self.finish(io)
+    }
 }
 
 /// How a command uses its standard input.
@@ -229,9 +265,69 @@ impl From<Runner> for Prepared {
     }
 }
 
-struct Stage {
-    prepared: Prepared,
-    redirects: Vec<(RedirOp, Result<Vec<u8>, Vec<u8>>)>,
+/// A redirection with its word expanded. A path is `Err` with the word
+/// as written when it expanded to no name or to several.
+enum Redir {
+    Out { fd: u8, append: bool, path: Result<Vec<u8>, Vec<u8>> },
+    Both { append: bool, path: Result<Vec<u8>, Vec<u8>> },
+    Dup { fd: u8, to: u8 },
+    In { path: Result<Vec<u8>, Vec<u8>> },
+    Here(Vec<u8>),
+}
+
+/// Where a stream of a command goes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Dest {
+    /// To the next command of the pipeline, or out of the unit.
+    Down,
+    /// To the standard error of the unit.
+    Err,
+    /// To the file of the redirection with this index.
+    File(usize),
+    /// Nowhere.
+    Null,
+}
+
+/// What a command's redirections come to, read left to right.
+#[derive(Clone, Copy)]
+struct Plan {
+    d1: Dest,
+    d2: Dest,
+    /// The redirection standard input comes from.
+    input: Option<usize>,
+}
+
+const DEV_NULL: &[u8] = b"/dev/null";
+
+fn plan(redirs: &[Redir]) -> Plan {
+    let mut p = Plan { d1: Dest::Down, d2: Dest::Err, input: None };
+    let file = |i: usize, path: &Result<Vec<u8>, Vec<u8>>| match path {
+        Ok(p) if p == DEV_NULL => Dest::Null,
+        _ => Dest::File(i),
+    };
+    for (i, r) in redirs.iter().enumerate() {
+        match r {
+            Redir::Out { fd: 2, path, .. } => p.d2 = file(i, path),
+            Redir::Out { path, .. } => p.d1 = file(i, path),
+            Redir::Both { path, .. } => {
+                p.d1 = file(i, path);
+                p.d2 = p.d1;
+            }
+            Redir::Dup { fd: 1, to: 2 } => p.d1 = p.d2,
+            Redir::Dup { fd: 2, to: 1 } => p.d2 = p.d1,
+            Redir::Dup { .. } => {}
+            Redir::In { .. } | Redir::Here(_) => p.input = Some(i),
+        }
+    }
+    p
+}
+
+struct Nowhere;
+
+impl Sink for Nowhere {
+    fn write(&mut self, _: &[u8]) -> bool {
+        true
+    }
 }
 
 fn fail(msg: String, err: &mut dyn Sink) -> i32 {
@@ -239,16 +335,120 @@ fn fail(msg: String, err: &mut dyn Sink) -> i32 {
     EXIT_UNSUPPORTED
 }
 
-/// Expand one word into arguments: pathname expansion, then quote removal.
-fn expand(db: &Db, word: &Word) -> Vec<Vec<u8>> {
-    let bytes = word.bytes();
-    if glob::has_glob(&bytes) {
-        let found = glob::expand_path(db, &bytes);
-        if !found.is_empty() {
-            return found;
+/// The unit cannot go on: something unsupported was met after it began.
+struct Stop(i32);
+
+/// Expand one word into arguments: brace expansion, command substitution
+/// with field splitting, pathname expansion, then quote removal.
+fn expand(db: &mut Db, word: &Word, err: &mut dyn Sink) -> Result<Vec<Vec<u8>>, Stop> {
+    // The usual word: no braces, no substitution.
+    if let [Part::Lit(b)] = word.parts.as_slice() {
+        if !b.contains(&b'{') && !glob::has_glob_bytes(b) {
+            return Ok(vec![b.clone()]);
         }
     }
-    vec![word.text()]
+    let mut out = Vec::new();
+    for w in shell::brace_expand(word) {
+        for field in fields(db, &w, err)? {
+            if glob::has_glob(&field) {
+                let found = glob::expand_path(db, &field);
+                if !found.is_empty() {
+                    out.extend(found);
+                    continue;
+                }
+            }
+            out.push(field.into_iter().map(|(c, _)| c).collect());
+        }
+    }
+    Ok(out)
+}
+
+/// Run a command substitution: its standard output without the newlines
+/// at its end.
+fn substitute(db: &mut Db, script: &Script, err: &mut dyn Sink) -> Result<Vec<u8>, Stop> {
+    let mut text = Vec::new();
+    run_script(db, script, &mut text, err, None)?;
+    while text.last() == Some(&b'\n') {
+        text.pop();
+    }
+    Ok(text)
+}
+
+/// The fields of a word: one, unless an unquoted substitution's output
+/// holds spaces, tabs or newlines, which split it; none, if nothing but
+/// such a substitution with empty output makes up the word.
+fn fields(db: &mut Db, word: &Word, err: &mut dyn Sink) -> Result<Vec<Vec<(u8, bool)>>, Stop> {
+    let mut out = Vec::new();
+    let mut cur: Vec<(u8, bool)> = Vec::new();
+    let mut open = false;
+    for p in &word.parts {
+        match p {
+            Part::Lit(b) => {
+                cur.extend(b.iter().map(|c| (*c, false)));
+                open |= !b.is_empty();
+            }
+            Part::Quoted(b) => {
+                cur.extend(b.iter().map(|c| (*c, true)));
+                open = true;
+            }
+            Part::Subst { script, quoted: true } => {
+                cur.extend(substitute(db, script, err)?.into_iter().map(|c| (c, true)));
+                open = true;
+            }
+            Part::Subst { script, quoted: false } => {
+                let text = substitute(db, script, err)?;
+                let blank = |c: u8| matches!(c, b' ' | b'\t' | b'\n');
+                let mut i = 0;
+                while i < text.len() {
+                    if blank(text[i]) {
+                        if open {
+                            out.push(std::mem::take(&mut cur));
+                            open = false;
+                        }
+                        i += 1;
+                        continue;
+                    }
+                    // A backslash from a substitution is a plain character.
+                    cur.push((text[i], text[i] == b'\\'));
+                    open = true;
+                    i += 1;
+                }
+            }
+        }
+    }
+    if open {
+        out.push(cur);
+    }
+    Ok(out)
+}
+
+/// The text of a here-document after its substitutions have run.
+fn here_text(db: &mut Db, body: &[Part], err: &mut dyn Sink) -> Result<Vec<u8>, Stop> {
+    let mut text = Vec::new();
+    for p in body {
+        match p {
+            Part::Lit(b) | Part::Quoted(b) => text.extend_from_slice(b),
+            Part::Subst { script, .. } => text.extend(substitute(db, script, err)?),
+        }
+    }
+    Ok(text)
+}
+
+fn expand_redirect(db: &mut Db, r: &Redirect, err: &mut dyn Sink) -> Result<Redir, Stop> {
+    let mut one = |db: &mut Db, target: &Word| -> Result<Result<Vec<u8>, Vec<u8>>, Stop> {
+        let mut targets = expand(db, target, err)?;
+        Ok(if targets.len() == 1 { Ok(targets.pop().unwrap()) } else { Err(target.raw.clone()) })
+    };
+    Ok(match r {
+        Redirect::Out { fd, append, target } => Redir::Out { fd: *fd, append: *append, path: one(db, target)? },
+        Redirect::Both { append, target } => Redir::Both { append: *append, path: one(db, target)? },
+        Redirect::Dup { fd, to } => Redir::Dup { fd: *fd, to: *to },
+        Redirect::In { target } => Redir::In { path: one(db, target)? },
+        Redirect::Here { body } => {
+            let body = body.borrow().clone();
+            Redir::Here(here_text(db, &body, err)?)
+        }
+    })
 }
 
 /// Run a command line and collect what it prints.
@@ -258,8 +458,13 @@ pub fn execute(db: &mut Db, line: &[u8]) -> Outcome {
     out
 }
 
-/// Run a command line, handing standard output to `out` as it is produced
-/// and standard error to `err`. Returns the exit status.
+/// Run one unit: everything in `line`, however many commands that is.
+/// Standard output is handed to `out` as it is produced and standard
+/// error to `err`. Returns the exit status.
+///
+/// What the unit changes becomes one record of the log, so after a crash
+/// all of it is there or none of it. If any part of it is unsupported,
+/// none of it runs.
 ///
 /// Nothing is held back beyond a small buffer, so a command that can
 /// stream (`cat`, `grep`, `find`, ...) uses the same memory whatever the
@@ -271,11 +476,11 @@ pub fn execute_to(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Si
         return 2;
     }
     // Reads cannot return an error, so damage found while reading is
-    // thrown (`disk::Damage`). It ends the command line and the use of
-    // this database: what the line had changed so far is not logged.
+    // thrown (`disk::Damage`). It ends the unit and the use of this
+    // database: what the unit had changed so far is not logged.
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let code = run_line(db, line, out, err);
-        // The line's changes become one record of the log; a file that
+        // The unit's changes become one record of the log; a file that
         // `>` emptied and nothing wrote to is now empty for good.
         db.commit();
         code
@@ -297,69 +502,201 @@ pub fn execute_to(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Si
     code
 }
 
-fn run_line(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
-    let pipeline = match shell::parse(line) {
-        Ok(None) => return 0,
-        Ok(Some(p)) => p,
-        Err(ParseError::Unsupported(what)) => return fail(format!("unsupported syntax: {}", what), err),
-        Err(ParseError::Syntax(what)) => return fail(what, err),
-    };
+/// True if `text` is a complete unit as bash would read it from a
+/// terminal or a script: no quote, substitution or here-document is left
+/// open and the last line does not end in `|`, `&&`, `||` or a backslash.
+pub fn is_complete(text: &[u8]) -> bool {
+    if text.ends_with(b"\\") && !text.ends_with(b"\\\\") {
+        return false;
+    }
+    match shell::parse(text) {
+        Ok(script) => !script.open_here,
+        Err(ParseError::Incomplete(_)) => false,
+        Err(_) => true,
+    }
+}
 
-    // Expand and check everything before running anything.
-    let mut stages = Vec::new();
-    for command in &pipeline.commands {
-        let argv: Vec<Vec<u8>> = command.words.iter().flat_map(|w| expand(db, w)).collect();
-        let prepared: Prepared = match argv.split_first() {
-            None => {
-                let nothing: Runner = Box::new(|_, _| 0);
-                nothing.into()
+fn run_line(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
+    let script = match shell::parse(line) {
+        Ok(s) => s,
+        Err(ParseError::Unsupported(what)) => return fail(format!("unsupported syntax: {}", what), err),
+        Err(ParseError::Syntax(what)) | Err(ParseError::Incomplete(what)) => return fail(what, err),
+    };
+    // Check everything before running anything.
+    let mut ready = Vec::new();
+    if let Err(what) = check_script(db, &script, Some(&mut ready)) {
+        return fail(format!("unsupported {}", what), err);
+    }
+    for w in &script.warnings {
+        err.write(format!("qdb: {}\n", w).as_bytes());
+    }
+    match run_script(db, &script, out, err, Some(ready)) {
+        Ok(code) | Err(Stop(code)) => code,
+    }
+}
+
+/// Look through a script for anything unsupported without running it. A
+/// command none of whose words holds a substitution is expanded against
+/// the tree as it is now and its flags are checked; of one that does,
+/// only the name can be checked. The commands of the first pipeline are
+/// kept in `ready` when they will run exactly as checked.
+fn check_script(db: &mut Db, script: &Script, mut ready: Option<&mut Vec<Option<Prepared>>>) -> Result<(), String> {
+    let mut first = true;
+    for item in &script.items {
+        for pipeline in std::iter::once(&item.first).chain(item.rest.iter().map(|(_, p)| p)) {
+            for command in &pipeline.commands {
+                let mut inner = |parts: &[Part]| -> Result<bool, String> {
+                    let mut any = false;
+                    for p in parts {
+                        if let Part::Subst { script, .. } = p {
+                            check_script(db, script, None)?;
+                            any = true;
+                        }
+                    }
+                    Ok(any)
+                };
+                let mut fixed = true;
+                for w in &command.words {
+                    fixed &= !inner(&w.parts)?;
+                }
+                for r in &command.redirects {
+                    match r {
+                        Redirect::Out { target, .. } | Redirect::Both { target, .. } | Redirect::In { target } => {
+                            inner(&target.parts)?;
+                        }
+                        Redirect::Here { body } => {
+                            inner(&body.borrow())?;
+                        }
+                        Redirect::Dup { .. } => {}
+                    }
+                }
+                let mut kept = None;
+                if fixed {
+                    let mut argv = Vec::new();
+                    for w in &command.words {
+                        match expand(db, w, &mut Nowhere) {
+                            Ok(a) => argv.extend(a),
+                            Err(_) => unreachable!("nothing runs in a word without a substitution"),
+                        }
+                    }
+                    if let Some((name, args)) = argv.split_first() {
+                        kept = Some(cmd::prepare(name, args)?);
+                    }
+                } else if let Some(w) = command.words.first() {
+                    if !w.has_subst() && !glob::has_glob(&w.bytes()) && !cmd::known(&w.text()) {
+                        return Err(format!("command: {}", lossy(&w.text())));
+                    }
+                }
+                if first {
+                    if let Some(r) = ready.as_mut() {
+                        r.push(kept);
+                    }
+                }
             }
-            Some((name, args)) => match cmd::prepare(name, args) {
-                Ok(p) => p,
-                Err(what) => return fail(format!("unsupported {}", what), err),
-            },
+            first = false;
+        }
+    }
+    Ok(())
+}
+
+fn run_script(
+    db: &mut Db,
+    script: &Script,
+    out: &mut dyn Sink,
+    err: &mut dyn Sink,
+    mut ready: Option<Vec<Option<Prepared>>>,
+) -> Result<i32, Stop> {
+    let mut code = 0;
+    for item in &script.items {
+        code = run_pipeline(db, &item.first, out, err, ready.take())?;
+        for (op, pipeline) in &item.rest {
+            if (*op == Connector::And) == (code == 0) {
+                code = run_pipeline(db, pipeline, out, err, None)?;
+            }
+        }
+    }
+    Ok(code)
+}
+
+fn run_pipeline(
+    db: &mut Db,
+    pipeline: &Pipeline,
+    out: &mut dyn Sink,
+    err: &mut dyn Sink,
+    ready: Option<Vec<Option<Prepared>>>,
+) -> Result<i32, Stop> {
+    let mut ready = ready.unwrap_or_default().into_iter();
+    let mut stages = Vec::new();
+    for (n, command) in pipeline.commands.iter().enumerate() {
+        let prepared: Prepared = match ready.next().flatten() {
+            Some(p) => p,
+            None => {
+                let mut argv = Vec::new();
+                for w in &command.words {
+                    argv.extend(expand(db, w, err)?);
+                }
+                match argv.split_first() {
+                    None => {
+                        let nothing: Runner = Box::new(|_, _| 0);
+                        nothing.into()
+                    }
+                    Some((name, args)) => match cmd::prepare(name, args) {
+                        Ok(p) => p,
+                        Err(what) => return Err(Stop(fail(format!("unsupported {}", what), err))),
+                    },
+                }
+            }
         };
-        let redirects = command
-            .redirects
-            .iter()
-            .map(|r| {
-                let mut targets = expand(db, &r.target);
-                let target = if targets.len() == 1 { Ok(targets.pop().unwrap()) } else { Err(r.target.text()) };
-                (r.op, target)
-            })
-            .collect();
-        stages.push(Stage { prepared, redirects });
+        let mut redirs = Vec::new();
+        for r in &command.redirects {
+            redirs.push(expand_redirect(db, r, err)?);
+        }
+        stages.push(Stage::new(prepared, redirs, db.scratch(), n > 0));
     }
 
     // The first command drives the pipeline: what it writes is pushed
     // through the later ones as it appears. When one of them needs no more
     // input, the write is refused and the commands before it stop.
-    let mut stages = stages.into_iter();
-    let first = stages.next().expect("a pipeline has a command");
-    let mut later: Vec<Later> = stages.map(|s| Later::new(s, db.scratch())).collect();
-    let mut stderr = Vec::new();
-    let mut buf = Vec::new();
-    let mut code = run_whole(db, first.prepared.run, &first.redirects, &[], &mut Rest { stages: &mut later, last: out }, &mut buf, &mut stderr);
-    err.write(&stderr);
+    let (first, later) = stages.split_first_mut().expect("a pipeline has a command");
+    let mut code = first.end(db, &mut Rest { stages: later, last: out }, err);
     for i in 0..later.len() {
         let (stage, rest) = later[i..].split_first_mut().unwrap();
-        stderr.clear();
-        code = stage.finish(db, &mut Rest { stages: rest, last: out }, &mut stderr);
-        err.write(&stderr);
+        code = stage.end(db, &mut Rest { stages: rest, last: out }, err);
     }
-    code
+    Ok(code)
 }
 
-/// A command after the first one in a pipeline.
-struct Later {
-    state: State,
-    redirects: Vec<(RedirOp, Result<Vec<u8>, Vec<u8>>)>,
+/// Run a command given as words, as `xargs` and `find -exec` do, with the
+/// streams of the command that runs it.
+pub fn run_argv(db: &mut Db, argv: &[Vec<u8>], io: &mut Io) -> i32 {
+    let Some((name, args)) = argv.split_first() else { return 0 };
+    match cmd::prepare(name, args) {
+        Ok(p) => (p.run)(db, io),
+        Err(what) => {
+            io.err_line(format!("qdb: unsupported {}", what));
+            EXIT_UNSUPPORTED
+        }
+    }
+}
+
+/// One command of a pipeline.
+struct Stage {
     run: Option<Runner>,
+    state: State,
+    /// The command as a filter, when its standard input is a file it can
+    /// take a piece at a time.
+    stream: Option<Box<dyn Filter>>,
+    redirs: Vec<Redir>,
+    plan: Plan,
+    /// Output on its way to a file: one for each redirection.
+    spools: Vec<Spool>,
     /// Output on its way to the next stage.
     buf: Vec<u8>,
-    /// Output on its way to a file, when standard output is redirected.
-    to_file: Spool,
     err: Vec<u8>,
+    /// Standard output on its way to standard error (`>&2`).
+    to_err: Vec<u8>,
+    /// The size of the file standard input comes from, once it is open.
+    stdin_size: Option<u64>,
 }
 
 enum State {
@@ -371,77 +708,178 @@ enum State {
     Closed(Option<Box<dyn Filter>>),
 }
 
-impl Later {
-    fn new(stage: Stage, scratch: Scratch) -> Later {
-        let state = match stage.prepared.input {
+enum Stdin {
+    Bytes(Vec<u8>),
+    File(NodeId),
+}
+
+impl Stage {
+    fn new(prepared: Prepared, redirs: Vec<Redir>, scratch: Scratch, piped: bool) -> Stage {
+        let plan = plan(&redirs);
+        let mut stream = None;
+        let state = match prepared.input {
+            Input::Stream(f) if plan.input.is_some() || !piped => {
+                if plan.input.is_some() {
+                    stream = Some(f);
+                }
+                State::Closed(None)
+            }
+            _ if plan.input.is_some() || !piped => State::Closed(None),
             Input::Stream(f) => State::Streaming(f),
             Input::Whole => State::Gathering(Vec::new()),
             Input::Unused => State::Closed(None),
         };
-        Later { state, redirects: stage.redirects, run: Some(stage.prepared.run), buf: Vec::new(), to_file: Spool::new(scratch), err: Vec::new() }
+        let spools = redirs.iter().map(|_| Spool::new(scratch.clone())).collect();
+        Stage { run: Some(prepared.run), state, stream, redirs, plan, spools, buf: Vec::new(), err: Vec::new(), to_err: Vec::new(), stdin_size: None }
+    }
+
+    /// Give `f` the streams of this command. Returns what `f` returned and
+    /// whether the reader of the output wants no more.
+    fn with_io<R>(&mut self, stdin: &[u8], down: &mut dyn Sink, out_file: Option<NodeId>, f: impl FnOnce(&mut Io) -> R) -> (R, bool) {
+        let Stage { plan, spools, buf, err, to_err, stdin_size, .. } = self;
+        let mut nowhere = Nowhere;
+        let out: &mut dyn Sink = match plan.d1 {
+            Dest::Down => down,
+            Dest::Err => to_err,
+            Dest::File(i) => &mut spools[i],
+            Dest::Null => &mut nowhere,
+        };
+        let mut io = Io { stdin, out, buf, stopped: false, err, out_file, merged: plan.d1 == plan.d2, exact: true, stdin_size: *stdin_size };
+        let r = f(&mut io);
+        io.flush();
+        (r, io.stopped)
     }
 
     fn push(&mut self, data: &[u8], down: &mut dyn Sink) -> bool {
-        match &mut self.state {
-            State::Closed(_) => false,
-            State::Gathering(all) => {
+        match std::mem::replace(&mut self.state, State::Closed(None)) {
+            State::Closed(f) => {
+                self.state = State::Closed(f);
+                false
+            }
+            State::Gathering(mut all) => {
                 all.extend_from_slice(data);
+                self.state = State::Gathering(all);
                 true
             }
-            State::Streaming(filter) => {
-                let redirected = !self.redirects.is_empty();
-                let out: &mut dyn Sink = if redirected { &mut self.to_file } else { down };
-                let mut io = Io { stdin: &[], out, buf: &mut self.buf, stopped: false, err: &mut self.err, out_file: None };
-                let more = filter.push(data, &mut io);
-                io.flush();
+            State::Streaming(mut filter) => {
+                let (more, stopped) = self.with_io(&[], down, None, |io| filter.push(data, io));
                 // If the next stage wants no more, neither does this one.
-                let more = more && !io.stopped;
-                if !more {
-                    if let State::Streaming(f) = std::mem::replace(&mut self.state, State::Closed(None)) {
-                        self.state = State::Closed(Some(f));
-                    }
-                }
+                let more = more && !stopped;
+                self.state = if more { State::Streaming(filter) } else { State::Closed(Some(filter)) };
                 more
             }
         }
     }
 
-    /// The stage before has ended. Returns the exit status.
-    fn finish(&mut self, db: &mut Db, down: &mut dyn Sink, stderr: &mut Vec<u8>) -> i32 {
-        let filter = match std::mem::replace(&mut self.state, State::Closed(None)) {
-            State::Streaming(f) | State::Closed(Some(f)) => f,
-            State::Gathering(all) => {
-                return run_whole(db, self.run.take().unwrap(), &self.redirects, &all, down, &mut self.buf, stderr);
-            }
-            State::Closed(None) => {
-                return run_whole(db, self.run.take().unwrap(), &self.redirects, &[], down, &mut self.buf, stderr);
-            }
-        };
-        if self.redirects.is_empty() {
-            let mut io = Io { stdin: &[], out: down, buf: &mut self.buf, stopped: false, err: &mut self.err, out_file: None };
-            let code = filter.finish(&mut io);
-            io.flush();
-            stderr.extend_from_slice(&self.err);
-            return code;
-        }
-        // The file is opened now, after the stages before have finished,
-        // which is when a command run on the whole input would open it.
+    /// The stage before has ended, or there is none: open the
+    /// redirections, run the command (or finish it, if it has been taking
+    /// its input in pieces), and store what went to files. Returns the
+    /// exit status.
+    fn end(&mut self, db: &mut Db, down: &mut dyn Sink, uerr: &mut dyn Sink) -> i32 {
+        let state = std::mem::replace(&mut self.state, State::Closed(None));
         let mut undo = Vec::new();
-        let target = match open_redirects(db, &self.redirects, &mut undo, stderr) {
-            Ok(t) => t.expect("there is a redirection"),
-            Err(code) => return code,
-        };
-        let mut io = Io { stdin: &[], out: &mut self.to_file, buf: &mut self.buf, stopped: false, err: &mut self.err, out_file: None };
-        let code = filter.finish(&mut io);
-        io.flush();
-        stderr.extend_from_slice(&self.err);
-        commit_redirect(db, target, undo, std::mem::replace(&mut self.to_file, Spool::nowhere()), code, stderr)
+        let (opened, stdin, failed) = open_redirects(db, &self.redirs, &mut undo);
+        let mut code;
+        if let Some((upto, msg)) = failed {
+            // The message goes where standard error went at that point,
+            // and the command does not run.
+            self.plan = plan(&self.redirs[..upto]);
+            self.err.extend_from_slice(msg.as_bytes());
+            code = 1;
+        } else {
+            let out_file = match self.plan.d1 {
+                Dest::File(i) => opened[i].as_ref().map(|t| t.1),
+                _ => None,
+            };
+            let run = self.run.take();
+            if let Some(Stdin::File(id)) = &stdin {
+                self.stdin_size = Some(db.size(*id));
+            }
+            code = match (state, stdin) {
+                (State::Streaming(f), _) | (State::Closed(Some(f)), _) => self.with_io(&[], down, None, |io| f.finish_db(db, io)).0,
+                (State::Gathering(all), None) => self.with_io(&all, down, out_file, |io| run.unwrap()(db, io)).0,
+                (_, None) => self.with_io(&[], down, out_file, |io| run.unwrap()(db, io)).0,
+                (_, Some(stdin)) => match (self.stream.take(), stdin) {
+                    (Some(mut f), Stdin::File(id)) => {
+                        self.with_io(&[], down, None, |io| {
+                            for p in db.pieces(id).to_vec() {
+                                if !f.push(&db.text_of(&p), io) {
+                                    break;
+                                }
+                            }
+                            f.finish_db(db, io)
+                        })
+                        .0
+                    }
+                    (Some(mut f), Stdin::Bytes(text)) => {
+                        self.with_io(&[], down, None, |io| {
+                            f.push(&text, io);
+                            f.finish_db(db, io)
+                        })
+                        .0
+                    }
+                    (None, Stdin::File(id)) => {
+                        let text = db.content(id).into_owned();
+                        self.with_io(&text, down, out_file, |io| run.unwrap()(db, io)).0
+                    }
+                    (None, Stdin::Bytes(text)) => self.with_io(&text, down, out_file, |io| run.unwrap()(db, io)).0,
+                },
+            };
+        }
+        // Standard error, where it was not merged into the output already.
+        match self.plan.d2 {
+            Dest::Down => {
+                down.write(&self.err);
+            }
+            Dest::Err => {
+                uerr.write(&self.err);
+            }
+            Dest::File(i) => {
+                self.spools[i].write(&self.err);
+            }
+            Dest::Null => {}
+        }
+        self.err.clear();
+        uerr.write(&self.to_err);
+        self.to_err.clear();
+        // What went to files is stored now, if all of it is valid text.
+        let mut bad = None;
+        for (i, t) in opened.iter().enumerate() {
+            if let Some(t) = t {
+                if !self.spools[i].end() && bad.is_none() {
+                    bad = Some(t.2.clone());
+                }
+            }
+        }
+        if let Some(path) = bad {
+            for u in undo.into_iter().rev() {
+                match u {
+                    Undo::Created(id) if db.exists(id) => db.remove(id),
+                    Undo::Truncated(id, before) if db.exists(id) => {
+                        db.unveil(id);
+                        db.set_mtime(id, before);
+                    }
+                    _ => {}
+                }
+            }
+            uerr.write(format!("qdb: {}: output is not valid UTF-8 text, nothing was written\n", lossy(&path)).as_bytes());
+            return 1;
+        }
+        let mut late = Vec::new();
+        for (i, t) in opened.into_iter().enumerate() {
+            if let Some(t) = t {
+                let spool = std::mem::replace(&mut self.spools[i], Spool::nowhere());
+                code = store_redirect(db, t, spool, code, &mut late);
+            }
+        }
+        uerr.write(&late);
+        code
     }
 }
 
 /// The stages after the current one, as the place its output goes.
 struct Rest<'a> {
-    stages: &'a mut [Later],
+    stages: &'a mut [Stage],
     last: &'a mut dyn Sink,
 }
 
@@ -461,11 +899,11 @@ enum Undo {
     Truncated(NodeId, i64),
 }
 
-fn open_redirect(db: &mut Db, op: RedirOp, path: &[u8], undo: &mut Vec<Undo>) -> Result<NodeId, Errno> {
+fn open_redirect(db: &mut Db, append: bool, path: &[u8], undo: &mut Vec<Undo>) -> Result<NodeId, Errno> {
     match db.resolve(path) {
         Ok(id) if db.is_dir(id) => Err(Errno::IsDir),
         Ok(id) => {
-            if op == RedirOp::Write {
+            if !append {
                 // Emptied for the command to see, but nothing is stored
                 // until the command's output is known: if that is what
                 // the file held, nothing is written at all.
@@ -491,97 +929,59 @@ fn open_redirect(db: &mut Db, op: RedirOp, path: &[u8], undo: &mut Vec<Undo>) ->
     }
 }
 
-type Target = (RedirOp, NodeId, Vec<u8>);
+/// (true for `>>`, the file, its path as written)
+type Target = (bool, NodeId, Vec<u8>);
 
 /// Open a command's redirections left to right, as bash does before the
 /// command runs: `>` creates or empties its file even if a later one
-/// takes the output. Returns the file that receives standard output.
-fn open_redirects(
-    db: &mut Db,
-    redirects: &[(RedirOp, Result<Vec<u8>, Vec<u8>>)],
-    undo: &mut Vec<Undo>,
-    stderr: &mut Vec<u8>,
-) -> Result<Option<Target>, i32> {
-    let mut target = None;
-    for (op, path) in redirects {
-        let opened = match path {
-            Err(word) => Err(format!("qdb: {}: ambiguous redirect\n", lossy(word))),
-            Ok(path) => open_redirect(db, *op, path, undo)
-                .map(|id| (id, path.clone()))
-                .map_err(|e| format!("qdb: {}: {}\n", lossy(path), e.msg())),
-        };
-        match opened {
-            Ok((id, path)) => target = Some((*op, id, path)),
-            Err(msg) => {
-                stderr.extend_from_slice(msg.as_bytes());
-                return Err(1);
+/// takes the output. Returns the file each one opened for writing, where
+/// standard input comes from, and, if one could not be opened, its index
+/// and the message.
+fn open_redirects(db: &mut Db, redirs: &[Redir], undo: &mut Vec<Undo>) -> (Vec<Option<Target>>, Option<Stdin>, Option<(usize, String)>) {
+    let mut opened: Vec<Option<Target>> = redirs.iter().map(|_| None).collect();
+    let mut stdin = None;
+    for (i, r) in redirs.iter().enumerate() {
+        let (path, append, input) = match r {
+            Redir::Out { path, append, .. } | Redir::Both { path, append } => (path, *append, false),
+            Redir::In { path } => (path, false, true),
+            Redir::Here(text) => {
+                stdin = Some(Stdin::Bytes(text.clone()));
+                continue;
             }
+            Redir::Dup { .. } => continue,
+        };
+        let path = match path {
+            Ok(p) => p,
+            Err(word) => return (opened, stdin, Some((i, format!("qdb: {}: ambiguous redirect\n", lossy(word))))),
+        };
+        let result = if input {
+            match db.resolve(path) {
+                Ok(id) if db.is_dir(id) => Err(Errno::IsDir),
+                Ok(id) => {
+                    stdin = Some(Stdin::File(id));
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+        } else if path == DEV_NULL {
+            Ok(())
+        } else {
+            open_redirect(db, append, path, undo).map(|id| opened[i] = Some((append, id, path.clone())))
+        };
+        if let Err(e) = result {
+            return (opened, stdin, Some((i, format!("qdb: {}: {}\n", lossy(path), e.msg()))));
         }
     }
-    Ok(target)
+    (opened, stdin, None)
 }
 
-/// Run a whole command on input that is already complete. Returns the
-/// exit status.
-fn run_whole(
-    db: &mut Db,
-    run: Runner,
-    redirects: &[(RedirOp, Result<Vec<u8>, Vec<u8>>)],
-    stdin: &[u8],
-    down: &mut dyn Sink,
-    buf: &mut Vec<u8>,
-    stderr: &mut Vec<u8>,
-) -> i32 {
-    let mut undo = Vec::new();
-    let target = match open_redirects(db, redirects, &mut undo, stderr) {
-        Ok(t) => t,
-        Err(code) => return code,
-    };
-    match target {
-        None => {
-            let mut io = Io { stdin, out: down, buf, stopped: false, err: stderr, out_file: None };
-            let code = run(db, &mut io);
-            io.flush();
-            code
-        }
-        Some(target) => {
-            // Output bound for a file is checked as a whole before any of
-            // it is stored, so it is gathered first.
-            let mut gathered = Spool::new(db.scratch());
-            let mut io = Io { stdin, out: &mut gathered, buf, stopped: false, err: stderr, out_file: Some(target.1) };
-            let code = run(db, &mut io);
-            io.flush();
-            commit_redirect(db, target, undo, gathered, code, stderr)
-        }
-    }
-}
-
-/// Store redirected output in its file, or undo the redirection if the
-/// result would not be valid text.
-fn commit_redirect(db: &mut Db, target: Target, undo: Vec<Undo>, mut out: Spool, mut code: i32, stderr: &mut Vec<u8>) -> i32 {
-    let (op, id, path) = target;
-    let valid = out.end();
+/// Store redirected output, already found to be valid text, in its file.
+fn store_redirect(db: &mut Db, target: Target, mut out: Spool, mut code: i32, stderr: &mut Vec<u8>) -> i32 {
+    let (append, id, path) = target;
     if let Some(e) = out.error.take() {
         // Reported when the command line ends, like any failure to store.
         db.scratch_failed(e);
         return code;
-    }
-    if !valid {
-        // Text only: reject the write and leave the data as it was.
-        for u in undo.into_iter().rev() {
-            match u {
-                Undo::Created(id) if db.exists(id) => db.remove(id),
-                Undo::Truncated(id, before) if db.exists(id) => {
-                    db.unveil(id);
-                    db.set_mtime(id, before);
-                }
-                _ => {}
-            }
-        }
-        stderr.extend_from_slice(
-            format!("qdb: {}: output is not valid UTF-8 text, nothing was written\n", lossy(&path)).as_bytes(),
-        );
-        return 1;
     }
     // The command may have removed or replaced the file it was writing to;
     // the output then goes nowhere, as it would with an unlinked file.
@@ -589,10 +989,10 @@ fn commit_redirect(db: &mut Db, target: Target, undo: Vec<Undo>, mut out: Spool,
         // How much of the output is handed to storage at a time: 4 MB
         // with pieces of the usual size.
         let step = db.config().piece * 64;
-        if op == RedirOp::Append || db.size(id) == 0 {
+        if append || db.size(id) == 0 {
             // Valid text added to valid text is valid text.
             let mut at = 0;
-            let mut first = op == RedirOp::Write;
+            let mut first = !append;
             if out.len as usize <= step {
                 let all = out.read(0, step);
                 if first {

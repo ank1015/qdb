@@ -9,11 +9,11 @@ use std::process::{Command, Stdio};
 /// Real find and grep -r list a folder in whatever order the filesystem
 /// returns, so their output can only be compared as a set of lines.
 pub fn order_is_unspecified(command: &str) -> bool {
-    let pipeline = match shell::parse(command.as_bytes()) {
-        Ok(Some(p)) => p,
+    let script = match shell::parse(command.as_bytes()) {
+        Ok(s) => s,
         _ => return false,
     };
-    pipeline.commands.iter().any(|c| {
+    script.all_commands().iter().any(|c| {
         let words: Vec<Vec<u8>> = c.words.iter().map(|w| w.text()).collect();
         match words.first().map(|w| w.as_slice()) {
             Some(b"find") => true,
@@ -62,15 +62,18 @@ pub fn replace(hay: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 /// Refuse a command that could touch anything outside `root` if it were
 /// handed to the real tools.
 pub fn check_safe(command: &str, root: &Path) -> Result<(), String> {
-    let pipeline = match shell::parse(command.as_bytes()) {
-        Ok(Some(p)) => p,
+    let script = match shell::parse(command.as_bytes()) {
+        Ok(s) => s,
         _ => return Ok(()),
     };
     let root = root.to_string_lossy().into_owned().into_bytes();
-    for c in &pipeline.commands {
-        let words = c.words.iter().skip(1).map(|w| w.text());
-        let targets = c.redirects.iter().map(|r| r.target.text());
-        for w in words.chain(targets) {
+    for c in &script.all_commands() {
+        let words = c.words.iter().skip(1);
+        let targets = c.redirects.iter().filter_map(|r| r.target());
+        for w in words.chain(targets).flat_map(shell::brace_expand).map(|w| w.text()) {
+            if w == b"/dev/null" {
+                continue;
+            }
             // Follow the path: it must never climb above where it starts,
             // and an absolute path must start inside the root.
             let rel: &[u8] = if w.starts_with(b"/") {
@@ -108,6 +111,7 @@ pub fn run_real(root: &Path, command: &str) -> Outcome {
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("LC_ALL", "C")
+        .env("TZ", "UTC")
         .stdin(Stdio::null())
         .output()
         .expect("cannot run bash");

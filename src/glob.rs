@@ -269,3 +269,8 @@ mod tests {
         assert!(m("[a-]", "-"));
     }
 }
+
+/// True if unquoted text holds a glob character.
+pub fn has_glob_bytes(text: &[u8]) -> bool {
+    text.iter().any(|c| matches!(c, b'*' | b'?' | b'['))
+}
