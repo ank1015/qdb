@@ -1,0 +1,174 @@
+command,off_ms,on_ms,ratio
+"ls",0.00268,0.00323,1.203
+"ls -a",0.00411,0.00464,1.130
+"ls -R",3.97135,3.96375,0.998
+"ls -aR Documentation",0.65431,0.65634,1.003
+"ls -p Documentation",0.00541,0.00602,1.114
+"find .",8.70538,8.79554,1.010
+"find . -name '*.h'",10.98114,11.04838,1.006
+"find . -name '*.c'",11.11133,11.20931,1.009
+"find . -type d",8.03879,8.04325,1.001
+"find . -type f",8.80272,8.80583,1.000
+"find . -maxdepth 2 -type f",0.16095,0.16304,1.013
+"find Documentation -name '*.h' -type f",1.28684,1.29225,1.004
+"find . -name 'Makefile'",8.42760,8.38125,0.994
+"cat include/linux/kernfs.h",0.00224,0.00282,1.259
+"cat -n include/linux/kernfs.h",0.06660,0.06625,0.995
+"head -n 20 include/linux/kernfs.h",0.00317,0.00389,1.228
+"tail -n 20 include/linux/kernfs.h",0.00331,0.00394,1.192
+"tail -n +100 include/linux/kernfs.h",0.00567,0.00906,1.596
+"wc include/linux/kernfs.h",0.02496,0.02539,1.017
+"wc -l include/linux/*.h",1.06240,1.06412,1.002
+"cat include/linux/*.h | wc -l",1.54545,1.54093,0.997
+"cat include/linux/kernfs.h | head -n 50 | tail -n 10",0.00763,0.00841,1.102
+"grep -c define include/linux/kernfs.h",0.01348,0.01419,1.053
+"grep -n define include/linux/kernfs.h",0.01422,0.01496,1.052
+"sed 's/define/XX/g' include/linux/kernfs.h",0.03405,0.03606,1.059
+"sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' include/linux/kernfs.h",0.27055,0.27079,1.001
+"cat include/linux/kernfs.h | sed 's/^/> /' | wc -c",0.10492,0.10455,0.996
+"grep -rn qdbzzabsentterm .",0.03569,0.03616,1.013
+"grep -rl qdbzzabsentterm .",0.03517,0.03553,1.010
+"grep -rn ausgabenspezifisches .",0.14734,0.15149,1.028
+"grep -rl ausgabenspezifisches .",0.14558,0.14484,0.995
+"grep -rn mispredicted .",1.62310,1.62222,0.999
+"grep -rl mispredicted .",1.42428,1.43193,1.005
+"grep -rn separately .",7.62110,8.34397,1.095
+"grep -rl separately .",5.13345,5.12643,0.999
+"grep -rn conditions .",59.63414,59.35166,0.995
+"grep -rl conditions .",38.84489,38.72836,0.997
+"grep -rn define .",532.38826,525.17702,0.986
+"grep -rl define .",57.41242,56.88814,0.991
+"grep -rc separately .",18.54283,18.86939,1.018
+"grep -rin MISPREDICTED .",1.96212,1.97954,1.009
+"grep -ri separately .",7.05100,7.05733,1.001
+"grep -rn separately Documentation",1.81507,1.81193,0.998
+"grep -rl conditions Documentation",3.38256,3.38932,1.002
+"grep -rF 'separately' .",6.03997,6.02818,0.998
+"grep -rE 'atomic_[a-z]+\(' .",51.93050,50.89071,0.980
+"grep -rE 'mispredicted|ausgabenspezifisches' .",2.49687,2.50018,1.001
+"grep -rE 'conditions|separately' .",79.95070,79.67000,0.996
+"grep -rE '[0-9]{4,}' .",2077.03093,2034.23280,0.979
+"grep -rn '^#include' .",233.98302,234.44515,1.002
+"grep -rE '^(import|from) ' .",277.45710,275.43812,0.993
+"grep -rin 'return [a-z_]*;$' Documentation",4.39962,4.38881,0.998
+"grep -rv e drivers/usb",21.67756,21.66197,0.999
+"grep -r '\(separately\).*\1' .",10.10390,10.05892,0.996
+"grep -n mispredicted include/linux/*.h",1.31994,1.31657,0.997
+"grep -l separately include/linux/*.h",1.54952,1.55544,1.004
+"grep -c qdbzzabsentterm include/linux/*.h",0.70262,0.70185,0.999
+"grep -rl conditions . | wc -l",37.32825,37.60975,1.008
+"grep -rc define . | grep -v ':0$' | wc -l",331.99118,326.80918,0.984
+"find . -name '*.h' | wc -l",10.90875,10.92702,1.002
+"find . -type f | grep -c h",14.68405,14.69390,1.001
+"grep -rn define . | head -n 5",0.03205,0.03288,1.026
+"grep -rn conditions . | head -n 1",0.05257,0.05308,1.010
+"find . -type f | head -n 3",0.07621,0.07602,0.998
+"cat include/linux/*.h | head -n 2",0.39000,0.39311,1.008
+"grep -rno separately .",7.89772,7.82053,0.990
+"grep -rw separately .",6.58659,6.55827,0.996
+"grep -rnw mispredicted .",1.90661,1.91487,1.004
+"grep -rn -C 2 mispredicted .",2.21043,2.23156,1.010
+"grep -rn -A 1 -B 1 separately .",22.12424,21.86169,0.988
+"grep -rho 'atomic_[a-z_]*' . | sort | uniq -c | sort -rn | head",66.44294,67.45299,1.015
+"grep -rhow '[a-z]*mispredicted[a-z]*' . | sort | uniq -c | sort -rn | head -n 5",2.40924,2.41102,1.001
+"rg -j 1 qdbzzabsentterm",0.09066,0.09152,1.009
+"rg -j 1 ausgabenspezifisches",0.15262,0.15360,1.006
+"rg -j 1 mispredicted",2.16002,2.15887,0.999
+"rg -j 1 separately",15.42252,15.46847,1.003
+"rg -j 1 conditions",129.75706,130.02502,1.002
+"rg -j 1 define",523.82998,529.97817,1.012
+"rg -j 1 -l separately",8.36323,8.35853,0.999
+"rg -j 1 -l define",130.45487,130.06990,0.997
+"rg -j 1 -c conditions",131.30598,132.01869,1.005
+"rg -j 1 -i MISPREDICTED",23.32204,23.55120,1.010
+"rg -j 1 -w separately",26.08678,25.71125,0.986
+"rg -j 1 -F 'separately'",11.14291,11.11231,0.997
+"rg -j 1 -n -C 2 mispredicted",3.02527,3.05484,1.010
+"rg -j 1 'atomic_[a-z]+\('",63.30052,62.19656,0.983
+"rg -j 1 'mispredicted|ausgabenspezifisches'",2.87884,2.89426,1.005
+"rg -j 1 '\bmispredicted\w*'",7.19253,7.21371,1.003
+"rg -j 1 -t c separately",9.54938,9.48278,0.993
+"rg -j 1 -g '*.h' separately",5.36849,5.39685,1.005
+"rg -j 1 separately Documentation",11.90899,11.94781,1.003
+"rg -j 1 -uu separately",6.59293,6.62114,1.004
+"rg -j 1 --sort path mispredicted",2.19226,2.19577,1.002
+"rg -j 1 --files | wc -l",78.60904,77.68196,0.988
+"rg -j 1 -l conditions | wc -l",110.29876,110.76693,1.004
+"ls -ltR",52.24406,51.96814,0.995
+"ls -lt include/linux",0.86139,0.86758,1.007
+"ls -ltr Documentation | tail -n 3",0.06559,0.06627,1.010
+"find . -newer include/linux/kernfs.h",8.64388,8.61818,0.997
+"find . -newer include/linux/kernfs.h -name '*.h'",9.23272,9.24831,1.002
+"find . -type f -mtime +30",8.35822,8.34828,0.999
+"du -s .",0.00227,0.00290,1.276
+"du -sh Documentation",0.00250,0.00318,1.268
+"du -sb .",0.00224,0.00290,1.295
+"du -sb Documentation",0.00241,0.00304,1.261
+"du -b -d 1 Documentation",0.01006,0.01072,1.065
+"sort include/linux/kernfs.h",0.04126,0.04181,1.013
+"sort -r include/linux/kernfs.h | head -n 3",0.04395,0.04477,1.019
+"sort -u include/linux/kernfs.h | wc -l",0.04663,0.04728,1.014
+"sort -k 2 include/linux/kernfs.h | tail -n 3",0.06386,0.06499,1.018
+"cat include/linux/*.h | sort | uniq -c | sort -rn | head -n 5",159.86914,157.05132,0.982
+"uniq -c include/linux/kernfs.h | wc -l",0.02954,0.03047,1.031
+"cut -c 1-20 include/linux/kernfs.h",0.02003,0.02096,1.047
+"cut -d ' ' -f 1 include/linux/kernfs.h | sort | uniq | wc -l",0.08292,0.08435,1.017
+"tr a-z A-Z < include/linux/kernfs.h",0.00480,0.00574,1.194
+"tr -d '\n' < include/linux/kernfs.h | wc -c",0.01311,0.01398,1.066
+"tr -s ' ' < include/linux/kernfs.h | wc -c",0.01770,0.01855,1.048
+"nl include/linux/kernfs.h",0.06073,0.06147,1.012
+"nl -ba include/linux/kernfs.h | tail -n 3",0.07014,0.07096,1.012
+"seq 1 100000 | wc -l",3.01459,3.01533,1.000
+"seq -w 1 1000 | tail -n 2",0.03675,0.03751,1.021
+"basename include/linux/kernfs.h",0.00200,0.00259,1.295
+"basename -s .h include/linux/kernfs.h",0.00282,0.00357,1.267
+"dirname include/linux/kernfs.h",0.00206,0.00264,1.282
+"printf '%s\n' a b c",0.00286,0.00355,1.241
+"printf '%05d %-8s|%x\n' 42 name 255",0.00332,0.00397,1.196
+"test -f include/linux/kernfs.h && echo yes",0.00380,0.00452,1.190
+"[ -d Documentation ] && echo folder",0.00431,0.00499,1.158
+"date -u -d '2024-02-29 12:00:00' '+%Y-%m-%d %H:%M:%S %s %a'",0.00477,0.00546,1.143
+"echo a b c | xargs -n 1 echo",0.00595,0.00668,1.122
+"find drivers/usb -name '*.h' | xargs cat | wc -l",0.43820,0.44638,1.019
+"find . -name '*.h' | xargs grep -l separately | wc -l",44.49596,43.92217,0.987
+"echo {a,b,c}{1..3}",0.00538,0.00611,1.135
+"echo {1..20..3} {a..e}",0.00616,0.00674,1.094
+"echo $(wc -l < include/linux/kernfs.h) `basename include/linux/kernfs.h`",0.00954,0.01030,1.079
+"echo ""first line: $(head -n 1 include/linux/kernfs.h)""",0.00657,0.00723,1.100
+"wc -l < include/linux/kernfs.h",0.00344,0.00421,1.222
+"cat include/linux/kernfs.h > /dev/null 2>&1",0.00273,0.00335,1.229
+"cat qdb_no_such_file 2> /dev/null ; echo after",0.00428,0.00494,1.156
+"cat qdb_no_such_file 2>&1 | wc -l",0.00470,0.00540,1.150
+"grep -q define include/linux/kernfs.h && echo found || echo none",0.01481,0.01565,1.057
+"false || echo fallback",0.00286,0.00351,1.225
+"true && grep -c define include/linux/kernfs.h",0.01477,0.01563,1.058
+"cat <<EOF⏎one $(echo two)⏎three⏎EOF",0.00472,0.00539,1.143
+"wc -l <<'EOF'⏎a⏎b⏎EOF",0.00254,0.00313,1.231
+"echo one \⏎two",0.00205,0.00266,1.300
+"grep -c define include/linux/kernfs.h⏎wc -l include/linux/kernfs.h",0.01600,0.01677,1.048
+"for i in $(seq 100000); do :; done",38.58681,38.89365,1.008
+"i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done; echo $i",26.15301,25.74718,0.984
+"i=10; until [ $i -eq 0 ]; do i=$((i-1)); done; echo $i",0.03195,0.03259,1.020
+"for f in include/linux/*.h; do echo ""$f""; done | wc -l",1.42805,1.43176,1.003
+"for f in include/linux/*.h; do grep -c define ""$f""; done | sort -n | tail -n 3",18.20391,18.26883,1.004
+"n=0; for f in include/linux/*.h; do if grep -q conditions ""$f""; then n=$((n+1)); fi; done; echo $n",27.96087,27.96178,1.000
+"for f in include/linux/*.h; do if [ -s ""$f"" ]; then continue; fi; echo ""$f""; done",3.25412,3.32953,1.023
+"H=$PWD; for d in Documentation drivers/usb include/linux; do cd ""$d""; ls | wc -l; cd ""$H""; done",0.05947,0.06190,1.041
+"X=define; N=$(grep -c ""$X"" include/linux/kernfs.h); echo ""$X: $((N * 2)) ${#X} ${N:-none}""",0.02022,0.02123,1.050
+"find drivers/usb -name '*.h' | while read -r f; do wc -l < ""$f""; done | sort -n | tail -n 1",0.82369,0.81369,0.988
+"for f in include/linux/*.h; do head -n 1 ""$f""; done > /dev/null",2.38053,2.38084,1.000
+"for i in 1 2 3; do for j in a b; do if [ $i -eq 2 ]; then break; fi; echo $i$j; done; done",0.01860,0.01947,1.047
+"awk '{ print $2 }' include/linux/kernfs.h",0.03965,0.04000,1.009
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk '{ print $2 }' | wc -l",32.80236,32.72649,0.998
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk '/define/ { n++ } END { print n }'",22.44100,22.56823,1.006
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk '{ s += NF } END { print s, NR }'",44.89096,45.34722,1.010
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk -F: '{ s += $3 } END { print s }'",24.28461,24.23917,0.998
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk 'FNR == 1 { print FILENAME }' | wc -l",20.02329,19.88263,0.993
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk 'length($0) > 100 { n++ } END { print n + 0 }'",20.16480,20.00105,0.992
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk '{ c[$1]++ } END { for (k in c) n++; print n }'",52.46460,53.15429,1.013
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk '{ for (i = 1; i <= NF; i++) if ($i == ""define"") n++ } END { print n }'",147.09526,146.69475,0.997
+"awk '{ gsub(/[0-9]+/, ""N""); print }' include/linux/kernfs.h | wc -c",0.31042,0.31103,1.002
+"awk -v OFS=- '{ $1 = NR; print }' include/linux/kernfs.h | tail -n 1",0.23591,0.23175,0.982
+"awk 'BEGIN { for (i = 0; i < 100000; i++) s += i * i; printf ""%d\n"", s }'",5.37381,5.36634,0.999
+"grep -rn separately . | awk -F: '{ print $1 }' | uniq -c | sort -rn | head -n 5",9.19505,9.20974,1.002
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5",90.87721,90.75936,0.999

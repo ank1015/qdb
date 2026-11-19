@@ -360,7 +360,12 @@ the construct's output so far.
 
 ## Where to read next
 
-- `docs/briefs/`: the three briefs this was built from.
+- `docs/briefs/`: the briefs this was built from.
+- `docs/HANDBACK-5.md`: stage 5. The shell constructs, diff and awk,
+  every target with its measured value, the cost report (what uses the
+  CPU, what waits for the disk, what runs short first), what is still
+  refused, and questions. `bench/results/TARGETS-5.md` has the figures.
+- `docs/HANDBACK-4.md`: the same for stage 4.
 - `docs/HANDBACK-3.md`: stage 3. What was built, every target with its
   measured value, the crash tests and every fault they found, disk and
   memory in numbers, write costs, the comparison of the switches,

@@ -164,19 +164,19 @@ text_bytes	text_pieces	index_bytes	index_lookups	tree_nodes	content_written	reco
 99065	17	0	0	55	0	0	0	0	0	6435	for f in src/*.c; do head -n 1 "$f"; done > /dev/null
 0	0	0	0	40	0	0	0	0	0	9474	for i in 1 2 3; do for j in a b; do if [ $i -eq 2 ]; then break; fi; echo $i$j; done; done
 11666	1	0	0	2	0	0	0	0	0	9692	awk '{ print $2 }' src/main.c
-99065	17	0	0	55	0	0	0	0	0	47475	awk '{ print $2 }' src/*.c | wc -l
-99065	17	0	0	55	0	0	0	0	0	18974	awk '/kadifo/ { n++ } END { print n }' src/*.c
-99065	17	0	0	55	0	0	0	0	0	7826	awk '{ s += NF } END { print s, NR }' src/*.c
-99065	17	0	0	55	0	0	0	0	0	7990	awk -F: '{ s += $3 } END { print s }' src/*.c
-99065	17	0	0	55	0	0	0	0	0	9627	awk 'FNR == 1 { print FILENAME }' src/*.c | wc -l
-99065	17	0	0	55	0	0	0	0	0	7820	awk 'length($0) > 100 { n++ } END { print n + 0 }' src/*.c
-99065	17	0	0	55	0	0	0	0	0	106584	awk '{ c[$1]++ } END { for (k in c) n++; print n }' src/*.c
-99065	17	0	0	55	0	0	0	0	0	8671	awk '{ for (i = 1; i <= NF; i++) if ($i == "kadifo") n++ } END { print n }' src/*.c
+99065	17	0	0	89	0	0	0	0	0	104958	cat src/*.c | tr -cd '[:print:][:space:]' | awk '{ print $2 }' | wc -l
+99065	17	0	0	89	0	0	0	0	0	102166	cat src/*.c | tr -cd '[:print:][:space:]' | awk '/kadifo/ { n++ } END { print n }'
+99065	17	0	0	89	0	0	0	0	0	97266	cat src/*.c | tr -cd '[:print:][:space:]' | awk '{ s += NF } END { print s, NR }'
+99065	17	0	0	89	0	0	0	0	0	97430	cat src/*.c | tr -cd '[:print:][:space:]' | awk -F: '{ s += $3 } END { print s }'
+99065	17	0	0	89	0	0	0	0	0	97946	cat src/*.c | tr -cd '[:print:][:space:]' | awk 'FNR == 1 { print FILENAME }' | wc -l
+99065	17	0	0	89	0	0	0	0	0	97260	cat src/*.c | tr -cd '[:print:][:space:]' | awk 'length($0) > 100 { n++ } END { print n + 0 }'
+99065	17	0	0	89	0	0	0	0	0	184208	cat src/*.c | tr -cd '[:print:][:space:]' | awk '{ c[$1]++ } END { for (k in c) n++; print n }'
+99065	17	0	0	89	0	0	0	0	0	98111	cat src/*.c | tr -cd '[:print:][:space:]' | awk '{ for (i = 1; i <= NF; i++) if ($i == "kadifo") n++ } END { print n }'
 11666	1	0	0	2	0	0	0	0	0	45681	awk '{ gsub(/[0-9]+/, "N"); print }' src/main.c | wc -c
 11666	1	0	0	2	0	0	0	0	0	29178	awk -v OFS=- '{ $1 = NR; print }' src/main.c | tail -n 1
 0	0	0	0	0	0	0	0	0	0	5634	awk 'BEGIN { for (i = 0; i < 100000; i++) s += i * i; printf "%d\n", s }'
 43407	10	832	12	16	0	0	0	0	0	78153	grep -rn cojokane . | awk -F: '{ print $1 }' | uniq -c | sort -rn | head -n 5
-99065	17	0	0	89	0	0	0	0	0	312286	cat src/*.c | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5
+99065	17	0	0	89	0	0	0	0	0	343737	cat src/*.c | tr -cd '[:print:][:space:]' | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5
 0	0	0	0	3	0	103	0	1	0	1140976	mkdir -p bench_out/a/b
 0	0	0	0	3	0	67	0	1	0	2215	touch bench_out/empty.txt
 0	0	0	0	3	52	89	0	1	0	7622	echo 'hello world' > bench_out/hello.txt

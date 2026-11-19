@@ -1,0 +1,225 @@
+command,kind,gnu_ms,rg_ms,engine_ms,output_bytes,peak_bytes,agree,index_work,text_bytes,text_pieces,index_bytes,index_lookups,tree_nodes,content_written,records_written,upkeep_written,syncs,scratch_bytes,memory,cpu_us,elapsed_us
+"ls",read,2.4879,,0.0033,288,3456,"yes","",0,0,0,0,29,0,421,0,1,0,3196,458,1953
+"ls -a",read,2.4750,,0.0044,338,3850,"yes","",0,0,0,0,29,0,0,0,0,0,3590,18,17
+"ls -R",read,4.0200,,0.0607,25003,46374,"yes","",0,0,0,0,1745,0,0,0,0,0,46114,180,179
+"ls -aR tests",read,2.6714,,0.0193,4713,15586,"yes","",0,0,0,0,284,0,0,0,0,0,15326,91,91
+"ls -p tests",read,2.4591,,0.0037,118,3411,"yes","",0,0,0,0,13,0,0,0,0,0,3151,16,16
+"find .",read,3.9403,,0.1725,57276,23086,"yes","",0,0,0,0,1770,0,0,0,0,0,22826,331,331
+"find . -name '*.json'",read,4.1242,,0.2271,12431,21293,"yes","",0,0,0,0,1770,0,0,0,0,0,21033,337,337
+"find . -name '*.c'",read,4.1235,,0.2231,12277,17187,"yes","",0,0,0,0,1770,0,0,0,0,0,16927,333,333
+"find . -type d",read,3.8024,,0.1620,2349,7297,"yes","",0,0,0,0,1770,0,0,0,0,0,7037,257,257
+"find . -type f",read,3.9309,,0.1792,54927,28989,"yes","",0,0,0,0,1770,0,0,0,0,0,28729,312,312
+"find . -maxdepth 2 -type f",read,2.8439,,0.0295,4257,10533,"yes","",0,0,0,0,279,0,0,0,0,0,10273,63,63
+"find tests -name '*.json' -type f",read,3.9340,,0.0374,0,4335,"yes","",0,0,0,0,284,0,0,0,0,0,4075,72,70
+"find . -name 'Makefile'",read,3.8742,,0.1651,462,4077,"yes","",0,0,0,0,1770,0,0,0,0,0,3817,258,258
+"cat src/commands/xinfo-stream.json",read,2.4730,,0.0029,17801,2340,"yes","",17801,1,0,0,6,0,0,0,0,0,2080,37,37
+"cat -n src/commands/xinfo-stream.json",read,2.5832,,0.0420,20335,35568,"yes","",17801,1,0,0,6,0,0,0,0,0,35308,92,91
+"head -n 20 src/commands/xinfo-stream.json",read,2.3051,,0.0039,640,3721,"yes","",17801,1,0,0,3,0,0,0,0,0,3461,19,19
+"tail -n 20 src/commands/xinfo-stream.json",read,2.3118,,0.0040,568,3649,"yes","",53403,3,0,0,3,0,0,0,0,0,3389,17,16
+"tail -n +100 src/commands/xinfo-stream.json",read,2.9686,,0.0091,13921,17004,"yes","",35602,2,0,0,3,0,0,0,0,0,16744,45,45
+"wc src/commands/xinfo-stream.json",read,3.3137,,0.0162,49,2527,"yes","",17801,1,0,0,6,0,0,0,0,0,2267,46,46
+"wc -l src/commands/*.json",read,7.6919,,0.3158,14433,72336,"yes","",0,0,0,0,2838,0,0,0,0,0,72076,420,419
+"cat src/commands/*.json | wc -l",read,10.1136,,0.3028,6,72985,"yes","",738271,405,0,0,2838,0,0,0,0,0,72725,465,465
+"cat src/commands/xinfo-stream.json | head -n 50 | tail -n 10",read,2.9330,,0.0082,261,10008,"yes","",17801,1,0,0,6,0,0,0,0,0,9748,31,31
+"grep -c for src/commands/xinfo-stream.json",read,2.6850,,0.0078,2,10286,"yes","",17801,1,0,0,6,0,0,0,0,0,10026,55,55
+"grep -n for src/commands/xinfo-stream.json",read,2.5305,,0.0112,330,10286,"yes","",17801,1,0,0,6,0,0,0,0,0,10026,45,45
+"sed 's/for/XX/g' src/commands/xinfo-stream.json",read,2.7318,,0.0362,17797,32045,"yes","",17801,1,0,0,6,0,0,0,0,0,31785,125,124
+"sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' src/commands/xinfo-stream.json",read,2.7396,,0.0713,17801,48965,"yes","",17801,1,0,0,6,0,0,0,0,0,48705,188,187
+"cat src/commands/xinfo-stream.json | sed 's/^/> /' | wc -c",read,3.1523,,0.1123,6,31872,"yes","",17801,1,0,0,6,0,0,0,0,0,31612,185,185
+"grep -rn qdbzzabsentterm .",read,23.3167,14.0704,0.0187,0,31692,"yes","",0,0,0,26,32,0,0,0,0,0,31432,102,102
+"grep -rl qdbzzabsentterm .",read,15.1897,13.6397,0.0188,0,31692,"yes","",0,0,0,26,32,0,0,0,0,0,31432,94,93
+"grep -rn nestedcallreplyarray .",read,22.8476,13.5291,0.0544,165,42091,"yes","",279203,28,10351,36,49,0,0,0,0,0,41831,217,217
+"grep -rl nestedcallreplyarray .",read,14.2966,12.4294,0.0528,25,42091,"yes","",279203,28,10351,36,49,0,0,0,0,0,41831,222,222
+"grep -rn xmallctlmibnametomib .",read,20.6565,13.2335,0.0399,206,42091,"yes","",184256,23,6147,34,49,0,0,0,0,0,41831,192,191
+"grep -rl xmallctlmibnametomib .",read,13.9764,12.3340,0.0362,76,42091,"yes","",184256,23,6147,34,49,0,0,0,0,0,41831,163,163
+"grep -rn implementing .",read,22.6059,13.2505,0.6161,2538,29279,"yes","",9187946,278,9477,20,49,0,0,0,0,0,29019,1682,1682
+"grep -rl implementing .",read,16.2061,13.1541,0.5521,371,29279,"yes","",8604984,268,9477,20,49,0,0,0,0,0,29019,1470,1470
+"grep -rn between .",read,30.7702,15.0138,0.6953,45423,28015,"yes","",7349125,227,1343,10,49,0,0,0,0,0,27755,1559,1560
+"grep -rl between .",read,16.5832,12.1244,0.1544,4657,27635,"yes","",4833164,180,1343,10,49,0,0,0,0,0,27375,537,537
+"grep -rn for .",read,45.5026,25.7189,4.1539,1815073,27851,"yes","",17378691,1770,0,0,1770,0,0,0,0,0,27591,6582,6583
+"grep -rl for .",read,11.8651,15.1528,0.3101,35617,10198,"yes","",12877317,1672,0,0,1770,0,0,0,0,0,9938,841,941
+"grep -rc implementing .",read,15.7473,12.2408,0.9369,58271,48505,"yes","",9187946,278,9477,20,1770,0,0,0,0,0,48245,2078,2079
+"grep -rin XMALLCTLMIBNAMETOMIB .",read,21.3461,14.8843,0.0571,206,42092,"yes","",184256,23,6147,34,49,0,0,0,0,0,41832,270,269
+"grep -ri implementing .",read,17.4695,14.5928,0.8897,2754,29267,"yes","",9187946,278,9477,20,49,0,0,0,0,0,29007,2077,2078
+"grep -rn implementing tests",read,5.7853,5.0300,0.1134,200,26706,"yes","",788264,68,9477,20,285,0,0,0,0,0,26446,241,241
+"grep -rl between tests",read,5.1407,4.7645,0.0588,722,17401,"yes","",815756,36,1343,10,285,0,0,0,0,0,17141,222,222
+"grep -rF 'implementing' .",read,16.2295,15.4085,0.5794,2435,29277,"yes","",9187946,278,9477,20,49,0,0,0,0,0,29017,1986,1986
+"grep -rE 'arena_[a-z]+\(' .",read,21.4433,15.6512,0.5340,24719,30332,"yes","",1358939,111,2191,8,49,0,0,0,0,0,30072,841,841
+"grep -rE 'xmallctlmibnametomib|nestedcallreplyarray' .",read,31.8578,16.2029,0.1111,355,78972,"yes","",520332,44,16498,70,63,0,0,0,0,0,78712,341,341
+"grep -rE 'between|implementing' .",read,43.5222,16.6502,1.2913,46174,40110,"yes","",10676583,366,10820,30,1770,0,0,0,0,0,39850,2570,2570
+"grep -rE '[0-9]{4,}' .",read,31.5563,29.1890,23.4162,798667,36272,"yes","",17378691,1770,0,0,1770,0,0,0,0,0,36012,25866,25886
+"grep -rn '^#include' .",read,31.2553,17.6504,1.1018,172358,25524,"yes","",9026487,674,5680,12,1770,0,0,0,0,0,25264,2149,2149
+"grep -rE '^(import|from) ' .",read,25.2677,15.2419,2.4568,8992,30322,"yes","",17378691,1770,0,0,1770,0,0,0,0,0,30062,4075,4075
+"grep -rin 'return [a-z_]*;$' tests",read,8.9058,6.7699,0.7439,53924,30004,"yes","",2160546,157,5109,10,285,0,0,0,0,0,29744,1233,1233
+"grep -rv e .github",read,2.8873,4.0947,0.0798,14937,13135,"yes","",71159,15,0,0,19,0,0,0,0,0,12875,144,144
+"grep -r '\(implementing\).*\1' .",read,16.8952,,0.7180,0,33428,"yes","",9187946,278,9477,20,49,0,0,0,0,0,33168,1633,1633
+"grep -n xmallctlmibnametomib src/commands/*.json",read,4.4252,,0.2229,0,73078,"yes","",82829,47,6147,34,1623,0,0,0,0,0,72818,310,310
+"grep -l implementing src/commands/*.json",read,5.0723,,0.2461,0,73022,"yes","",130001,83,9477,20,1623,0,0,0,0,0,72762,399,399
+"grep -c qdbzzabsentterm src/commands/*.json",read,4.4315,,0.2158,12395,73037,"yes","",0,0,0,26,1623,0,0,0,0,0,72777,362,362
+"grep -rl between . | wc -l",read,18.3804,,0.2938,4,30064,"yes","",4833164,180,1343,10,49,0,0,0,0,0,29804,633,633
+"grep -rc for . | grep -v ':0$' | wc -l",read,34.8025,,2.4862,5,16398,"yes","",17378691,1770,0,0,1770,0,0,0,0,0,16138,3732,3733
+"find . -name '*.json' | wc -l",read,5.4874,,0.2210,4,23722,"yes","",0,0,0,0,1770,0,0,0,0,0,23462,320,320
+"find . -type f | grep -c json",read,4.9369,,0.2709,4,41689,"yes","",0,0,0,0,1770,0,0,0,0,0,41429,400,400
+"grep -rn for . | head -n 5",read,3.4527,,0.0156,502,12959,"order differs","",1661,6,0,0,40,0,0,0,0,0,12699,77,77
+"grep -rn between . | head -n 1",read,5.5083,,0.0235,191,20147,"order differs","",1661,6,0,0,40,0,0,0,0,0,19887,84,83
+"find . -type f | head -n 3",read,3.7500,,0.0780,82,31750,"order differs","",0,0,0,0,481,0,0,0,0,0,31490,171,171
+"cat src/commands/*.json | head -n 2",read,3.5309,,0.1613,15,73341,"yes","",17126,15,0,0,498,0,0,0,0,0,73081,271,271
+"grep -rno implementing .",read,23.4927,16.2981,0.6627,961,37472,"yes","",9187946,278,9477,20,49,0,0,0,0,0,37212,1645,1645
+"grep -rw implementing .",read,17.0312,13.1130,0.6823,2435,41075,"yes","",9187946,278,9477,20,49,0,0,0,0,0,40815,1794,1795
+"grep -rnw xmallctlmibnametomib .",read,22.0585,14.1822,0.1256,206,49404,"yes","",184256,23,6147,34,49,0,0,0,0,0,49144,323,323
+"grep -rn -C 2 xmallctlmibnametomib .",read,22.2627,29.7274,0.0416,768,42999,"yes","",184812,24,6147,34,49,0,0,0,0,0,42739,197,197
+"grep -rn -A 1 -B 1 implementing .",read,24.7586,39.1189,1.0414,6398,30903,"yes","",10345539,307,9477,20,49,0,0,0,0,0,30643,2349,2350
+"grep -rho 'arena_[a-z_]*' . | sort | uniq -c | sort -rn | head",read,25.3717,,1.3287,210,214904,"yes","",1358939,111,2191,8,49,0,0,0,0,0,214644,1637,1638
+"grep -rhow '[a-z]*xmallctlmibnametomib[a-z]*' . | sort | uniq -c | sort -rn | head -n 5",read,17.0616,,0.3941,29,77618,"yes","",184256,23,6147,34,49,0,0,0,0,0,77358,617,617
+"rg -j 1 qdbzzabsentterm",read,20.6432,,0.0502,0,30937,"yes","",591,1,0,26,33,0,0,0,0,0,30677,175,175
+"rg -j 1 nestedcallreplyarray",read,20.1024,,0.0853,152,40979,"yes","",172857,5,10351,36,16,0,0,0,0,0,40719,243,243
+"rg -j 1 xmallctlmibnametomib",read,19.8333,,0.2661,195,101810,"yes","",114452,5,6147,34,36,0,0,0,0,0,101550,506,505
+"rg -j 1 implementing",read,23.7745,,1.4876,2383,117774,"yes","",9106087,261,9477,20,140,0,0,0,0,0,117514,2703,2704
+"rg -j 1 between",read,19.6894,,1.2988,42745,139421,"yes","",7342112,219,1343,10,140,0,0,0,0,0,139161,2339,2339
+"rg -j 1 for",read,28.7970,,4.1723,1694174,145131,"yes","",17266677,1740,0,0,2117,0,0,0,0,0,144871,6324,6325
+"rg -j 1 -l implementing",read,20.7550,,0.8860,337,115528,"yes","",8523125,251,9477,20,140,0,0,0,0,0,115268,1892,1891
+"rg -j 1 -l for",read,20.7917,,1.6884,32905,144917,"yes","",12765303,1642,0,0,2117,0,0,0,0,0,144657,2243,2244
+"rg -j 1 -c between",read,18.7555,,0.8265,4622,119239,"yes","",7342112,219,1343,10,140,0,0,0,0,0,118979,1614,1614
+"rg -j 1 -i XMALLCTLMIBNAMETOMIB",read,21.1941,,0.6312,195,125016,"yes","",114452,5,6147,34,36,0,0,0,0,0,124756,853,853
+"rg -j 1 -w implementing",read,20.4193,,2.0083,2383,141704,"yes","",9106087,261,9477,20,140,0,0,0,0,0,141444,3693,3693
+"rg -j 1 -F 'implementing'",read,19.2384,,0.9852,2383,118326,"yes","",9106087,261,9477,20,140,0,0,0,0,0,118066,2002,2003
+"rg -j 1 -n -C 2 xmallctlmibnametomib",read,19.8437,,0.2525,748,104160,"yes","",115008,6,6147,34,36,0,0,0,0,0,103900,445,445
+"rg -j 1 'arena_[a-z]+\('",read,19.2561,,0.9505,24155,137721,"yes","",1351715,99,2191,8,60,0,0,0,0,0,137461,1375,1414
+"rg -j 1 'xmallctlmibnametomib|nestedcallreplyarray'",read,27.8761,,0.4261,347,116184,"yes","",286718,9,16498,70,48,0,0,0,0,0,115924,664,664
+"rg -j 1 '\bxmallctlmibnametomib\w*'",read,27.5248,,5.8513,195,2622867,"yes","",114452,5,6147,34,36,0,0,0,0,0,2622607,6472,6473
+"rg -j 1 -t c implementing",read,19.7991,,1.2881,2288,119970,"yes","",6912746,201,9477,20,140,0,0,0,0,0,119710,2255,2256
+"rg -j 1 -g '*.json' implementing",read,11.2818,,1.6497,0,115662,"yes","",2866,7,9477,20,1038,0,0,0,0,0,115402,1786,1786
+"rg -j 1 implementing tests",read,7.1196,,0.5801,195,32603,"yes","",669476,27,9477,20,373,0,0,0,0,0,32343,811,810
+"rg -j 1 -uu implementing",read,13.9414,,0.7863,2383,37178,"yes","",9103221,254,9477,20,0,0,0,0,0,0,36918,1669,1669
+"rg -j 1 --sort path xmallctlmibnametomib",read,19.8079,,0.1650,195,102732,"yes","",114452,5,6147,34,36,0,0,0,0,0,102472,378,378
+"rg -j 1 --files | wc -l",read,10.2961,,1.3248,5,144598,"yes","",3002,14,0,0,2117,0,0,0,0,0,144338,1571,1571
+"rg -j 1 -l between | wc -l",read,19.6356,,0.5587,4,121658,"yes","",4826151,172,1343,10,140,0,0,0,0,0,121398,984,1098
+"ls -ltR",read,9.6212,,0.8871,94783,70800,"yes","",0,0,0,0,5206,0,0,0,0,0,70540,1113,1113
+"ls -lt src/commands",read,5.5074,,0.1912,22581,48583,"yes","",0,0,0,0,814,0,0,0,0,0,48323,278,277
+"ls -ltr tests | tail -n 3",read,3.7280,,0.0216,145,7003,"yes","",0,0,0,0,317,0,0,0,0,0,6743,70,70
+"find . -newer src/commands/xinfo-stream.json",read,5.2590,,0.1704,13712,28026,"yes","",0,0,0,0,1773,0,0,0,0,0,27766,373,373
+"find . -newer src/commands/xinfo-stream.json -name '*.json'",read,4.3661,,0.1904,0,4753,"yes","",0,0,0,0,1773,0,0,0,0,0,4493,276,276
+"find . -type f -mtime +30",read,5.4306,,0.1795,0,4374,"yes","",0,0,0,0,1770,0,0,0,0,0,4114,241,241
+"du -s .",read,4.5280,,0.0046,8,2700,"not compared","",0,0,0,0,1770,0,0,0,0,0,7257,91,91
+"du -sh tests",read,2.8660,,0.0050,11,2729,"not compared","",0,0,0,0,1,0,0,0,0,0,2469,19,19
+"du -sb .",read,4.4565,,0.0046,11,2712,"yes","",0,0,0,0,1770,0,0,0,0,0,8842,108,108
+"du -sb tests",read,2.7582,,0.0030,14,2730,"yes","",0,0,0,0,1,0,0,0,0,0,2470,14,13
+"du -b -d 1 tests",read,2.8912,,0.0049,191,4070,"yes","",0,0,0,0,13,0,0,0,0,0,3810,20,20
+"sort src/commands/xinfo-stream.json",read,3.7175,,0.0368,17801,99253,"yes","",17801,1,0,0,6,0,0,0,0,0,98993,119,119
+"sort -r src/commands/xinfo-stream.json | head -n 3",read,3.4413,,0.0412,10,102376,"yes","",17801,1,0,0,6,0,0,0,0,0,102116,112,112
+"sort -u src/commands/xinfo-stream.json | wc -l",read,3.4099,,0.0412,4,112756,"yes","",17801,1,0,0,6,0,0,0,0,0,112496,115,115
+"sort -k 2 src/commands/xinfo-stream.json | tail -n 3",read,3.4016,,0.0594,73,120371,"yes","",17801,1,0,0,6,0,0,0,0,0,120111,134,134
+"cat src/commands/*.json | sort | uniq -c | sort -rn | head -n 5",read,20.0943,,4.8209,116,2319749,"yes","",738271,405,0,0,2838,0,0,0,0,0,2319489,5412,5632
+"uniq -c src/commands/xinfo-stream.json | wc -l",read,3.4137,,0.0243,4,38324,"yes","",17801,1,0,0,3,0,0,0,0,0,38064,65,65
+"cut -c 1-20 src/commands/xinfo-stream.json",read,3.0198,,0.0184,7374,19392,"yes","",17801,1,0,0,3,0,0,0,0,0,19132,73,73
+"cut -d ' ' -f 1 src/commands/xinfo-stream.json | sort | uniq | wc -l",read,4.1149,,0.0712,2,87877,"yes","",17801,1,0,0,3,0,0,0,0,0,87617,120,120
+"tr a-z A-Z < src/commands/xinfo-stream.json",read,3.2309,,0.0057,17801,22908,"yes","",17801,1,0,0,3,0,0,0,0,0,22648,46,46
+"tr -d '\n' < src/commands/xinfo-stream.json | wc -c",read,3.2420,,0.0135,6,25331,"yes","",17801,1,0,0,3,0,0,0,0,0,25071,40,39
+"tr -s ' ' < src/commands/xinfo-stream.json | wc -c",read,3.3562,,0.0179,5,31870,"yes","",17801,1,0,0,3,0,0,0,0,0,31610,43,43
+"nl src/commands/xinfo-stream.json",read,3.2788,,0.0434,20335,35301,"yes","",17801,1,0,0,3,0,0,0,0,0,35041,96,96
+"nl -ba src/commands/xinfo-stream.json | tail -n 3",read,3.4752,,0.0464,39,58784,"yes","",17801,1,0,0,3,0,0,0,0,0,58524,88,88
+"seq 1 100000 | wc -l",read,4.9834,,3.0700,7,136436,"yes","",0,0,0,0,0,0,0,0,0,0,136176,3171,3171
+"seq -w 1 1000 | tail -n 2",read,3.8985,,0.0379,10,19239,"yes","",0,0,0,0,0,0,0,0,0,0,18979,64,64
+"basename src/commands/xinfo-stream.json",read,2.6340,,0.0027,18,2387,"yes","",0,0,0,0,0,0,0,0,0,0,2127,13,12
+"basename -s .json src/commands/xinfo-stream.json",read,3.1002,,0.0035,13,3237,"yes","",0,0,0,0,0,0,0,0,0,0,2977,14,13
+"dirname src/commands/xinfo-stream.json",read,2.6643,,0.0026,13,2376,"yes","",0,0,0,0,0,0,0,0,0,0,2116,11,11
+"printf '%s\n' a b c",read,1.7139,,0.0037,6,3522,"yes","",0,0,0,0,0,0,0,0,0,0,3262,18,17
+"printf '%05d %-8s|%x\n' 42 name 255",read,2.0915,,0.0063,18,3619,"yes","",0,0,0,0,0,0,0,0,0,0,3359,21,21
+"test -f src/commands/xinfo-stream.json && echo yes",read,1.8720,,0.0073,4,3848,"yes","",0,0,0,0,3,0,0,0,0,0,3588,28,28
+"[ -d tests ] && echo folder",read,2.0578,,0.0079,7,4145,"yes","",0,0,0,0,30,0,0,0,0,0,3885,28,28
+"date -u -d '2024-02-29 12:00:00' '+%Y-%m-%d %H:%M:%S %s %a'",read,2.6472,,0.0054,35,3709,"yes","",0,0,0,0,0,0,0,0,0,0,3449,22,22
+"echo a b c | xargs -n 1 echo",read,6.9442,,0.0067,6,6367,"yes","",0,0,0,0,0,0,0,0,0,0,6107,27,26
+"find .github -name '*.json' | xargs cat | wc -l",read,4.9357,,0.0102,2,7582,"yes","",0,0,0,0,18,0,0,0,0,0,7322,57,57
+"find . -name '*.json' | xargs grep -l implementing | wc -l",read,7.7409,,0.6219,2,116795,"yes","",127887,82,9477,20,2988,0,0,0,0,0,116535,906,906
+"echo {a,b,c}{1..3}",read,1.5930,,0.0060,27,5917,"yes","",0,0,0,0,0,0,0,0,0,0,5657,25,25
+"echo {1..20..3} {a..e}",read,1.5820,,0.0068,28,5303,"yes","",0,0,0,0,0,0,0,0,0,0,5043,23,23
+"echo $(wc -l < src/commands/xinfo-stream.json) `basename src/commands/xinfo-stream.json`",read,4.8601,,0.0106,22,8011,"yes","",17801,1,0,0,3,0,0,0,0,0,7751,48,47
+"echo ""first line: $(head -n 1 src/commands/xinfo-stream.json)""",read,3.3298,,0.0076,14,6677,"yes","",17801,1,0,0,3,0,0,0,0,0,6417,33,33
+"wc -l < src/commands/xinfo-stream.json",read,3.3353,,0.0040,4,3369,"yes","",17801,1,0,0,3,0,0,0,0,0,3109,25,25
+"cat src/commands/xinfo-stream.json > /dev/null 2>&1",read,3.2171,,0.0033,0,3486,"yes","",17801,1,0,0,6,0,0,0,0,0,3226,20,19
+"cat qdb_no_such_file 2> /dev/null ; echo after",read,2.8729,,0.0051,6,4419,"yes","",0,0,0,0,2,0,0,0,0,0,4159,25,25
+"cat qdb_no_such_file 2>&1 | wc -l",read,2.9249,,0.0053,2,5445,"yes","",0,0,0,0,2,0,0,0,0,0,5185,25,25
+"grep -q for src/commands/xinfo-stream.json && echo found || echo none",read,2.8415,,0.0095,6,12479,"yes","",17801,1,0,0,6,0,0,0,0,0,12219,56,56
+"false || echo fallback",read,1.5761,,0.0035,9,2970,"yes","",0,0,0,0,0,0,0,0,0,0,2710,13,13
+"true && grep -c for src/commands/xinfo-stream.json",read,2.5815,,0.0093,2,10938,"yes","",17801,1,0,0,6,0,0,0,0,0,10678,49,49
+"cat <<EOF⏎one $(echo two)⏎three⏎EOF",read,3.2051,,0.0057,14,5376,"yes","",0,0,0,0,0,0,0,0,0,0,5116,23,22
+"wc -l <<'EOF'⏎a⏎b⏎EOF",read,2.8886,,0.0031,2,3079,"yes","",0,0,0,0,0,0,0,0,0,0,2819,14,14
+"echo one \⏎two",read,1.6090,,0.0027,8,2596,"yes","",0,0,0,0,0,0,0,0,0,0,2336,9,9
+"grep -c for src/commands/xinfo-stream.json⏎wc -l src/commands/xinfo-stream.json",read,3.8505,,0.0107,37,11712,"yes","",17801,1,0,0,9,0,0,0,0,0,11452,59,59
+"for i in $(seq 100000); do :; done",read,106.7649,,40.9057,0,7815564,"yes","",0,0,0,0,0,0,0,0,0,0,7815304,41479,42695
+"i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done; echo $i",read,30.9678,,25.3708,6,7252,"yes","",0,0,0,0,290029,0,0,0,0,0,6992,25373,25373
+"i=10; until [ $i -eq 0 ]; do i=$((i-1)); done; echo $i",read,1.7149,,0.0320,2,7249,"yes","",0,0,0,0,319,0,0,0,0,0,6989,60,59
+"for f in src/commands/*.json; do echo ""$f""; done | wc -l",read,3.3179,,0.4025,4,48046,"yes","",0,0,0,0,408,0,0,0,0,0,47786,508,507
+"for f in src/commands/*.json; do grep -c for ""$f""; done | sort -n | tail -n 3",read,590.7738,,2.2348,6,97135,"yes","",738271,405,0,0,2838,0,0,0,0,0,96875,2698,2719
+"n=0; for f in src/commands/*.json; do if grep -q between ""$f""; then n=$((n+1)); fi; done; echo $n",read,571.9961,,3.5920,2,49340,"yes","",738271,405,0,0,2838,0,0,0,0,0,49080,3927,4130
+"for f in src/commands/*.json; do if [ -s ""$f"" ]; then continue; fi; echo ""$f""; done",read,3.5176,,0.8467,0,48323,"yes","",0,0,0,0,13368,0,0,0,0,0,48063,953,953
+"H=$PWD; for d in tests .github src/commands; do cd ""$d""; ls | wc -l; cd ""$H""; done",read,7.5947,,0.0332,9,35187,"yes","",0,0,0,0,425,0,0,0,0,0,35023,104,104
+"X=for; N=$(grep -c ""$X"" src/commands/xinfo-stream.json); echo ""$X: $((N * 2)) ${#X} ${N:-none}""",read,3.6205,,0.0149,11,13767,"yes","",17801,1,0,0,6,0,0,0,0,0,13507,82,82
+"find .github -name '*.json' | while read -r f; do wc -l < ""$f""; done | sort -n | tail -n 1",read,3.6641,,0.0205,0,77872,"yes","",0,0,0,0,18,0,0,0,0,0,77612,58,57
+"for f in src/commands/*.json; do head -n 1 ""$f""; done > /dev/null",read,491.6269,,0.6507,0,47295,"yes","",738271,405,0,0,1623,0,0,0,0,0,47035,745,744
+"for i in 1 2 3; do for j in a b; do if [ $i -eq 2 ]; then break; fi; echo $i$j; done; done",read,1.8487,,0.0328,12,9721,"yes","",0,0,0,0,145,0,0,0,0,0,9461,51,50
+"awk '{ print $2 }' src/commands/xinfo-stream.json",read,3.2356,,0.0316,1587,9957,"yes","",17801,1,0,0,3,0,0,0,0,0,9697,81,81
+"cat src/commands/*.json | tr -cd '[:print:][:space:]' | awk '{ print $2 }' | wc -l",read,10.6472,,3.4922,6,128522,"yes","",738271,405,0,0,2838,0,0,0,0,0,128262,3961,3962
+"cat src/commands/*.json | tr -cd '[:print:][:space:]' | awk '/for/ { n++ } END { print n }'",read,9.1768,,1.6771,4,122667,"yes","",738271,405,0,0,2838,0,0,0,0,0,122407,1864,1865
+"cat src/commands/*.json | tr -cd '[:print:][:space:]' | awk '{ s += NF } END { print s, NR }'",read,12.8192,,2.4127,12,121494,"yes","",738271,405,0,0,2838,0,0,0,0,0,121234,2624,2624
+"cat src/commands/*.json | tr -cd '[:print:][:space:]' | awk -F: '{ s += $3 } END { print s }'",read,9.6717,,2.1338,2,119866,"yes","",738271,405,0,0,2838,0,0,0,0,0,119606,3112,3113
+"cat src/commands/*.json | tr -cd '[:print:][:space:]' | awk 'FNR == 1 { print FILENAME }' | wc -l",read,8.9336,,2.5304,2,120382,"yes","",738271,405,0,0,2838,0,0,0,0,0,120122,2360,2361
+"cat src/commands/*.json | tr -cd '[:print:][:space:]' | awk 'length($0) > 100 { n++ } END { print n + 0 }'",read,9.5331,,1.6002,4,119696,"yes","",738271,405,0,0,2838,0,0,0,0,0,119436,1732,1733
+"cat src/commands/*.json | tr -cd '[:print:][:space:]' | awk '{ c[$1]++ } END { for (k in c) n++; print n }'",read,11.6304,,3.9746,4,207700,"yes","",738271,405,0,0,2838,0,0,0,0,0,207440,4242,4257
+"cat src/commands/*.json | tr -cd '[:print:][:space:]' | awk '{ for (i = 1; i <= NF; i++) if ($i == ""for"") n++ } END { print n }'",read,19.3251,,7.0362,4,122333,"yes","",738271,405,0,0,2838,0,0,0,0,0,122073,7036,7315
+"awk '{ gsub(/[0-9]+/, ""N""); print }' src/commands/xinfo-stream.json | wc -c",read,3.8679,,0.2319,6,36786,"yes","",17801,1,0,0,3,0,0,0,0,0,36526,339,339
+"awk -v OFS=- '{ $1 = NR; print }' src/commands/xinfo-stream.json | tail -n 1",read,3.7590,,0.2022,4,20246,"yes","",17801,1,0,0,3,0,0,0,0,0,19986,269,269
+"awk 'BEGIN { for (i = 0; i < 100000; i++) s += i * i; printf ""%d\n"", s }'",read,10.0559,,7.6705,16,5894,"yes","",0,0,0,0,0,0,0,0,0,0,5634,5719,5719
+"grep -rn implementing . | awk -F: '{ print $1 }' | uniq -c | sort -rn | head -n 5",read,25.8752,,0.8140,156,81256,"yes","",9187946,278,9477,20,49,0,0,0,0,0,80996,2198,2199
+"cat src/commands/*.json | tr -cd '[:print:][:space:]' | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5",read,11.6518,,3.0064,144,308932,"yes","",738271,405,0,0,2838,0,0,0,0,0,308672,3287,3406
+"mkdir -p bench_out/a/b",write,2.8831,,6.1521,0,3716,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,0,103,0,1,0,3456,134,6147
+"touch bench_out/empty.txt",write,2.3880,,0.4135,0,2475,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,0,67,0,1,0,2215,91,409
+"echo 'hello world' > bench_out/hello.txt",write,1.7608,,0.3263,0,3706,"yes","documents +1 -0; postings +9; list bytes rewritten 82; rebuilds 0",0,0,0,0,3,52,90,0,1,0,3446,92,323
+"echo 'another line' >> bench_out/hello.txt",write,1.7300,,0.3315,0,3518,"yes","documents +1 -1; postings +19; list bytes rewritten 195; rebuilds 0",24,2,0,0,2,65,63,0,1,0,3258,98,327
+"cp src/commands/xinfo-stream.json bench_out/copy.txt",write,2.7463,,0.3213,0,3299,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,8,0,94,0,1,0,3039,89,317
+"cp -r tests bench_out/dir_copy",write,33.1832,,1.3721,0,177436,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3482,0,15975,0,1,0,177176,719,1364
+"cp -r src/commands bench_out/work",write,60.9898,,1.6131,0,222680,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3661,0,23444,0,1,0,222420,905,1606
+"sed -i 's/for/QDBBENCHONE/g' bench_out/copy.txt",write,3.0414,,1.2010,0,49374,"yes","documents +1 -0; postings +886; list bytes rewritten 1713; rebuilds 0",17801,1,0,0,2,17873,80,0,1,0,49114,531,1197
+"sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt",write,3.2054,,0.9798,0,50832,"yes","documents +1 -1; postings +867; list bytes rewritten 5464; rebuilds 0",17833,1,0,0,2,17873,80,0,1,0,50572,469,977
+"sed -i 's/for/QDBBENCHMANY/g' bench_out/work/*.json",write,77.5582,,14.0446,0,314820,"yes","documents +133 -0; postings +56822; list bytes rewritten 11979; rebuilds 0",738271,405,0,0,1623,330623,8239,0,1,0,314560,10949,14034
+"sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.json",write,140.7011,,3.1187,0,85846,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,26,1623,0,4900,0,1,0,85586,829,3105
+"sed -i 's/xmallctlmibnametomib/QDBBENCHFEW/g' bench_out/work/*.json",write,154.8618,,2.9406,0,89454,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",83027,47,6147,34,1623,0,4900,0,1,0,89194,655,2927
+"cp src/commands/xinfo-stream.json bench_out/same.txt",write,3.4124,,0.5298,0,3151,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,8,0,94,0,1,0,2891,112,522
+"cp src/commands/xinfo-stream.json bench_out/same.txt",write,2.8322,,0.4327,0,2879,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,7,0,40,0,1,0,2619,76,427
+"cat src/commands/xinfo-stream.json > bench_out/same.txt",write,3.7715,,0.4812,0,21275,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",35602,2,0,0,8,0,40,0,1,0,21015,102,475
+"grep -rc QDBBENCHMANY bench_out",write,5.8498,,0.4726,25727,26722,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",346060,135,1347,20,699,0,0,0,0,0,26462,466,466
+"grep -rl QDBBENCHMANY .",write,15.8575,,0.1874,4346,26691,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",335145,147,1347,20,50,0,0,0,0,0,26431,182,182
+"grep -rl QDBBENCHONE .",write,17.5153,,0.0939,21,25024,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",27675,15,872,18,50,0,0,0,0,0,24764,88,87
+"cat src/commands/xinfo-stream.json | tee bench_out/tee.txt | wc -l",write,3.6774,,1.0205,4,42674,"yes","documents +1 -0; postings +878; list bytes rewritten 0; rebuilds 0",17801,1,0,0,9,17841,93,0,1,0,42414,329,1013
+"sort src/commands/xinfo-stream.json > bench_out/sorted.txt",write,3.9994,,1.0457,0,117910,"yes","documents +1 -0; postings +878; list bytes rewritten 0; rebuilds 0",17801,1,0,0,9,17841,96,0,1,0,117650,349,1038
+"sort -u src/commands/xinfo-stream.json >> bench_out/sorted.txt",write,3.9087,,1.1503,0,111347,"yes","documents +1 -1; postings +878; list bytes rewritten 0; rebuilds 0",53403,3,0,0,8,28937,68,0,1,0,111087,433,1145
+"cat qdb_no_such_file &> bench_out/both.txt",write,3.5900,,0.6346,0,3887,"yes","documents +1 -0; postings +42; list bytes rewritten 0; rebuilds 0",0,0,0,0,5,89,89,0,1,0,3627,105,630
+"cat qdb_no_such_file 2>> bench_out/both.txt",write,3.2112,,0.6172,0,3759,"yes","documents +1 -1; postings +42; list bytes rewritten 0; rebuilds 0",98,2,0,0,4,138,63,0,1,0,3499,102,612
+"find .github -name '*.json' | sort | xargs cat > bench_out/joined.txt",write,5.1492,,0.5795,0,73430,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,21,0,68,0,1,0,73170,131,574
+"cp bench_out/joined.txt bench_out/joined2.txt",write,2.7038,,0.4771,0,3795,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,7,0,69,0,1,0,3535,82,473
+"sed -i '1d' bench_out/joined2.txt",write,2.7222,,0.5653,0,3651,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,2,0,52,0,1,0,3391,94,559
+"wc -c bench_out/joined.txt bench_out/joined2.txt bench_out/tee.txt bench_out/sorted.txt",write,3.4307,,0.0265,118,4458,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,16,0,0,0,0,0,4198,22,22
+"cat bench_out/both.txt",write,2.3847,,0.0168,98,2406,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",98,1,0,0,4,0,0,0,0,0,2146,13,13
+"cp src/commands/xinfo-stream.json bench_out/v2.txt",write,2.9610,,0.6268,0,3123,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,8,0,92,0,1,0,2863,103,621
+"sed -i -e '10s/$/ changed/' -e '40,45d' -e '100i an added line' bench_out/v2.txt",write,3.8304,,1.2283,0,46097,"yes","documents +1 -0; postings +867; list bytes rewritten 0; rebuilds 0",17801,1,0,0,2,17674,80,0,1,0,45837,318,1223
+"diff -u --label old --label new src/commands/xinfo-stream.json bench_out/v2.txt",write,3.3897,,0.0921,903,20800,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",212944,12,0,0,5,0,0,0,0,0,20540,89,89
+"diff src/commands/xinfo-stream.json bench_out/v2.txt | wc -l",write,3.4596,,0.0847,3,20591,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",159708,9,0,0,5,0,0,0,0,0,20331,80,80
+"diff -q src/commands/xinfo-stream.json bench_out/same.txt",write,2.7583,,0.0244,0,3331,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,5,0,0,0,0,0,3071,20,20
+"diff -u src/commands/xinfo-stream.json bench_out/copy.txt | wc -l",write,3.3490,,0.1549,4,65872,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",213740,12,0,0,5,0,0,0,0,0,65612,151,151
+"diff -rq tests bench_out/dir_copy",write,5.5711,,0.1752,0,10403,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,569,0,0,0,0,0,10143,171,171
+"sed -i '1s/^/one edit /' $(find bench_out/dir_copy -type f | sort | head -n 1)",write,5.4489,,1.2541,0,132787,"yes","documents +1 -0; postings +897; list bytes rewritten 0; rebuilds 0",2924,1,0,0,288,2973,77,0,1,0,132527,396,1249
+"diff -rq tests bench_out/dir_copy",write,7.2271,,0.1622,62,10465,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",5857,2,0,0,569,0,0,0,0,0,10205,158,158
+"diff -r src/commands bench_out/work | wc -l",write,8.4530,,1.7272,4,86626,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",2916279,1197,0,0,816,0,0,0,0,0,86366,1722,1723
+"diff -ru src/commands bench_out/work | grep -c '^@@'",write,9.1814,,2.0985,4,88694,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",3888372,1596,0,0,816,0,0,0,0,0,88434,2094,2094
+"for i in $(seq 10000); do echo ""line $i"" >> bench_out/loop.txt; done",write,57.9448,,43.8947,0,1755170,"yes","documents +10000 -9994; postings +138134; list bytes rewritten 638191; rebuilds 0",1580743,19993,0,0,20001,1239829,241096,0,1,0,1754910,40165,43887
+"wc -l bench_out/loop.txt",write,3.3460,,0.0236,25,2829,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,2,0,0,0,0,0,2569,18,18
+"for f in bench_out/work/*.json; do echo done >> ""$f""; done",write,6.8071,,2.7197,0,46659,"yes","documents +405 -3; postings +2553; list bytes rewritten 1338; rebuilds 0",750837,408,0,0,1623,28883,14209,0,1,0,46399,1639,2713
+"awk '{ print NR "": "" $0 }' src/commands/xinfo-stream.json > bench_out/numbered.txt",write,5.1802,,1.2853,0,50827,"yes","documents +1 -0; postings +1253; list bytes rewritten 0; rebuilds 0",17801,1,0,0,6,19543,98,0,1,0,50567,433,1278
+"awk 'END { print NR }' bench_out/numbered.txt",write,3.4317,,0.0539,4,5754,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",19503,1,0,0,2,0,0,0,0,0,5494,49,49
+"mv bench_out/dir_copy bench_out/dir_moved",write,2.9591,,0.5213,0,2905,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,8,0,55,0,1,0,2645,102,515
+"mv bench_out/hello.txt bench_out/a/b",write,3.6058,,0.4355,0,3255,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,13,0,67,0,1,0,2995,89,431
+"ls -R bench_out/a",write,2.8594,,0.0167,41,3097,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,4,0,0,0,0,0,2837,14,14
+"rm bench_out/a/b/hello.txt",write,3.2481,,0.4209,0,2413,"yes","documents +0 -1; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,4,0,43,0,1,0,2153,70,418
+"rmdir bench_out/a/b",write,3.5559,,0.3439,0,2292,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,0,43,0,1,0,2032,87,339
+"rm -r bench_out/dir_moved",write,8.4716,,0.4499,0,2712,"yes","documents +0 -1; postings +0; list bytes rewritten 1665; rebuilds 0",0,0,0,0,2,0,892,0,1,0,2452,244,444
+"rm -rf bench_out",write,26.8879,,1.7977,0,4477,"yes","documents +0 -547; postings +0; list bytes rewritten 124020; rebuilds 0",0,0,0,0,1,0,1299,0,1,0,4217,1432,1789

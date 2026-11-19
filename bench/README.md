@@ -90,6 +90,8 @@ themselves:
 | `part4` | After part 4, index on |
 | `paired` | After part 4, `--paired`: each read-only command on the engine alone, with searches using the index and ignoring it by turns in one process |
 
+| `s5-mem`, `s5-disk`, `s5-disk-after`, `s5-disk-cap512` | Stage 5: as the stage 4 runs of the same names, with the commands for loops, awk and diff, and the counters of each command beside its time |
+| `s5-disk-counting` | Stage 5, `--paired-counting`: each read-only command on the engine alone, with the counting of costs on and off by turns in one process |
 | `s3-mem` | Stage 3, in memory |
 | `s3-disk` | Stage 3, `--db`: imported, compacted, closed and opened again (settled); warm file cache |
 | `s3-disk-after` | The same database straight after the command list's writes: the read-only commands again |
@@ -145,3 +147,13 @@ made in a control group limited to 1 GB of memory, file cache included.
 results in their original form.
 
 `--report` rebuilds the tables from the stored runs without measuring.
+
+## What units cost: `results/replay/`
+
+`qdb-replay --db DIR UNITS_FILE` runs a file of units against a database
+and prints two tables of what they cost: by first command and by what
+the unit did. `results/replay/` holds four of them for the Linux tree
+under sync always: three workloads of 20,000 units made by
+`qdb-stress units --reads N` (95, 50 and 5 in a hundred only read) and
+the benchmark command list. Every column but the times is counted and
+repeats exactly. `docs/HANDBACK-5.md` reads them.

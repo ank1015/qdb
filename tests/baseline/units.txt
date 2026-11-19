@@ -163,19 +163,19 @@ find docs/mod_01/mod_02 -name '*.c' | while read -r f; do wc -l < "$f"; done | s
 for f in src/*.c; do head -n 1 "$f"; done > /dev/null
 for i in 1 2 3; do for j in a b; do if [ $i -eq 2 ]; then break; fi; echo $i$j; done; done
 awk '{ print $2 }' src/main.c
-awk '{ print $2 }' src/*.c | wc -l
-awk '/kadifo/ { n++ } END { print n }' src/*.c
-awk '{ s += NF } END { print s, NR }' src/*.c
-awk -F: '{ s += $3 } END { print s }' src/*.c
-awk 'FNR == 1 { print FILENAME }' src/*.c | wc -l
-awk 'length($0) > 100 { n++ } END { print n + 0 }' src/*.c
-awk '{ c[$1]++ } END { for (k in c) n++; print n }' src/*.c
-awk '{ for (i = 1; i <= NF; i++) if ($i == "kadifo") n++ } END { print n }' src/*.c
+cat src/*.c | tr -cd '[:print:][:space:]' | awk '{ print $2 }' | wc -l
+cat src/*.c | tr -cd '[:print:][:space:]' | awk '/kadifo/ { n++ } END { print n }'
+cat src/*.c | tr -cd '[:print:][:space:]' | awk '{ s += NF } END { print s, NR }'
+cat src/*.c | tr -cd '[:print:][:space:]' | awk -F: '{ s += $3 } END { print s }'
+cat src/*.c | tr -cd '[:print:][:space:]' | awk 'FNR == 1 { print FILENAME }' | wc -l
+cat src/*.c | tr -cd '[:print:][:space:]' | awk 'length($0) > 100 { n++ } END { print n + 0 }'
+cat src/*.c | tr -cd '[:print:][:space:]' | awk '{ c[$1]++ } END { for (k in c) n++; print n }'
+cat src/*.c | tr -cd '[:print:][:space:]' | awk '{ for (i = 1; i <= NF; i++) if ($i == "kadifo") n++ } END { print n }'
 awk '{ gsub(/[0-9]+/, "N"); print }' src/main.c | wc -c
 awk -v OFS=- '{ $1 = NR; print }' src/main.c | tail -n 1
 awk 'BEGIN { for (i = 0; i < 100000; i++) s += i * i; printf "%d\n", s }'
 grep -rn cojokane . | awk -F: '{ print $1 }' | uniq -c | sort -rn | head -n 5
-cat src/*.c | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5
+cat src/*.c | tr -cd '[:print:][:space:]' | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5
 mkdir -p bench_out/a/b
 touch bench_out/empty.txt
 echo 'hello world' > bench_out/hello.txt

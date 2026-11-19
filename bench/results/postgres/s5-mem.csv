@@ -1,0 +1,225 @@
+command,kind,gnu_ms,rg_ms,engine_ms,output_bytes,peak_bytes,agree,index_work,text_bytes,text_pieces,index_bytes,index_lookups,tree_nodes,content_written,records_written,upkeep_written,syncs,scratch_bytes,memory,cpu_us,elapsed_us
+"ls",read,2.5257,,0.0029,144,2608,"yes","",0,0,0,0,25,0,0,0,0,0,2348,24,23
+"ls -a",read,2.4315,,0.0042,307,3786,"yes","",0,0,0,0,25,0,0,0,0,0,3526,23,21
+"ls -R",read,11.5065,,0.4252,151758,93386,"yes","",0,0,0,0,9030,0,0,0,0,0,93126,1034,1034
+"ls -aR src/backend",read,3.7974,,0.0831,23120,33080,"yes","",0,0,0,0,1456,0,0,0,0,0,32820,181,181
+"ls -p src/backend",read,2.4592,,0.0046,279,4311,"yes","",0,0,0,0,35,0,0,0,0,0,4051,20,19
+"find .",read,10.7604,,0.9723,347518,30254,"yes","",0,0,0,0,9030,0,0,0,0,0,29994,1854,1854
+"find . -name '*.html'",read,10.8035,,1.2567,49628,20425,"yes","",0,0,0,0,9030,0,0,0,0,0,20165,1856,1856
+"find . -name '*.c'",read,10.8810,,1.2605,54005,35203,"yes","",0,0,0,0,9030,0,0,0,0,0,34943,1770,1770
+"find . -type d",read,9.5570,,0.9418,16825,19737,"yes","",0,0,0,0,9030,0,0,0,0,0,19477,1257,1257
+"find . -type f",read,15.6125,,1.1121,330693,28989,"yes","",0,0,0,0,9030,0,0,0,0,0,28729,1993,1993
+"find . -maxdepth 2 -type f",read,2.7613,,0.0242,992,5710,"yes","",0,0,0,0,133,0,0,0,0,0,5450,85,85
+"find src/backend -name '*.html' -type f",read,4.0747,,0.1808,0,4491,"yes","",0,0,0,0,1456,0,0,0,0,0,4231,253,253
+"find . -name 'Makefile'",read,11.1517,,1.0031,9792,13773,"yes","",0,0,0,0,9030,0,0,0,0,0,13513,1843,1843
+"cat doc/src/sgml/html/bug-reporting.html",read,2.4440,,0.0031,19990,2384,"yes","",19990,1,0,0,10,0,0,0,0,0,2124,40,40
+"cat -n doc/src/sgml/html/bug-reporting.html",read,2.4878,,0.0352,21726,35238,"yes","",19990,1,0,0,10,0,0,0,0,0,34978,83,82
+"head -n 20 doc/src/sgml/html/bug-reporting.html",read,2.3584,,0.0053,3143,6268,"yes","",19990,1,0,0,5,0,0,0,0,0,6008,23,23
+"tail -n 20 doc/src/sgml/html/bug-reporting.html",read,2.4522,,0.0054,2038,5163,"yes","",59970,3,0,0,5,0,0,0,0,0,4903,21,21
+"tail -n +100 doc/src/sgml/html/bug-reporting.html",read,2.3586,,0.0124,11531,14658,"yes","",39980,2,0,0,5,0,0,0,0,0,14398,43,43
+"wc doc/src/sgml/html/bug-reporting.html",read,3.0238,,0.0254,55,2571,"yes","",19990,1,0,0,10,0,0,0,0,0,2311,67,67
+"wc -l doc/src/sgml/html/*.html",read,16.0026,,1.0719,57826,270284,"yes","",0,0,0,0,12867,0,0,0,0,0,270024,1364,1364
+"cat doc/src/sgml/html/*.html | wc -l",read,35.9843,,1.9128,7,270933,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,270673,3252,3253
+"cat doc/src/sgml/html/bug-reporting.html | head -n 50 | tail -n 10",read,3.5572,,0.0170,565,17914,"yes","",19990,1,0,0,10,0,0,0,0,0,17654,48,48
+"grep -c not doc/src/sgml/html/bug-reporting.html",read,2.4736,,0.0147,3,10330,"yes","",19990,1,0,0,10,0,0,0,0,0,10070,71,71
+"grep -n not doc/src/sgml/html/bug-reporting.html",read,2.4711,,0.0212,3886,10330,"yes","",19990,1,0,0,10,0,0,0,0,0,10070,66,65
+"sed 's/not/XX/g' doc/src/sgml/html/bug-reporting.html",read,2.6897,,0.1017,19943,27743,"yes","",19990,1,0,0,10,0,0,0,0,0,27483,201,201
+"sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' doc/src/sgml/html/bug-reporting.html",read,2.8142,,0.2365,19990,33573,"yes","",19990,1,0,0,10,0,0,0,0,0,33313,386,386
+"cat doc/src/sgml/html/bug-reporting.html | sed 's/^/> /' | wc -c",read,3.5863,,0.0625,6,43613,"yes","",19990,1,0,0,10,0,0,0,0,0,43353,180,180
+"grep -rn qdbzzabsentterm .",read,165.7782,74.3500,0.0229,0,31692,"yes","",58579,13,5168,26,25,0,0,0,0,0,31432,143,142
+"grep -rl qdbzzabsentterm .",read,112.0325,67.5413,0.0225,0,31692,"yes","",58579,13,5168,26,25,0,0,0,0,0,31432,109,109
+"grep -rn abcdefghijklabcdefgh .",read,154.9414,73.4167,0.0394,170,41067,"yes","",185750,20,11112,24,44,0,0,0,0,0,40807,205,205
+"grep -rl abcdefghijklabcdefgh .",read,100.3624,68.4868,0.0596,41,41067,"yes","",185750,20,11112,24,44,0,0,0,0,0,40807,202,201
+"grep -rn btvarstrequalimage .",read,168.9117,73.5024,0.1390,1660,37733,"yes","",980580,49,53601,32,44,0,0,0,0,0,37473,363,362
+"grep -rl btvarstrequalimage .",read,114.0074,67.1846,0.1166,316,37733,"yes","",980580,49,53601,32,44,0,0,0,0,0,37473,319,318
+"grep -rn undesirable .",read,203.9760,74.1066,0.7209,11229,31400,"yes","",7928648,216,33133,18,44,0,0,0,0,0,31140,2002,2001
+"grep -rl undesirable .",read,149.1349,70.5588,0.4889,2982,31400,"yes","",7437550,208,33133,18,44,0,0,0,0,0,31140,1284,1284
+"grep -rn passed .",read,209.5534,78.7250,6.6836,225777,28276,"yes","",74419127,1956,15691,8,9030,0,0,0,0,0,28016,13639,13650
+"grep -rl passed .",read,117.3490,67.0789,3.0179,30412,27928,"yes","",54587193,1598,15691,8,9030,0,0,0,0,0,27668,7012,7012
+"grep -rn not .",read,363.6587,151.3488,45.4302,13385871,33427,"yes","",161175531,9604,0,0,9030,0,0,0,0,0,33167,53375,53478
+"grep -rl not .",read,77.1118,73.6540,2.7771,189736,10198,"yes","",102937209,8473,0,0,9030,0,0,0,0,0,9938,6215,6216
+"grep -rc undesirable .",read,152.2179,69.1368,0.9868,347531,47213,"yes","",7928648,216,33133,18,9030,0,0,0,0,0,46953,2601,2601
+"grep -rin BTVARSTREQUALIMAGE .",read,178.2663,92.4670,0.1522,1730,37734,"yes","",980580,49,53601,32,44,0,0,0,0,0,37474,374,374
+"grep -ri undesirable .",read,161.0358,84.5908,0.6790,10793,31389,"yes","",7928648,216,33133,18,44,0,0,0,0,0,31129,1648,1649
+"grep -rn undesirable src/backend",read,76.5386,24.9833,0.5265,3398,25059,"yes","",3814015,101,33133,18,83,0,0,0,0,0,24799,1170,1170
+"grep -rl passed src/backend",read,33.8562,18.2618,1.0336,10725,28006,"yes","",21522827,535,15691,8,1458,0,0,0,0,0,27746,2512,2512
+"grep -rF 'undesirable' .",read,147.8855,68.7809,0.5959,10793,31397,"yes","",7928648,216,33133,18,44,0,0,0,0,0,31137,1492,1492
+"grep -rE 'size_[a-z]+\(' .",read,115.0282,72.4883,2.7357,20400,126923,"yes","",31331368,959,8440,6,44,0,0,0,0,0,126663,5702,5703
+"grep -rE 'btvarstrequalimage|abcdefghijklabcdefgh' .",read,259.6331,83.6142,0.2719,1754,74400,"yes","",1704860,70,64713,56,118,0,0,0,0,0,74140,643,643
+"grep -rE 'passed|undesirable' .",read,310.1319,87.9879,16.2724,227978,36642,"yes","",76056758,2024,48824,26,9030,0,0,0,0,0,36382,17531,17615
+"grep -rE '[0-9]{4,}' .",read,316.7886,370.2807,209.5962,39408321,25484,"yes","",161175531,9604,0,0,9030,0,0,0,0,0,25224,249678,251464
+"grep -rn '^#include' .",read,212.8185,97.0502,5.3165,1219813,56355,"yes","",40208201,2367,26936,12,9030,0,0,0,0,0,56095,10105,10105
+"grep -rE '^(import|from) ' .",read,201.4697,94.8315,37.8001,61849,30322,"yes","",161175531,9604,0,0,9030,0,0,0,0,0,30062,55408,55408
+"grep -rin 'return [a-z_]*;$' src/backend",read,112.1379,46.3858,13.7841,902666,66116,"yes","",44882188,1229,23551,10,1458,0,0,0,0,0,65856,19248,19248
+"grep -rv e src/include/access",read,5.3595,8.6453,0.6132,232471,29817,"yes","",598315,89,0,0,94,0,0,0,0,0,29557,926,926
+"grep -r '\(undesirable\).*\1' .",read,151.8686,,0.8889,0,35260,"yes","",7928648,216,33133,18,44,0,0,0,0,0,35000,2206,2207
+"grep -n btvarstrequalimage doc/src/sgml/html/*.html",read,19.8404,,0.7756,125,271016,"yes","",869297,35,53601,32,7022,0,0,0,0,0,270756,1231,1231
+"grep -l undesirable doc/src/sgml/html/*.html",read,20.0696,,0.8219,976,270965,"yes","",1703472,65,33133,18,7022,0,0,0,0,0,270705,1201,1201
+"grep -c qdbzzabsentterm doc/src/sgml/html/*.html",read,16.4342,,0.6756,49628,270985,"yes","",76545,4,5168,26,7022,0,0,0,0,0,270725,947,947
+"grep -rl passed . | wc -l",read,122.2671,,2.9444,4,30357,"yes","",54587193,1598,15691,8,9030,0,0,0,0,0,30097,7933,7934
+"grep -rc not . | grep -v ':0$' | wc -l",read,260.3544,,29.3555,5,16768,"yes","",161175531,9604,0,0,9030,0,0,0,0,0,16508,37525,38458
+"find . -name '*.html' | wc -l",read,11.7061,,1.2910,5,22854,"yes","",0,0,0,0,9030,0,0,0,0,0,22594,1866,1866
+"find . -type f | grep -c html",read,11.6592,,1.5030,5,41567,"yes","",0,0,0,0,9030,0,0,0,0,0,41307,2086,2086
+"grep -rn not . | head -n 5",read,3.5421,,0.0137,386,12959,"order differs","",36716,3,0,0,25,0,0,0,0,0,12699,58,58
+"grep -rn passed . | head -n 1",read,19.1345,,0.0200,88,18350,"order differs","",123119,14,0,0,25,0,0,0,0,0,18090,100,100
+"find . -type f | head -n 3",read,3.6263,,0.0617,61,31633,"order differs","",0,0,0,0,582,0,0,0,0,0,31373,194,194
+"cat doc/src/sgml/html/*.html | head -n 2",read,4.3640,,0.3676,1555,271289,"yes","",21557,1,0,0,1187,0,0,0,0,0,271029,502,502
+"grep -rno undesirable .",read,202.2207,74.8685,0.7546,5210,39081,"yes","",7928648,216,33133,18,44,0,0,0,0,0,38821,1896,1896
+"grep -rw undesirable .",read,145.1978,76.7297,0.6816,10793,42392,"yes","",7928648,216,33133,18,44,0,0,0,0,0,42132,1662,1754
+"grep -rnw btvarstrequalimage .",read,167.5521,75.9233,0.2325,1660,44634,"yes","",980580,49,53601,32,44,0,0,0,0,0,44374,620,620
+"grep -rn -C 2 btvarstrequalimage .",read,168.3300,317.4221,0.4310,6371,38641,"yes","",3081158,84,53601,32,44,0,0,0,0,0,38381,1212,1213
+"grep -rn -A 1 -B 1 undesirable .",read,199.9520,357.1516,1.2989,31930,33024,"yes","",17727354,395,33133,18,44,0,0,0,0,0,32764,5127,5127
+"grep -rho 'size_[a-z_]*' . | sort | uniq -c | sort -rn | head",read,116.8222,,4.5102,188,234934,"yes","",31331368,959,8440,6,44,0,0,0,0,0,234674,9647,9849
+"grep -rhow '[a-z]*btvarstrequalimage[a-z]*' . | sort | uniq -c | sort -rn | head -n 5",read,119.0284,,0.3275,27,79207,"yes","",980580,49,53601,32,44,0,0,0,0,0,78947,664,665
+"rg -j 1 qdbzzabsentterm",read,95.7857,,0.0439,0,30937,"yes","",674,1,5168,26,29,0,0,0,0,0,30677,278,276
+"rg -j 1 abcdefghijklabcdefgh",read,86.7246,,0.0653,158,39955,"yes","",38851,4,11112,24,20,0,0,0,0,0,39695,305,305
+"rg -j 1 btvarstrequalimage",read,84.4550,,0.2251,1562,58325,"yes","",650274,23,53601,32,80,0,0,0,0,0,58065,758,757
+"rg -j 1 undesirable",read,89.1097,,1.0375,10589,109947,"yes","",7610004,209,33133,18,296,0,0,0,0,0,109687,2723,2722
+"rg -j 1 passed",read,94.6242,,19.8946,213057,436837,"yes","",74308154,2102,15691,8,11462,0,0,0,0,0,436577,26085,26830
+"rg -j 1 not",read,149.9217,,40.2413,12556850,426616,"yes","",161123389,9595,0,0,11462,0,0,0,0,0,426356,52452,52673
+"rg -j 1 -l undesirable",read,85.4146,,0.8958,2812,100645,"yes","",7118906,201,33133,18,296,0,0,0,0,0,100385,1763,1763
+"rg -j 1 -l not",read,93.0306,,11.9562,179604,425634,"yes","",102885067,8464,0,0,11462,0,0,0,0,0,425374,21872,21894
+"rg -j 1 -c passed",read,89.6437,,19.2036,30433,433295,"yes","",74308154,2102,15691,8,11462,0,0,0,0,0,433035,21182,21191
+"rg -j 1 -i BTVARSTREQUALIMAGE",read,99.1950,,1.2718,1625,90307,"yes","",650274,23,53601,40,80,0,0,0,0,0,90047,1581,1581
+"rg -j 1 -w undesirable",read,86.2971,,16.7936,10589,132033,"yes","",7610004,209,33133,18,296,0,0,0,0,0,131773,17228,17229
+"rg -j 1 -F 'undesirable'",read,91.3131,,1.0216,10589,110498,"yes","",7610004,209,33133,18,296,0,0,0,0,0,110238,2090,2090
+"rg -j 1 -n -C 2 btvarstrequalimage",read,93.4767,,0.3692,6253,68555,"yes","",2750852,58,53601,32,80,0,0,0,0,0,68295,822,822
+"rg -j 1 'size_[a-z]+\('",read,86.1047,,4.1431,19928,262333,"yes","",31275587,1028,8440,6,704,0,0,0,0,0,262073,7512,7513
+"rg -j 1 'btvarstrequalimage|abcdefghijklabcdefgh'",read,99.8747,,0.2870,1720,72821,"yes","",688193,24,64713,56,80,0,0,0,0,0,72561,619,659
+"rg -j 1 '\bbtvarstrequalimage\w*'",read,90.4335,,3.6575,1562,2620825,"yes","",650274,23,53601,32,80,0,0,0,0,0,2620565,4323,4323
+"rg -j 1 -t c undesirable",read,48.0452,,0.7765,3729,105743,"yes","",3354838,102,33133,18,296,0,0,0,0,0,105483,1410,1410
+"rg -j 1 -g '*.html' undesirable",read,33.6773,,0.5931,3303,102459,"yes","",1286004,69,33133,18,296,0,0,0,0,0,102199,990,991
+"rg -j 1 undesirable src/backend",read,24.8922,,0.7955,3255,55110,"yes","",3338041,80,33133,18,160,0,0,0,0,0,54850,1366,1366
+"rg -j 1 -uu undesirable",read,69.1505,,0.6448,10589,38795,"yes","",7607461,181,33133,18,0,0,0,0,0,0,38535,1575,1574
+"rg -j 1 --sort path btvarstrequalimage",read,92.0174,,0.2209,1562,59247,"yes","",650274,23,53601,32,80,0,0,0,0,0,58987,487,487
+"rg -j 1 --files | wc -l",read,30.7287,,8.2691,5,425315,"yes","",11749,167,0,0,11462,0,0,0,0,0,425055,9644,9681
+"rg -j 1 -l passed | wc -l",read,87.8407,,14.8147,4,448012,"yes","",54476220,1744,15691,8,11462,0,0,0,0,0,447752,16199,16432
+"ls -ltR",read,39.4611,,5.1877,513708,144468,"yes","",0,0,0,0,27065,0,0,0,0,0,144208,6075,6075
+"ls -lt doc/src/sgml/html",read,7.6422,,0.6236,74413,105876,"yes","",0,0,0,0,2350,0,0,0,0,0,105616,777,777
+"ls -ltr src/backend | tail -n 3",read,3.9993,,0.0539,149,8649,"yes","",0,0,0,0,1214,0,0,0,0,0,8389,164,164
+"find . -newer doc/src/sgml/html/bug-reporting.html",read,23.1029,,1.7759,288128,20072,"yes","",0,0,0,0,9035,0,0,0,0,0,19812,2812,2812
+"find . -newer doc/src/sgml/html/bug-reporting.html -name '*.html'",read,12.1034,,2.2183,38793,24259,"yes","",0,0,0,0,9035,0,0,0,0,0,23999,2764,2764
+"find . -type f -mtime +30",read,16.7795,,0.9717,0,4374,"yes","",0,0,0,0,9030,0,0,0,0,0,4114,1778,1779
+"du -s .",read,15.4273,,0.0029,9,2709,"not compared","",0,0,0,0,9030,0,0,0,0,0,40857,472,472
+"du -sh src/backend",read,4.3761,,0.0031,16,2755,"not compared","",0,0,0,0,2,0,0,0,0,0,2495,20,19
+"du -sb .",read,14.0393,,0.0045,12,2715,"yes","",0,0,0,0,9030,0,0,0,0,0,53642,714,715
+"du -sb src/backend",read,4.1522,,0.0049,21,2773,"yes","",0,0,0,0,2,0,0,0,0,0,2513,22,22
+"du -b -d 1 src/backend",read,4.5547,,0.0066,776,5235,"yes","",0,0,0,0,35,0,0,0,0,0,4975,36,36
+"sort doc/src/sgml/html/bug-reporting.html",read,2.8852,,0.0266,19991,106241,"yes","",19990,1,0,0,10,0,0,0,0,0,105981,99,99
+"sort -r doc/src/sgml/html/bug-reporting.html | head -n 3",read,3.3240,,0.0302,2009,111181,"yes","",19990,1,0,0,10,0,0,0,0,0,110921,97,95
+"sort -u doc/src/sgml/html/bug-reporting.html | wc -l",read,3.7296,,0.0490,4,109032,"yes","",19990,1,0,0,10,0,0,0,0,0,108772,119,119
+"sort -k 2 doc/src/sgml/html/bug-reporting.html | tail -n 3",read,3.7827,,0.0599,209,129741,"yes","",19990,1,0,0,10,0,0,0,0,0,129481,134,134
+"cat doc/src/sgml/html/*.html | sort | uniq -c | sort -rn | head -n 5",read,237.8605,,121.6610,106,57454874,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,57454614,133032,133066
+"uniq -c doc/src/sgml/html/bug-reporting.html | wc -l",read,2.9542,,0.0230,4,40972,"yes","",19990,1,0,0,5,0,0,0,0,0,40712,70,70
+"cut -c 1-20 doc/src/sgml/html/bug-reporting.html",read,2.3917,,0.0186,4915,18266,"yes","",19990,1,0,0,5,0,0,0,0,0,18006,46,46
+"cut -d ' ' -f 1 doc/src/sgml/html/bug-reporting.html | sort | uniq | wc -l",read,3.4833,,0.0577,2,81835,"yes","",19990,1,0,0,5,0,0,0,0,0,81575,107,107
+"tr a-z A-Z < doc/src/sgml/html/bug-reporting.html",read,2.7279,,0.0059,19990,25141,"yes","",19990,1,0,0,5,0,0,0,0,0,24881,52,52
+"tr -d '\n' < doc/src/sgml/html/bug-reporting.html | wc -c",read,2.9243,,0.0143,6,27564,"yes","",19990,1,0,0,5,0,0,0,0,0,27304,46,45
+"tr -s ' ' < doc/src/sgml/html/bug-reporting.html | wc -c",read,2.8305,,0.0189,6,27562,"yes","",19990,1,0,0,5,0,0,0,0,0,27302,46,46
+"nl doc/src/sgml/html/bug-reporting.html",read,2.3881,,0.0370,21727,36237,"yes","",19990,1,0,0,5,0,0,0,0,0,35977,85,85
+"nl -ba doc/src/sgml/html/bug-reporting.html | tail -n 3",read,2.8211,,0.0417,903,60386,"yes","",19990,1,0,0,5,0,0,0,0,0,60126,82,82
+"seq 1 100000 | wc -l",read,4.5196,,3.0804,7,136436,"yes","",0,0,0,0,0,0,0,0,0,0,136176,3117,3117
+"seq -w 1 1000 | tail -n 2",read,3.5342,,0.0630,10,19239,"yes","",0,0,0,0,0,0,0,0,0,0,18979,100,100
+"basename doc/src/sgml/html/bug-reporting.html",read,2.3694,,0.0027,19,2433,"yes","",0,0,0,0,0,0,0,0,0,0,2173,11,11
+"basename -s .html doc/src/sgml/html/bug-reporting.html",read,2.3805,,0.0035,14,3283,"yes","",0,0,0,0,0,0,0,0,0,0,3023,14,12
+"dirname doc/src/sgml/html/bug-reporting.html",read,2.3223,,0.0027,18,2430,"yes","",0,0,0,0,0,0,0,0,0,0,2170,11,11
+"printf '%s\n' a b c",read,1.5873,,0.0036,6,3522,"yes","",0,0,0,0,0,0,0,0,0,0,3262,16,15
+"printf '%05d %-8s|%x\n' 42 name 255",read,1.6482,,0.0040,18,3619,"yes","",0,0,0,0,0,0,0,0,0,0,3359,16,16
+"test -f doc/src/sgml/html/bug-reporting.html && echo yes",read,1.4796,,0.0046,4,3892,"yes","",0,0,0,0,5,0,0,0,0,0,3632,25,25
+"[ -d src/backend ] && echo folder",read,1.6083,,0.0049,7,4165,"yes","",0,0,0,0,27,0,0,0,0,0,3905,23,23
+"date -u -d '2024-02-29 12:00:00' '+%Y-%m-%d %H:%M:%S %s %a'",read,2.3514,,0.0055,35,3709,"yes","",0,0,0,0,0,0,0,0,0,0,3449,23,23
+"echo a b c | xargs -n 1 echo",read,6.5838,,0.0069,6,6367,"yes","",0,0,0,0,0,0,0,0,0,0,6107,27,27
+"find src/include/access -name '*.html' | xargs cat | wc -l",read,4.4774,,0.0176,2,7604,"yes","",0,0,0,0,91,0,0,0,0,0,7344,70,70
+"find . -name '*.html' | xargs grep -l undesirable | wc -l",read,29.5570,,2.6051,3,350176,"yes","",1703472,65,33133,18,14875,0,0,0,0,0,349916,3525,3526
+"echo {a,b,c}{1..3}",read,1.5890,,0.0061,27,5917,"yes","",0,0,0,0,0,0,0,0,0,0,5657,29,28
+"echo {1..20..3} {a..e}",read,1.5624,,0.0069,28,5303,"yes","",0,0,0,0,0,0,0,0,0,0,5043,24,24
+"echo $(wc -l < doc/src/sgml/html/bug-reporting.html) `basename doc/src/sgml/html/bug-reporting.html`",read,4.4781,,0.0110,23,8123,"yes","",19990,1,0,0,5,0,0,0,0,0,7863,44,44
+"echo ""first line: $(head -n 1 doc/src/sgml/html/bug-reporting.html)""",read,2.7619,,0.0114,67,6757,"yes","",19990,1,0,0,5,0,0,0,0,0,6497,42,41
+"wc -l < doc/src/sgml/html/bug-reporting.html",read,3.4766,,0.0065,4,3413,"yes","",19990,1,0,0,5,0,0,0,0,0,3153,28,28
+"cat doc/src/sgml/html/bug-reporting.html > /dev/null 2>&1",read,3.0904,,0.0052,0,3530,"yes","",19990,1,0,0,10,0,0,0,0,0,3270,22,22
+"cat qdb_no_such_file 2> /dev/null ; echo after",read,3.2056,,0.0070,6,4419,"yes","",0,0,0,0,2,0,0,0,0,0,4159,22,21
+"cat qdb_no_such_file 2>&1 | wc -l",read,3.5494,,0.0079,2,5445,"yes","",0,0,0,0,2,0,0,0,0,0,5185,29,29
+"grep -q not doc/src/sgml/html/bug-reporting.html && echo found || echo none",read,3.2687,,0.0149,6,12523,"yes","",19990,1,0,0,10,0,0,0,0,0,12263,68,68
+"false || echo fallback",read,1.7979,,0.0051,9,2970,"yes","",0,0,0,0,0,0,0,0,0,0,2710,16,16
+"true && grep -c not doc/src/sgml/html/bug-reporting.html",read,2.6738,,0.0104,3,10982,"yes","",19990,1,0,0,10,0,0,0,0,0,10722,71,71
+"cat <<EOF⏎one $(echo two)⏎three⏎EOF",read,3.2481,,0.0055,14,5376,"yes","",0,0,0,0,0,0,0,0,0,0,5116,22,22
+"wc -l <<'EOF'⏎a⏎b⏎EOF",read,2.9164,,0.0031,2,3079,"yes","",0,0,0,0,0,0,0,0,0,0,2819,13,13
+"echo one \⏎two",read,1.4994,,0.0027,8,2596,"yes","",0,0,0,0,0,0,0,0,0,0,2336,10,10
+"grep -c not doc/src/sgml/html/bug-reporting.html⏎wc -l doc/src/sgml/html/bug-reporting.html",read,3.9118,,0.0120,44,11794,"yes","",19990,1,0,0,15,0,0,0,0,0,11534,61,61
+"for i in $(seq 100000); do :; done",read,100.3585,,38.4629,0,7815564,"yes","",0,0,0,0,0,0,0,0,0,0,7815304,39867,39867
+"i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done; echo $i",read,31.3498,,24.9953,6,7252,"yes","",0,0,0,0,250025,0,0,0,0,0,6992,24964,24963
+"i=10; until [ $i -eq 0 ]; do i=$((i-1)); done; echo $i",read,1.7468,,0.0322,2,7249,"yes","",0,0,0,0,275,0,0,0,0,0,6989,64,64
+"for f in doc/src/sgml/html/*.html; do echo ""$f""; done | wc -l",read,15.2757,,2.2997,5,170148,"yes","",0,0,0,0,1177,0,0,0,0,0,169888,2462,2462
+"for f in doc/src/sgml/html/*.html; do grep -c not ""$f""; done | sort -n | tail -n 3",read,1637.6553,,7.8740,12,173447,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,173187,9121,9121
+"n=0; for f in doc/src/sgml/html/*.html; do if grep -q passed ""$f""; then n=$((n+1)); fi; done; echo $n",read,1719.8032,,17.8834,4,171441,"yes","",15829851,1187,15691,8,12867,0,0,0,0,0,171181,11701,11740
+"for f in doc/src/sgml/html/*.html; do if [ -s ""$f"" ]; then continue; fi; echo ""$f""; done",read,11.0982,,2.4250,0,170425,"yes","",0,0,0,0,36247,0,0,0,0,0,170165,2532,2532
+"H=$PWD; for d in src/backend src/include/access doc/src/sgml/html; do cd ""$d""; ls | wc -l; cd ""$H""; done",read,7.5880,,0.0546,11,101881,"yes","",0,0,0,0,1303,0,0,0,0,0,101717,159,159
+"X=not; N=$(grep -c ""$X"" doc/src/sgml/html/bug-reporting.html); echo ""$X: $((N * 2)) ${#X} ${N:-none}""",read,3.0323,,0.0163,13,13791,"yes","",19990,1,0,0,10,0,0,0,0,0,13531,84,84
+"find src/include/access -name '*.html' | while read -r f; do wc -l < ""$f""; done | sort -n | tail -n 1",read,3.9279,,0.0350,0,77907,"yes","",0,0,0,0,91,0,0,0,0,0,77647,98,98
+"for f in doc/src/sgml/html/*.html; do head -n 1 ""$f""; done > /dev/null",read,1445.8622,,2.0865,0,169397,"yes","",15036191,1169,0,0,7022,0,0,0,0,0,169137,3828,3828
+"for i in 1 2 3; do for j in a b; do if [ $i -eq 2 ]; then break; fi; echo $i$j; done; done",read,1.6758,,0.0190,12,9721,"yes","",0,0,0,0,125,0,0,0,0,0,9461,47,46
+"awk '{ print $2 }' doc/src/sgml/html/bug-reporting.html",read,3.0635,,0.0062,14,6532,"NO: exit status, real 0, engine 2","",19990,1,0,0,5,0,0,0,0,0,6272,60,60
+"cat doc/src/sgml/html/*.html | tr -cd '[:print:][:space:]' | awk '{ print $2 }' | wc -l",read,79.2536,,25.5525,7,506522,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,506262,26693,26811
+"cat doc/src/sgml/html/*.html | tr -cd '[:print:][:space:]' | awk '/not/ { n++ } END { print n }'",read,50.3182,,19.4655,5,481945,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,481685,27839,28278
+"cat doc/src/sgml/html/*.html | tr -cd '[:print:][:space:]' | awk '{ s += NF } END { print s, NR }'",read,84.5761,,48.1252,15,609796,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,609536,47212,47275
+"cat doc/src/sgml/html/*.html | tr -cd '[:print:][:space:]' | awk -F: '{ s += $3 } END { print s }'",read,45.4356,,21.3808,12,479144,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,478884,21539,22615
+"cat doc/src/sgml/html/*.html | tr -cd '[:print:][:space:]' | awk 'FNR == 1 { print FILENAME }' | wc -l",read,35.2278,,17.5738,2,479660,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,479400,17193,17194
+"cat doc/src/sgml/html/*.html | tr -cd '[:print:][:space:]' | awk 'length($0) > 100 { n++ } END { print n + 0 }'",read,35.8753,,17.8542,6,478974,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,478714,18508,18508
+"cat doc/src/sgml/html/*.html | tr -cd '[:print:][:space:]' | awk '{ c[$1]++ } END { for (k in c) n++; print n }'",read,57.6119,,41.2552,6,2791282,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,2791022,41465,41466
+"cat doc/src/sgml/html/*.html | tr -cd '[:print:][:space:]' | awk '{ for (i = 1; i <= NF; i++) if ($i == ""not"") n++ } END { print n }'",read,225.5037,,163.3433,5,610635,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,610375,162764,163334
+"awk '{ gsub(/[0-9]+/, ""N""); print }' doc/src/sgml/html/bug-reporting.html | wc -c",read,3.8034,,0.0590,3,17404,"NO: standard output differs","",19990,1,0,0,5,0,0,0,0,0,17144,147,147
+"awk -v OFS=- '{ $1 = NR; print }' doc/src/sgml/html/bug-reporting.html | tail -n 1",read,3.7820,,0.0109,51,10475,"NO: standard output differs","",19990,1,0,0,5,0,0,0,0,0,10215,59,59
+"awk 'BEGIN { for (i = 0; i < 100000; i++) s += i * i; printf ""%d\n"", s }'",read,10.7374,,6.1778,16,5894,"yes","",0,0,0,0,0,0,0,0,0,0,5634,5458,5457
+"grep -rn undesirable . | awk -F: '{ print $1 }' | uniq -c | sort -rn | head -n 5",read,202.4390,,0.4466,231,81437,"NO: standard output differs","",1596256,69,33133,18,44,0,0,0,0,0,81177,911,912
+"cat doc/src/sgml/html/*.html | tr -cd '[:print:][:space:]' | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5",read,198.1630,,121.1028,160,11710090,"yes","",16611227,1208,0,0,12867,0,0,0,0,0,11709830,141032,141209
+"mkdir -p bench_out/a/b",write,3.6519,,0.0252,0,4084,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,0,0,0,0,0,3824,20,20
+"touch bench_out/empty.txt",write,3.4570,,0.0260,0,2475,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,0,0,0,0,0,2215,22,21
+"echo 'hello world' > bench_out/hello.txt",write,1.8443,,0.0604,0,3710,"yes","documents +1 -0; postings +9; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,52,0,0,0,0,3450,56,56
+"echo 'another line' >> bench_out/hello.txt",write,1.7353,,0.0909,0,3530,"yes","documents +1 -1; postings +19; list bytes rewritten 0; rebuilds 0",24,2,0,0,2,65,0,0,0,0,3270,87,86
+"cp doc/src/sgml/html/bug-reporting.html bench_out/copy.txt",write,3.6876,,0.0311,0,3349,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,10,0,0,0,0,0,3089,27,27
+"cp -r src/backend bench_out/dir_copy",write,321.6018,,2.3007,0,666015,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,20560,0,0,0,0,0,665755,2294,2293
+"cp -r doc/src/sgml/html bench_out/work",write,242.7231,,3.3705,0,456180,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,12912,0,0,0,0,0,455920,3316,3361
+"sed -i 's/not/QDBBENCHONE/g' bench_out/copy.txt",write,3.6652,,1.0966,0,62643,"yes","documents +1 -0; postings +2793; list bytes rewritten 0; rebuilds 0",19990,1,0,0,2,20406,0,0,0,0,62383,1092,1092
+"sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt",write,3.4108,,0.6695,0,63866,"yes","documents +1 -1; postings +2724; list bytes rewritten 0; rebuilds 0",20366,1,0,0,2,20379,0,0,0,0,63606,665,665
+"sed -i 's/not/QDBBENCHMANY/g' bench_out/work/*.html",write,316.4019,,200.9807,0,19503827,"yes","documents +984 -0; postings +1919421; list bytes rewritten 0; rebuilds 0",16611227,1208,0,0,4682,15278348,0,0,0,0,19503567,199408,200969
+"sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.html",write,420.7808,,1.1057,0,265879,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",159677,10,10378,26,4682,0,0,0,0,0,265619,1098,1097
+"sed -i 's/btvarstrequalimage/QDBBENCHFEW/g' bench_out/work/*.html",write,489.3884,,1.7957,0,268451,"yes","documents +1 -1; postings +2482; list bytes rewritten 0; rebuilds 0",997004,49,61750,32,4682,22112,0,0,0,0,268191,1781,1781
+"cp doc/src/sgml/html/bug-reporting.html bench_out/same.txt",write,4.1627,,0.0391,0,3201,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,10,0,0,0,0,0,2941,34,34
+"cp doc/src/sgml/html/bug-reporting.html bench_out/same.txt",write,3.6279,,0.0163,0,2929,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,9,0,0,0,0,0,2669,13,13
+"cat doc/src/sgml/html/bug-reporting.html > bench_out/same.txt",write,3.8928,,0.0428,0,23508,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",39980,2,0,0,12,0,0,0,0,0,23248,38,38
+"grep -rc QDBBENCHMANY bench_out",write,33.3367,,4.1318,110147,35458,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",15630654,983,26316,20,2637,0,0,0,0,0,35198,4124,4123
+"grep -rl QDBBENCHMANY .",write,94.7989,,2.1936,36087,107943,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",14229152,950,26316,20,95,0,0,0,0,0,107683,2185,2185
+"grep -rl QDBBENCHONE .",write,118.2555,,0.4319,21,25024,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",1019195,48,22147,18,95,0,0,0,0,0,24764,396,396
+"cat doc/src/sgml/html/bug-reporting.html | tee bench_out/tee.txt | wc -l",write,4.1663,,0.4411,4,47090,"yes","documents +1 -0; postings +2774; list bytes rewritten 0; rebuilds 0",19990,1,0,0,13,20030,0,0,0,0,46830,434,434
+"sort doc/src/sgml/html/bug-reporting.html > bench_out/sorted.txt",write,4.4402,,0.4439,0,127280,"yes","documents +1 -0; postings +2774; list bytes rewritten 0; rebuilds 0",19990,1,0,0,13,20031,0,0,0,0,127020,438,438
+"sort -u doc/src/sgml/html/bug-reporting.html >> bench_out/sorted.txt",write,4.2424,,0.4092,0,126815,"yes","documents +1 -1; postings +2774; list bytes rewritten 0; rebuilds 0",59972,3,0,0,12,39415,0,0,0,0,126555,404,404
+"cat qdb_no_such_file &> bench_out/both.txt",write,4.4109,,0.0391,0,3831,"yes","documents +1 -0; postings +42; list bytes rewritten 0; rebuilds 0",0,0,0,0,5,89,0,0,0,0,3571,34,34
+"cat qdb_no_such_file 2>> bench_out/both.txt",write,3.2283,,0.0390,0,3759,"yes","documents +1 -1; postings +42; list bytes rewritten 0; rebuilds 0",98,2,0,0,4,138,0,0,0,0,3499,34,34
+"find src/include/access -name '*.html' | sort | xargs cat > bench_out/joined.txt",write,5.4163,,0.0724,0,73465,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,94,0,0,0,0,0,73205,68,68
+"cp bench_out/joined.txt bench_out/joined2.txt",write,3.9062,,0.0246,0,3795,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,7,0,0,0,0,0,3535,20,19
+"sed -i '1d' bench_out/joined2.txt",write,3.2339,,0.0263,0,3651,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,2,0,0,0,0,0,3391,22,21
+"wc -c bench_out/joined.txt bench_out/joined2.txt bench_out/tee.txt bench_out/sorted.txt",write,3.0934,,0.0246,118,4458,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,16,0,0,0,0,0,4198,22,21
+"cat bench_out/both.txt",write,2.3826,,0.0180,98,2406,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",98,1,0,0,4,0,0,0,0,0,2146,13,13
+"cp doc/src/sgml/html/bug-reporting.html bench_out/v2.txt",write,3.1210,,0.0278,0,3173,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,10,0,0,0,0,0,2913,23,23
+"sed -i -e '10s/$/ changed/' -e '40,45d' -e '100i an added line' bench_out/v2.txt",write,4.0851,,0.3687,0,60862,"yes","documents +1 -0; postings +2752; list bytes rewritten 0; rebuilds 0",19990,1,0,0,2,19655,0,0,0,0,60602,363,363
+"diff -u --label old --label new doc/src/sgml/html/bug-reporting.html bench_out/v2.txt",write,2.5509,,0.1090,1807,25860,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",238380,12,0,0,7,0,0,0,0,0,25600,104,104
+"diff doc/src/sgml/html/bug-reporting.html bench_out/v2.txt | wc -l",write,3.9255,,0.1008,3,25283,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",178785,9,0,0,7,0,0,0,0,0,25023,96,96
+"diff -q doc/src/sgml/html/bug-reporting.html bench_out/same.txt",write,2.4694,,0.0235,0,3381,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,7,0,0,0,0,0,3121,19,18
+"diff -u doc/src/sgml/html/bug-reporting.html bench_out/copy.txt | wc -l",write,4.1583,,0.1842,4,77959,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",221286,11,0,0,7,0,0,0,0,0,77699,179,179
+"diff -rq src/backend bench_out/dir_copy",write,37.1145,,0.6705,0,15523,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,2912,0,0,0,0,0,15263,665,665
+"sed -i '1s/^/one edit /' $(find bench_out/dir_copy -type f | sort | head -n 1)",write,7.4428,,0.7020,0,275400,"yes","documents +1 -0; postings +23; list bytes rewritten 0; rebuilds 0",38,1,0,0,1459,87,0,0,0,0,275140,696,696
+"diff -rq src/backend bench_out/dir_copy",write,36.0520,,0.7367,70,15593,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",85,2,0,0,2912,0,0,0,0,0,15333,731,731
+"diff -r doc/src/sgml/html bench_out/work | wc -l",write,60.1107,,78.7736,6,1418335,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",123895635,8380,0,0,2352,0,0,0,0,0,1418075,78765,78766
+"diff -ru doc/src/sgml/html bench_out/work | grep -c '^@@'",write,70.2760,,71.0179,5,1429209,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",162232585,11124,0,0,2352,0,0,0,0,0,1428949,70972,71010
+"for i in $(seq 10000); do echo ""line $i"" >> bench_out/loop.txt; done",write,56.3647,,27.5710,0,1294261,"yes","documents +10000 -9994; postings +138134; list bytes rewritten 0; rebuilds 0",1580743,19993,0,0,20001,1239829,0,0,0,0,1294001,27563,27562
+"wc -l bench_out/loop.txt",write,3.8033,,0.0258,25,2829,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,2,0,0,0,0,0,2569,21,20
+"for f in bench_out/work/*.html; do echo done >> ""$f""; done",write,11.0920,,128.9041,0,21711585,"yes","documents +1169 -942; postings +2086058; list bytes rewritten 1388804; rebuilds 0",28583773,2363,0,0,4682,14350030,0,0,0,0,21711325,127208,128898
+"awk '{ print NR "": "" $0 }' doc/src/sgml/html/bug-reporting.html > bench_out/numbered.txt",write,5.3605,,0.0916,0,8114,"NO: exit status, real 0, engine 2","documents +1 -0; postings +55; list bytes rewritten 513; rebuilds 0",19990,1,0,0,8,98,0,0,0,0,7854,81,81
+"awk 'END { print NR }' bench_out/numbered.txt",write,4.2671,,0.0339,2,5549,"NO: standard output differs","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",58,1,0,0,2,0,0,0,0,0,5289,29,29
+"mv bench_out/dir_copy bench_out/dir_moved",write,2.7164,,0.0257,0,2905,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,8,0,0,0,0,0,2645,21,21
+"mv bench_out/hello.txt bench_out/a/b",write,3.6776,,0.0240,0,3255,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,13,0,0,0,0,0,2995,20,19
+"ls -R bench_out/a",write,2.5891,,0.0215,41,3097,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,4,0,0,0,0,0,2837,17,17
+"rm bench_out/a/b/hello.txt",write,3.2810,,0.0211,0,2413,"yes","documents +0 -1; postings +0; list bytes rewritten 97; rebuilds 0",0,0,0,0,4,0,0,0,0,0,2153,18,17
+"rmdir bench_out/a/b",write,2.7695,,0.0194,0,2292,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,0,0,0,0,0,2032,15,15
+"rm -r bench_out/dir_moved",write,34.2355,,0.7194,0,2863,"yes","documents +0 -1; postings +0; list bytes rewritten 90; rebuilds 0",0,0,0,0,2,0,0,0,0,0,2603,714,714
+"rm -rf bench_out",write,90.7007,,22.5537,0,10245,"yes","documents +0 -1223; postings +0; list bytes rewritten 4937842; rebuilds 0",0,0,0,0,1,0,0,0,0,0,9985,22414,22540

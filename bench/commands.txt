@@ -206,21 +206,22 @@ find {SMALLDIR} -name '*.{EXT}' | while read -r f; do wc -l < "$f"; done | sort 
 for f in {GLOB}; do head -n 1 "$f"; done > /dev/null
 for i in 1 2 3; do for j in a b; do if [ $i -eq 2 ]; then break; fi; echo $i$j; done; done
 
-# Stage 5. awk, against GNU awk
+# Stage 5. awk, against GNU awk. awk refuses input that is not ASCII, and
+# some files of every dataset hold other bytes, so tr removes them first.
 awk '{ print $2 }' {FILE}
-awk '{ print $2 }' {GLOB} | wc -l
-awk '/{COMMON}/ { n++ } END { print n }' {GLOB}
-awk '{ s += NF } END { print s, NR }' {GLOB}
-awk -F: '{ s += $3 } END { print s }' {GLOB}
-awk 'FNR == 1 { print FILENAME }' {GLOB} | wc -l
-awk 'length($0) > 100 { n++ } END { print n + 0 }' {GLOB}
-awk '{ c[$1]++ } END { for (k in c) n++; print n }' {GLOB}
-awk '{ for (i = 1; i <= NF; i++) if ($i == "{COMMON}") n++ } END { print n }' {GLOB}
+cat {GLOB} | tr -cd '[:print:][:space:]' | awk '{ print $2 }' | wc -l
+cat {GLOB} | tr -cd '[:print:][:space:]' | awk '/{COMMON}/ { n++ } END { print n }'
+cat {GLOB} | tr -cd '[:print:][:space:]' | awk '{ s += NF } END { print s, NR }'
+cat {GLOB} | tr -cd '[:print:][:space:]' | awk -F: '{ s += $3 } END { print s }'
+cat {GLOB} | tr -cd '[:print:][:space:]' | awk 'FNR == 1 { print FILENAME }' | wc -l
+cat {GLOB} | tr -cd '[:print:][:space:]' | awk 'length($0) > 100 { n++ } END { print n + 0 }'
+cat {GLOB} | tr -cd '[:print:][:space:]' | awk '{ c[$1]++ } END { for (k in c) n++; print n }'
+cat {GLOB} | tr -cd '[:print:][:space:]' | awk '{ for (i = 1; i <= NF; i++) if ($i == "{COMMON}") n++ } END { print n }'
 awk '{ gsub(/[0-9]+/, "N"); print }' {FILE} | wc -c
 awk -v OFS=- '{ $1 = NR; print }' {FILE} | tail -n 1
 awk 'BEGIN { for (i = 0; i < 100000; i++) s += i * i; printf "%d\n", s }'
 grep -rn {FEW} . | awk -F: '{ print $1 }' | uniq -c | sort -rn | head -n 5
-cat {GLOB} | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5
+cat {GLOB} | tr -cd '[:print:][:space:]' | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5
 
 # Add, edit, delete
 mut: mkdir -p bench_out/a/b

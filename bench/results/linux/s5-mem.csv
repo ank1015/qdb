@@ -1,0 +1,225 @@
+command,kind,gnu_ms,rg_ms,engine_ms,output_bytes,peak_bytes,agree,index_work,text_bytes,text_pieces,index_bytes,index_lookups,tree_nodes,content_written,records_written,upkeep_written,syncs,scratch_bytes,memory,cpu_us,elapsed_us
+"ls",read,2.4072,,0.0033,212,3232,"yes","",0,0,0,0,39,0,0,0,0,0,2972,22,22
+"ls -a",read,2.4798,,0.0047,330,4938,"yes","",0,0,0,0,39,0,0,0,0,0,4678,26,26
+"ls -R",read,74.5008,,4.1858,1377690,95108,"yes","",0,0,0,0,88856,0,0,0,0,0,94848,9114,9115
+"ls -aR Documentation",read,17.4395,,1.0950,216792,68200,"yes","",0,0,0,0,10375,0,0,0,0,0,67940,1886,1887
+"ls -p Documentation",read,2.7722,,0.0095,796,7899,"yes","",0,0,0,0,88,0,0,0,0,0,7639,54,53
+"find .",read,79.3095,,8.8950,3590937,20920,"yes","",0,0,0,0,88856,0,0,0,0,0,20660,19992,19992
+"find . -name '*.h'",read,92.0194,,11.3512,969473,24845,"yes","",0,0,0,0,88856,0,0,0,0,0,24585,16795,17320
+"find . -name '*.c'",read,78.5767,,11.9125,1233539,23821,"yes","",0,0,0,0,88856,0,0,0,0,0,23561,18016,18927
+"find . -type d",read,61.0578,,8.5653,166729,21703,"yes","",0,0,0,0,88856,0,0,0,0,0,21443,18748,18758
+"find . -type f",read,76.3089,,9.0737,3424208,35015,"yes","",0,0,0,0,88856,0,0,0,0,0,34755,27172,27172
+"find . -maxdepth 2 -type f",read,4.1513,,0.1597,23517,34860,"yes","",0,0,0,0,1786,0,0,0,0,0,34600,386,386
+"find Documentation -name '*.h' -type f",read,10.9681,,1.3332,76,4711,"yes","",0,0,0,0,10375,0,0,0,0,0,4451,1960,1960
+"find . -name 'Makefile'",read,70.9369,,12.3582,100053,29015,"yes","",0,0,0,0,88856,0,0,0,0,0,28755,16048,16049
+"cat include/linux/kernfs.h",read,2.1839,,0.0027,19937,2324,"yes","",19937,1,0,0,6,0,0,0,0,0,2064,45,38
+"cat -n include/linux/kernfs.h",read,2.2137,,0.0648,24368,31908,"yes","",19937,1,0,0,6,0,0,0,0,0,31648,136,136
+"head -n 20 include/linux/kernfs.h",read,2.1483,,0.0036,459,3524,"yes","",19937,1,0,0,3,0,0,0,0,0,3264,11,11
+"tail -n 20 include/linux/kernfs.h",read,2.1746,,0.0039,478,3543,"yes","",59811,3,0,0,3,0,0,0,0,0,3283,16,16
+"tail -n +100 include/linux/kernfs.h",read,2.3226,,0.0064,16906,3075,"yes","",39874,2,0,0,3,0,0,0,0,0,2815,41,41
+"wc include/linux/kernfs.h",read,2.5866,,0.0238,41,2511,"yes","",19937,1,0,0,6,0,0,0,0,0,2251,70,69
+"wc -l include/linux/*.h",read,18.9243,,1.0003,49563,238371,"yes","",0,0,0,0,10096,0,0,0,0,0,238111,1299,1368
+"cat include/linux/*.h | wc -l",read,30.7297,,1.5111,7,239020,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,238760,2441,2442
+"cat include/linux/kernfs.h | head -n 50 | tail -n 10",read,3.2079,,0.0081,447,10056,"yes","",19937,1,0,0,6,0,0,0,0,0,9796,32,32
+"grep -c define include/linux/kernfs.h",read,2.4288,,0.0137,2,15661,"yes","",19937,1,0,0,6,0,0,0,0,0,15401,83,84
+"grep -n define include/linux/kernfs.h",read,3.0112,,0.0142,374,15661,"yes","",19937,1,0,0,6,0,0,0,0,0,15401,65,64
+"sed 's/define/XX/g' include/linux/kernfs.h",read,3.2168,,0.0580,19905,17281,"yes","",19937,1,0,0,6,0,0,0,0,0,17021,122,122
+"sed -E 's/([a-z]+)_([a-z]+)/\2_\1/g' include/linux/kernfs.h",read,3.5199,,0.2533,19937,34263,"yes","",19937,1,0,0,6,0,0,0,0,0,34003,398,398
+"cat include/linux/kernfs.h | sed 's/^/> /' | wc -c",read,3.0915,,0.0999,6,33337,"yes","",19937,1,0,0,6,0,0,0,0,0,33077,144,144
+"grep -rn qdbzzabsentterm .",read,1217.7690,584.4397,0.0347,0,31692,"yes","",0,0,0,143,39,0,0,0,0,0,31432,189,189
+"grep -rl qdbzzabsentterm .",read,773.6996,541.2572,0.0344,0,31692,"yes","",0,0,0,143,39,0,0,0,0,0,31432,156,156
+"grep -rn ausgabenspezifisches .",read,1231.4092,595.6829,0.1446,116,42091,"yes","",1241990,340,82182,198,732,0,0,0,0,0,41831,521,521
+"grep -rl ausgabenspezifisches .",read,798.6100,546.6320,0.1359,32,42091,"yes","",1241990,340,82182,198,732,0,0,0,0,0,41831,536,534
+"grep -rn mispredicted .",read,1426.4205,590.1110,1.6286,111001,54199,"yes","",15506564,992,245457,110,926,0,0,0,0,0,53939,3666,3666
+"grep -rl mispredicted .",read,996.9866,576.2504,2.0821,4531,54199,"yes","",15333647,989,245457,110,926,0,0,0,0,0,53939,4025,4025
+"grep -rn separately .",read,1092.6933,602.1289,9.5372,103860,281915,"yes","",81868155,2828,241426,88,821,0,0,0,0,0,281655,20170,20170
+"grep -rl separately .",read,630.6054,552.6557,5.0494,30731,281389,"yes","",79005707,2774,241426,88,821,0,0,0,0,0,281129,11834,11833
+"grep -rn conditions .",read,1387.1124,657.6014,68.8744,1360505,193459,"yes","",329723559,15008,434405,88,88856,0,0,0,0,0,193199,68863,68864
+"grep -rl conditions .",read,798.7471,516.9822,42.2326,389604,191763,"yes","",309280273,14636,434405,88,88856,0,0,0,0,0,191503,42170,42224
+"grep -rn define .",read,4108.9465,3167.2186,718.6192,821103701,29263,"yes","",1396914445,93472,0,0,88856,0,0,0,0,0,29003,1015621,1018011
+"grep -rl define .",read,755.8255,662.3073,62.0753,1867569,15589,"yes","",874806358,84061,0,0,88856,0,0,0,0,0,15329,150071,150095
+"grep -rc separately .",read,739.8297,589.9433,22.6333,3591018,299859,"yes","",81868155,2828,241426,88,88856,0,0,0,0,0,299599,59303,59454
+"grep -rin MISPREDICTED .",read,1744.5114,779.7158,1.9310,135692,54188,"yes","",15506564,992,245457,110,926,0,0,0,0,0,53928,11569,11569
+"grep -ri separately .",read,901.8945,729.9398,17.8875,100640,281807,"yes","",81868155,2828,241426,88,821,0,0,0,0,0,281547,46572,46704
+"grep -rn separately Documentation",read,70.7264,51.0735,1.8929,19917,46202,"yes","",12358847,1125,241426,88,10376,0,0,0,0,0,45942,4922,4941
+"grep -rl conditions Documentation",read,67.0389,48.2818,3.3764,9541,191770,"yes","",20455323,2095,434405,88,10376,0,0,0,0,0,191510,8547,8548
+"grep -rF 'separately' .",read,639.1030,559.5010,8.9398,99728,281813,"yes","",81868155,2828,241426,88,821,0,0,0,0,0,281553,25294,25306
+"grep -rE 'atomic_[a-z]+\(' .",read,1339.5470,588.2787,57.4735,1294868,1040112,"yes","",291364084,8724,107819,55,732,0,0,0,0,0,1039852,96350,96446
+"grep -rE 'mispredicted|ausgabenspezifisches' .",read,1815.0319,653.6020,2.4289,109198,64348,"yes","",16729439,1142,327639,308,1035,0,0,0,0,0,64088,7826,7827
+"grep -rE 'conditions|separately' .",read,2339.0653,706.7346,82.7927,1427772,198072,"yes","",359274398,16259,675831,176,88856,0,0,0,0,0,197812,121207,121208
+"grep -rE '[0-9]{4,}' .",read,2965.1950,3869.5407,2421.1219,467543716,30928,"yes","",1396914445,93472,0,0,88856,0,0,0,0,0,30668,2410099,2421066
+"grep -rn '^#include' .",read,1997.6373,965.1560,259.6702,24862971,31988,"yes","",1396914445,93472,0,0,88856,0,0,0,0,0,31728,410897,411998
+"grep -rE '^(import|from) ' .",read,1278.4068,739.4285,274.2717,116415,30322,"yes","",1396914445,93472,0,0,88856,0,0,0,0,0,30062,320490,321018
+"grep -rin 'return [a-z_]*;$' Documentation",read,107.8241,56.3692,4.4867,24083,716558,"yes","",17727828,1700,249352,55,10376,0,0,0,0,0,716298,12584,12584
+"grep -rv e drivers/usb",read,62.8709,96.1449,21.3586,9638474,24195,"yes","",15871818,913,0,0,894,0,0,0,0,0,23935,28210,28533
+"grep -r '\(separately\).*\1' .",read,652.4281,,14.7578,188,284878,"yes","",81868155,2828,241426,88,821,0,0,0,0,0,284618,26171,26297
+"grep -n mispredicted include/linux/*.h",read,17.9414,,1.3121,0,239057,"yes","",3907212,551,245457,110,5800,0,0,0,0,0,238797,2341,2404
+"grep -l separately include/linux/*.h",read,10.0820,,1.5094,458,239047,"yes","",4752387,566,241426,88,5800,0,0,0,0,0,238787,2169,2170
+"grep -c qdbzzabsentterm include/linux/*.h",read,11.5003,,0.6713,39524,239072,"yes","",0,0,0,143,5800,0,0,0,0,0,238812,1003,1003
+"grep -rl conditions . | wc -l",read,804.9840,,42.9833,5,194192,"yes","",309280273,14636,434405,88,88856,0,0,0,0,0,193932,64382,64482
+"grep -rc define . | grep -v ':0$' | wc -l",read,1388.9003,,384.1225,6,31832,"yes","",1396914445,93472,0,0,88856,0,0,0,0,0,31572,403965,406282
+"find . -name '*.h' | wc -l",read,84.5822,,11.4010,6,27274,"yes","",0,0,0,0,88856,0,0,0,0,0,27014,16316,16318
+"find . -type f | grep -c h",read,75.9665,,14.9309,6,41290,"yes","",0,0,0,0,88856,0,0,0,0,0,41030,20707,20707
+"grep -rn define . | head -n 5",read,4.6985,,0.0314,473,18350,"order differs","",255439,49,0,0,213,0,0,0,0,0,18090,145,145
+"grep -rn conditions . | head -n 1",read,11.9111,,0.0536,107,25674,"order differs","",473575,91,0,0,213,0,0,0,0,0,25414,307,307
+"find . -type f | head -n 3",read,3.3849,,0.0704,47,36779,"order differs","",0,0,0,0,732,0,0,0,0,0,36519,181,181
+"cat include/linux/*.h | head -n 2",read,4.3500,,0.3983,42,239376,"yes","",48286,3,0,0,1522,0,0,0,0,0,239116,777,778
+"grep -rno separately .",read,1081.9260,595.5045,7.6524,53247,295364,"yes","",81868155,2828,241426,88,821,0,0,0,0,0,295104,21695,21695
+"grep -rw separately .",read,601.5064,546.4888,7.6526,99728,295177,"yes","",81868155,2828,241426,88,821,0,0,0,0,0,294917,16843,16910
+"grep -rnw mispredicted .",read,1433.6994,588.2863,1.7967,111001,66028,"yes","",15506564,992,245457,110,926,0,0,0,0,0,65768,5296,5297
+"grep -rn -C 2 mispredicted .",read,1494.4161,3384.4076,2.2048,269543,56542,"yes","",22904783,1163,245457,110,926,0,0,0,0,0,56282,4915,4915
+"grep -rn -A 1 -B 1 separately .",read,1128.9710,3863.5879,23.2705,277963,16564073,"yes","",128715097,3805,241426,88,821,0,0,0,0,0,16563813,53609,53610
+"grep -rho 'atomic_[a-z_]*' . | sort | uniq -c | sort -rn | head",read,1494.8928,,67.9400,207,3091470,"yes","",291364084,8724,107819,55,732,0,0,0,0,0,3091210,122372,125233
+"grep -rhow '[a-z]*mispredicted[a-z]*' . | sort | uniq -c | sort -rn | head -n 5",read,1081.4673,,2.4556,21,121841,"yes","",15506564,992,245457,110,926,0,0,0,0,0,121581,11201,11222
+"rg -j 1 qdbzzabsentterm",read,635.6341,,0.0856,0,36825,"yes","",2089,1,0,143,43,0,0,0,0,0,36565,887,887
+"rg -j 1 ausgabenspezifisches",read,659.8167,,0.1473,110,56603,"yes","",31571,3,82182,198,20,0,0,0,0,0,56343,1169,1167
+"rg -j 1 mispredicted",read,649.4970,,2.2048,108076,166310,"yes","",11917571,302,245457,110,996,0,0,0,0,0,166050,9852,9853
+"rg -j 1 separately",read,682.4988,,13.3320,97676,462689,"yes","",78795217,2219,241426,88,4188,0,0,0,0,0,462429,37603,37622
+"rg -j 1 conditions",read,721.5180,,130.1234,1304390,1476032,"yes","",326059201,14408,434405,88,110656,0,0,0,0,0,1475772,179264,179297
+"rg -j 1 define",read,2583.2681,,669.9884,782884773,1414564,"yes","",1396848040,93447,0,0,110656,0,0,0,0,0,1414304,970746,983299
+"rg -j 1 -l separately",read,784.6265,,8.0395,29063,463243,"yes","",75932769,2165,241426,88,4188,0,0,0,0,0,462983,32809,33162
+"rg -j 1 -l define",read,735.6343,,134.5574,1770439,1414862,"yes","",874739953,84036,0,0,110656,0,0,0,0,0,1414602,218564,218792
+"rg -j 1 -c conditions",read,785.3630,,129.4238,389616,1476586,"yes","",326059201,14408,434405,88,110656,0,0,0,0,0,1476326,202577,204106
+"rg -j 1 -i MISPREDICTED",read,800.8590,,22.1725,131741,186576,"yes","",12703246,314,245457,154,1020,0,0,0,0,0,186316,27138,27170
+"rg -j 1 -w separately",read,649.4363,,24.7920,97676,483075,"yes","",78795217,2219,241426,88,4188,0,0,0,0,0,482815,39150,39226
+"rg -j 1 -F 'separately'",read,626.4052,,13.0512,97676,463239,"yes","",78795217,2219,241426,88,4188,0,0,0,0,0,462979,23134,23135
+"rg -j 1 -n -C 2 mispredicted",read,713.3184,,4.1501,264923,167580,"yes","",19375004,475,245457,110,996,0,0,0,0,0,167320,9482,9482
+"rg -j 1 'atomic_[a-z]+\('",read,648.9203,,66.8089,1261770,1044201,"yes","",289774105,8358,107819,55,6628,0,0,0,0,0,1043941,126098,126099
+"rg -j 1 'mispredicted|ausgabenspezifisches'",read,745.4084,,2.7482,108186,193800,"yes","",11947053,304,327639,308,1004,0,0,0,0,0,193540,4428,4429
+"rg -j 1 '\bmispredicted\w*'",read,643.8610,,6.8795,108076,2593099,"yes","",11917571,302,245457,110,996,0,0,0,0,0,2592839,10268,10268
+"rg -j 1 -t c separately",read,558.7194,,8.9080,72373,461301,"yes","",64466419,1649,241426,88,4188,0,0,0,0,0,461041,18678,18695
+"rg -j 1 -g '*.h' separately",read,327.7157,,4.8807,15798,461211,"yes","",9441203,354,241426,88,4188,0,0,0,0,0,460951,6823,6823
+"rg -j 1 separately Documentation",read,59.5592,,11.3788,19276,202714,"yes","",9347015,422,241426,88,13084,0,0,0,0,0,202454,15110,15118
+"rg -j 1 -uu separately",read,553.8958,,6.0283,97676,288056,"yes","",78783087,2145,241426,88,0,0,0,0,0,0,287796,14561,14561
+"rg -j 1 --sort path mispredicted",read,696.3721,,2.4611,108076,167232,"yes","",11917571,302,245457,110,996,0,0,0,0,0,166972,4168,4297
+"rg -j 1 --files | wc -l",read,159.6414,,78.9146,6,1416742,"yes","",32122,334,0,0,110656,0,0,0,0,0,1416482,80272,82517
+"rg -j 1 -l conditions | wc -l",read,588.6030,,112.5436,5,1479015,"yes","",305627055,14038,434405,88,110656,0,0,0,0,0,1478755,141865,145962
+"ls -ltR",read,329.2285,,76.1003,4983709,147662,"yes","",0,0,0,0,266529,0,0,0,0,0,147402,83820,83856
+"ls -lt include/linux",read,7.9903,,0.8701,80182,116380,"yes","",0,0,0,0,5098,0,0,0,0,0,116120,1123,1123
+"ls -ltr Documentation | tail -n 3",read,3.7019,,0.0674,138,17114,"yes","",0,0,0,0,3243,0,0,0,0,0,16854,185,185
+"find . -newer include/linux/kernfs.h",read,119.3223,,8.4984,705690,20208,"yes","",0,0,0,0,88859,0,0,0,0,0,19948,14796,14797
+"find . -newer include/linux/kernfs.h -name '*.h'",read,90.0191,,9.2141,200213,34565,"yes","",0,0,0,0,88859,0,0,0,0,0,34305,14546,14545
+"find . -type f -mtime +30",read,118.8462,,8.5151,0,5280,"yes","",0,0,0,0,88856,0,0,0,0,0,5020,14170,14169
+"du -s .",read,112.8245,,0.0040,10,2710,"not compared","",0,0,0,0,88856,0,0,0,0,0,309657,4941,4939
+"du -sh Documentation",read,16.0068,,0.0029,18,2779,"not compared","",0,0,0,0,1,0,0,0,0,0,2519,23,23
+"du -sb .",read,106.9201,,0.0029,13,2718,"yes","",0,0,0,0,88856,0,0,0,0,0,412042,4871,4871
+"du -sb Documentation",read,15.5736,,0.0029,23,2779,"yes","",0,0,0,0,1,0,0,0,0,0,2519,21,20
+"du -b -d 1 Documentation",read,15.1976,,0.0092,2106,8937,"yes","",0,0,0,0,88,0,0,0,0,0,8677,66,66
+"sort include/linux/kernfs.h",read,2.7525,,0.0363,19937,114661,"yes","",19937,1,0,0,6,0,0,0,0,0,114401,210,209
+"sort -r include/linux/kernfs.h | head -n 3",read,3.2570,,0.0427,9,117784,"yes","",19937,1,0,0,6,0,0,0,0,0,117524,137,137
+"sort -u include/linux/kernfs.h | wc -l",read,3.2686,,0.0452,4,117452,"yes","",19937,1,0,0,6,0,0,0,0,0,117192,136,136
+"sort -k 2 include/linux/kernfs.h | tail -n 3",read,3.5471,,0.0602,97,138107,"yes","",19937,1,0,0,6,0,0,0,0,0,137847,176,176
+"cat include/linux/*.h | sort | uniq -c | sort -rn | head -n 5",read,244.8068,,141.9810,52,56896593,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,56896333,148949,149149
+"uniq -c include/linux/kernfs.h | wc -l",read,3.3741,,0.0298,4,31512,"yes","",19937,1,0,0,3,0,0,0,0,0,31252,85,85
+"cut -c 1-20 include/linux/kernfs.h",read,2.5232,,0.0196,9431,22969,"yes","",19937,1,0,0,3,0,0,0,0,0,22709,79,79
+"cut -d ' ' -f 1 include/linux/kernfs.h | sort | uniq | wc -l",read,3.6105,,0.0804,3,110171,"yes","",19937,1,0,0,3,0,0,0,0,0,109911,171,171
+"tr a-z A-Z < include/linux/kernfs.h",read,2.9302,,0.0078,19937,25028,"yes","",19937,1,0,0,3,0,0,0,0,0,24768,52,52
+"tr -d '\n' < include/linux/kernfs.h | wc -c",read,3.0488,,0.0184,6,27451,"yes","",19937,1,0,0,3,0,0,0,0,0,27191,38,38
+"tr -s ' ' < include/linux/kernfs.h | wc -c",read,2.9780,,0.0175,6,27449,"yes","",19937,1,0,0,3,0,0,0,0,0,27189,70,70
+"nl include/linux/kernfs.h",read,2.5155,,0.0573,24368,28117,"yes","",19937,1,0,0,3,0,0,0,0,0,27857,110,110
+"nl -ba include/linux/kernfs.h | tail -n 3",read,3.0735,,0.0663,54,55633,"yes","",19937,1,0,0,3,0,0,0,0,0,55373,104,104
+"seq 1 100000 | wc -l",read,4.1446,,2.9042,7,136436,"yes","",0,0,0,0,0,0,0,0,0,0,136176,2947,2958
+"seq -w 1 1000 | tail -n 2",read,3.4638,,0.0385,10,19239,"yes","",0,0,0,0,0,0,0,0,0,0,18979,68,67
+"basename include/linux/kernfs.h",read,2.6536,,0.0026,9,2353,"yes","",0,0,0,0,0,0,0,0,0,0,2093,12,12
+"basename -s .h include/linux/kernfs.h",read,2.6077,,0.0035,7,3199,"yes","",0,0,0,0,0,0,0,0,0,0,2939,13,13
+"dirname include/linux/kernfs.h",read,2.5679,,0.0025,14,2362,"yes","",0,0,0,0,0,0,0,0,0,0,2102,11,10
+"printf '%s\n' a b c",read,1.6874,,0.0033,6,3522,"yes","",0,0,0,0,0,0,0,0,0,0,3262,16,16
+"printf '%05d %-8s|%x\n' 42 name 255",read,1.7085,,0.0038,18,3619,"yes","",0,0,0,0,0,0,0,0,0,0,3359,16,16
+"test -f include/linux/kernfs.h && echo yes",read,1.7542,,0.0050,4,3832,"yes","",0,0,0,0,3,0,0,0,0,0,3572,24,24
+"[ -d Documentation ] && echo folder",read,1.6993,,0.0042,7,4169,"yes","",0,0,0,0,40,0,0,0,0,0,3909,23,23
+"date -u -d '2024-02-29 12:00:00' '+%Y-%m-%d %H:%M:%S %s %a'",read,2.4664,,0.0051,35,3709,"yes","",0,0,0,0,0,0,0,0,0,0,3449,22,22
+"echo a b c | xargs -n 1 echo",read,6.1336,,0.0063,6,6367,"yes","",0,0,0,0,0,0,0,0,0,0,6107,25,25
+"find drivers/usb -name '*.h' | xargs cat | wc -l",read,9.4860,,0.4048,6,73712,"yes","",1878603,229,0,0,2862,0,0,0,0,0,73452,1441,1441
+"find . -name '*.h' | xargs grep -l separately | wc -l",read,226.3000,,47.6154,4,1903477,"yes","",36980222,4595,1931408,704,209146,0,0,0,0,0,1903217,56553,58028
+"echo {a,b,c}{1..3}",read,1.7322,,0.0055,27,5917,"yes","",0,0,0,0,0,0,0,0,0,0,5657,23,23
+"echo {1..20..3} {a..e}",read,1.7050,,0.0064,28,5303,"yes","",0,0,0,0,0,0,0,0,0,0,5043,23,23
+"echo $(wc -l < include/linux/kernfs.h) `basename include/linux/kernfs.h`",read,4.7799,,0.0095,13,7947,"yes","",19937,1,0,0,3,0,0,0,0,0,7687,54,47
+"echo ""first line: $(head -n 1 include/linux/kernfs.h)""",read,2.9798,,0.0070,56,6613,"yes","",19937,1,0,0,3,0,0,0,0,0,6353,30,30
+"wc -l < include/linux/kernfs.h",read,2.9750,,0.0039,4,3353,"yes","",19937,1,0,0,3,0,0,0,0,0,3093,19,19
+"cat include/linux/kernfs.h > /dev/null 2>&1",read,2.8342,,0.0032,0,3470,"yes","",19937,1,0,0,6,0,0,0,0,0,3210,16,15
+"cat qdb_no_such_file 2> /dev/null ; echo after",read,2.9739,,0.0046,6,4419,"yes","",0,0,0,0,2,0,0,0,0,0,4159,20,20
+"cat qdb_no_such_file 2>&1 | wc -l",read,3.4105,,0.0046,2,5445,"yes","",0,0,0,0,2,0,0,0,0,0,5185,25,25
+"grep -q define include/linux/kernfs.h && echo found || echo none",read,3.1600,,0.0148,6,17854,"yes","",19937,1,0,0,6,0,0,0,0,0,17594,100,100
+"false || echo fallback",read,1.6670,,0.0048,9,2970,"yes","",0,0,0,0,0,0,0,0,0,0,2710,12,12
+"true && grep -c define include/linux/kernfs.h",read,2.6277,,0.0151,2,16313,"yes","",19937,1,0,0,6,0,0,0,0,0,16053,84,84
+"cat <<EOF⏎one $(echo two)⏎three⏎EOF",read,3.2474,,0.0051,14,5376,"yes","",0,0,0,0,0,0,0,0,0,0,5116,19,19
+"wc -l <<'EOF'⏎a⏎b⏎EOF",read,2.8316,,0.0027,2,3079,"yes","",0,0,0,0,0,0,0,0,0,0,2819,12,12
+"echo one \⏎two",read,1.6458,,0.0026,8,2596,"yes","",0,0,0,0,0,0,0,0,0,0,2336,9,9
+"grep -c define include/linux/kernfs.h⏎wc -l include/linux/kernfs.h",read,3.7694,,0.0158,29,17079,"yes","",19937,1,0,0,9,0,0,0,0,0,16819,79,79
+"for i in $(seq 100000); do :; done",read,93.6780,,33.7963,0,7815564,"yes","",0,0,0,0,0,0,0,0,0,0,7815304,33549,33570
+"i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done; echo $i",read,28.1236,,23.1610,6,7252,"yes","",0,0,0,0,390039,0,0,0,0,0,6992,22166,22217
+"i=10; until [ $i -eq 0 ]; do i=$((i-1)); done; echo $i",read,1.6126,,0.0281,2,7249,"yes","",0,0,0,0,429,0,0,0,0,0,6989,52,52
+"for f in include/linux/*.h; do echo ""$f""; done | wc -l",read,15.9984,,1.3837,5,153617,"yes","",0,0,0,0,1504,0,0,0,0,0,153357,1334,1334
+"for f in include/linux/*.h; do grep -c define ""$f""; done | sort -n | tail -n 3",read,1823.0965,,17.7007,15,160162,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,159902,20407,24997
+"n=0; for f in include/linux/*.h; do if grep -q conditions ""$f""; then n=$((n+1)); fi; done; echo $n",read,1711.1946,,24.0244,3,154922,"yes","",10736325,1449,0,0,10096,0,0,0,0,0,154662,25968,25987
+"for f in include/linux/*.h; do if [ -s ""$f"" ]; then continue; fi; echo ""$f""; done",read,6.8019,,2.7026,0,153894,"yes","",0,0,0,0,61648,0,0,0,0,0,153634,2789,2789
+"H=$PWD; for d in Documentation drivers/usb include/linux; do cd ""$d""; ls | wc -l; cd ""$H""; done",read,6.3826,,0.0525,11,95642,"yes","",0,0,0,0,1623,0,0,0,0,0,95478,131,131
+"X=define; N=$(grep -c ""$X"" include/linux/kernfs.h); echo ""$X: $((N * 2)) ${#X} ${N:-none}""",read,3.1106,,0.0199,15,19129,"yes","",19937,1,0,0,6,0,0,0,0,0,18869,112,112
+"find drivers/usb -name '*.h' | while read -r f; do wc -l < ""$f""; done | sort -n | tail -n 1",read,269.1900,,0.7434,5,102766,"yes","",1878603,229,0,0,1877,0,0,0,0,0,102506,1052,1053
+"for f in include/linux/*.h; do head -n 1 ""$f""; done > /dev/null",read,1497.6101,,2.1893,0,152866,"yes","",10104438,1432,0,0,5800,0,0,0,0,0,152606,2544,2545
+"for i in 1 2 3; do for j in a b; do if [ $i -eq 2 ]; then break; fi; echo $i$j; done; done",read,1.6679,,0.0166,12,9721,"yes","",0,0,0,0,195,0,0,0,0,0,9461,42,42
+"awk '{ print $2 }' include/linux/kernfs.h",read,3.1504,,0.0375,4720,16994,"yes","",19937,1,0,0,3,0,0,0,0,0,16734,132,132
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk '{ print $2 }' | wc -l",read,104.0556,,29.4709,7,241260,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,241000,31280,31308
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk '/define/ { n++ } END { print n }'",read,69.7553,,21.0899,6,240384,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,240124,20657,20657
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk '{ s += NF } END { print s, NR }'",read,113.4186,,41.9872,15,240382,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,240122,41056,41056
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk -F: '{ s += $3 } END { print s }'",read,75.5439,,23.1402,5,240737,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,240477,23602,23664
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk 'FNR == 1 { print FILENAME }' | wc -l",read,63.8294,,21.8867,2,241290,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,241030,20535,20782
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk 'length($0) > 100 { n++ } END { print n + 0 }'",read,74.1896,,18.9216,4,240408,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,240148,18505,18524
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk '{ c[$1]++ } END { for (k in c) n++; print n }'",read,96.3256,,50.1868,6,3420720,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,3420460,51430,51513
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk '{ for (i = 1; i <= NF; i++) if ($i == ""define"") n++ } END { print n }'",read,261.0544,,143.3348,4,240458,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,240198,148772,148915
+"awk '{ gsub(/[0-9]+/, ""N""); print }' include/linux/kernfs.h | wc -c",read,4.1126,,0.3140,6,39272,"yes","",19937,1,0,0,3,0,0,0,0,0,39012,445,445
+"awk -v OFS=- '{ $1 = NR; print }' include/linux/kernfs.h | tail -n 1",read,4.7732,,0.2312,27,49634,"yes","",19937,1,0,0,3,0,0,0,0,0,49374,322,322
+"awk 'BEGIN { for (i = 0; i < 100000; i++) s += i * i; printf ""%d\n"", s }'",read,10.1676,,5.5328,16,5894,"yes","",0,0,0,0,0,0,0,0,0,0,5634,5475,5475
+"grep -rn separately . | awk -F: '{ print $1 }' | uniq -c | sort -rn | head -n 5",read,1075.8964,,6.5344,215,296634,"yes","",81868155,2828,241426,88,821,0,0,0,0,0,296374,19449,19450
+"cat include/linux/*.h | tr -cd '[:print:][:space:]' | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5",read,168.9509,,99.8964,83,12205146,"yes","",10767883,1451,0,0,10096,0,0,0,0,0,12204886,98342,99889
+"mkdir -p bench_out/a/b",write,3.2067,,0.0297,0,3716,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,0,0,0,0,0,3456,24,23
+"touch bench_out/empty.txt",write,2.6388,,0.0211,0,2475,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,0,0,0,0,0,2215,17,17
+"echo 'hello world' > bench_out/hello.txt",write,1.7412,,0.1476,0,3710,"yes","documents +1 -0; postings +9; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,52,0,0,0,0,3450,143,143
+"echo 'another line' >> bench_out/hello.txt",write,1.8616,,0.1684,0,3530,"yes","documents +1 -1; postings +19; list bytes rewritten 0; rebuilds 0",24,2,0,0,2,65,0,0,0,0,3270,164,164
+"cp include/linux/kernfs.h bench_out/copy.txt",write,2.7951,,0.0274,0,3275,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,8,0,0,0,0,0,3015,24,23
+"cp -r Documentation bench_out/dir_copy",write,148.5057,,25.6659,0,4208637,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,164925,0,0,0,0,0,4208377,25659,25657
+"cp -r include/linux bench_out/work",write,43.3984,,3.6456,0,1155868,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,29419,0,0,0,0,0,1155608,3640,3639
+"sed -i 's/define/QDBBENCHONE/g' bench_out/copy.txt",write,2.7831,,1.7535,0,56122,"yes","documents +1 -0; postings +2616; list bytes rewritten 0; rebuilds 0",19937,1,0,0,2,20017,0,0,0,0,55862,1750,1750
+"sed -i -E 's/[0-9]+/N/g' bench_out/copy.txt",write,2.9318,,0.4334,0,53652,"yes","documents +1 -1; postings +2504; list bytes rewritten 0; rebuilds 0",19977,1,0,0,2,19925,0,0,0,0,53392,430,430
+"sed -i 's/define/QDBBENCHMANY/g' bench_out/work/*.h",write,110.7676,,235.3328,0,11561622,"yes","documents +1428 -0; postings +1603987; list bytes rewritten 0; rebuilds 0",10767883,1451,0,0,5800,10971528,0,0,0,0,11561362,235141,235326
+"sed -i 's/qdbzzabsentterm/QDBBENCHNONE/g' bench_out/work/*.h",write,193.3774,,1.1139,0,253011,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,143,5800,0,0,0,0,0,252751,1107,1107
+"sed -i 's/mispredicted/QDBBENCHFEW/g' bench_out/work/*.h",write,198.4183,,2.4676,0,251451,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",3964184,551,248885,110,5800,0,0,0,0,0,251191,2441,2459
+"cp include/linux/kernfs.h bench_out/same.txt",write,3.2224,,0.0275,0,3127,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,8,0,0,0,0,0,2867,23,23
+"cp include/linux/kernfs.h bench_out/same.txt",write,2.9774,,0.0154,0,2855,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,7,0,0,0,0,0,2595,12,12
+"cat include/linux/kernfs.h > bench_out/same.txt",write,3.7999,,0.0380,0,23395,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",39874,2,0,0,8,0,0,0,0,0,23135,33,33
+"grep -rc QDBBENCHMANY bench_out",write,54.6398,,4.4485,687043,208290,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",11870561,1714,65614,110,13154,0,0,0,0,0,208030,4444,4444
+"grep -rl QDBBENCHMANY .",write,568.2915,,1.3126,39690,181035,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",11202312,1662,65614,110,733,0,0,0,0,0,180775,1295,1302
+"grep -rl QDBBENCHONE .",write,854.8611,,0.3748,21,25024,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",1061493,211,52604,99,733,0,0,0,0,0,24764,366,365
+"cat include/linux/kernfs.h | tee bench_out/tee.txt | wc -l",write,3.9946,,0.3209,4,46938,"yes","documents +1 -0; postings +2610; list bytes rewritten 0; rebuilds 0",19937,1,0,0,9,19977,0,0,0,0,46678,316,315
+"sort include/linux/kernfs.h > bench_out/sorted.txt",write,3.2904,,0.3583,0,135646,"yes","documents +1 -0; postings +2610; list bytes rewritten 0; rebuilds 0",19937,1,0,0,9,19977,0,0,0,0,135386,349,348
+"sort -u include/linux/kernfs.h >> bench_out/sorted.txt",write,3.7208,,0.3319,0,134473,"yes","documents +1 -1; postings +2610; list bytes rewritten 0; rebuilds 0",59811,3,0,0,8,38599,0,0,0,0,134213,328,328
+"cat qdb_no_such_file &> bench_out/both.txt",write,2.6659,,0.0372,0,3828,"yes","documents +1 -0; postings +42; list bytes rewritten 0; rebuilds 0",0,0,0,0,5,89,0,0,0,0,3568,33,33
+"cat qdb_no_such_file 2>> bench_out/both.txt",write,2.8832,,0.0228,0,3826,"yes","documents +1 -1; postings +42; list bytes rewritten 0; rebuilds 0",98,2,0,0,4,138,0,0,0,0,3566,20,20
+"find drivers/usb -name '*.h' | sort | xargs cat > bench_out/joined.txt",write,6.2783,,13.9028,0,2436183,"yes","documents +29 -0; postings +168701; list bytes rewritten 0; rebuilds 0",1878603,229,0,0,2865,1879203,0,0,0,0,2435923,13851,13897
+"cp bench_out/joined.txt bench_out/joined2.txt",write,3.4637,,0.0353,0,8387,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,7,0,0,0,0,0,8127,30,30
+"sed -i '1d' bench_out/joined2.txt",write,8.1146,,2.4850,0,151179,"yes","documents +1 -0; postings +5455; list bytes rewritten 0; rebuilds 0",1878603,29,0,0,2,65524,0,0,0,0,150919,2479,2477
+"wc -c bench_out/joined.txt bench_out/joined2.txt bench_out/tee.txt bench_out/sorted.txt",write,2.5884,,0.0272,128,4476,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,16,0,0,0,0,0,4216,23,23
+"cat bench_out/both.txt",write,2.3394,,0.0276,98,2406,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",98,1,0,0,4,0,0,0,0,0,2146,24,24
+"cp include/linux/kernfs.h bench_out/v2.txt",write,2.5978,,0.0237,0,3099,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,8,0,0,0,0,0,2839,19,19
+"sed -i -e '10s/$/ changed/' -e '40,45d' -e '100i an added line' bench_out/v2.txt",write,2.6435,,0.2483,0,50965,"yes","documents +1 -0; postings +2585; list bytes rewritten 0; rebuilds 0",19937,1,0,0,2,19726,0,0,0,0,50705,243,243
+"diff -u --label old --label new include/linux/kernfs.h bench_out/v2.txt",write,2.4194,,0.0833,866,18968,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",257926,13,0,0,5,0,0,0,0,0,18708,80,79
+"diff include/linux/kernfs.h bench_out/v2.txt | wc -l",write,2.9647,,0.0818,3,18877,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",198366,10,0,0,5,0,0,0,0,0,18617,77,77
+"diff -q include/linux/kernfs.h bench_out/same.txt",write,2.4983,,0.0214,0,3307,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,5,0,0,0,0,0,3047,17,17
+"diff -u include/linux/kernfs.h bench_out/copy.txt | wc -l",write,3.0832,,0.2394,4,107302,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",239036,12,0,0,5,0,0,0,0,0,107042,236,236
+"diff -rq Documentation bench_out/dir_copy",write,81.2259,,3.7955,0,59305,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,20751,0,0,0,0,0,59045,3789,3789
+"sed -i '1s/^/one edit /' $(find bench_out/dir_copy -type f | sort | head -n 1)",write,14.4496,,2.7377,0,1516164,"yes","documents +1 -0; postings +53; list bytes rewritten 0; rebuilds 0",53,1,0,0,10379,102,0,0,0,0,1515904,2732,2732
+"diff -rq Documentation bench_out/dir_copy",write,80.4147,,3.7350,72,59377,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",115,2,0,0,20751,0,0,0,0,0,59117,3727,3727
+"diff -r include/linux bench_out/work | wc -l",write,75.3560,,63.5300,6,979281,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",90403998,12566,0,0,5544,0,0,0,0,0,979021,63484,63523
+"diff -ru include/linux bench_out/work | grep -c '^@@'",write,88.7796,,72.0720,5,985407,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",119026792,16730,0,0,5544,0,0,0,0,0,985147,72017,72064
+"for i in $(seq 10000); do echo ""line $i"" >> bench_out/loop.txt; done",write,44.9402,,24.3041,0,11631668,"yes","documents +10000 -9994; postings +138134; list bytes rewritten 0; rebuilds 0",1580743,19993,0,0,20001,1239829,0,0,0,0,11631408,24298,24297
+"wc -l bench_out/loop.txt",write,2.8919,,0.0192,25,2829,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,2,0,0,0,0,0,2569,15,15
+"for f in bench_out/work/*.h; do echo done >> ""$f""; done",write,11.1143,,3.1662,0,152112,"yes","documents +1432 -0; postings +2864; list bytes rewritten 0; rebuilds 0",9606666,1432,0,0,5800,64440,0,0,0,0,151852,3160,3160
+"awk '{ print NR "": "" $0 }' include/linux/kernfs.h > bench_out/numbered.txt",write,3.9765,,0.4334,0,54126,"yes","documents +1 -0; postings +3282; list bytes rewritten 0; rebuilds 0",19937,1,0,0,6,23034,0,0,0,0,53866,429,429
+"awk 'END { print NR }' bench_out/numbered.txt",write,3.1879,,0.0506,4,5584,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",22994,1,0,0,2,0,0,0,0,0,5324,46,45
+"mv bench_out/dir_copy bench_out/dir_moved",write,2.7048,,0.0262,0,2905,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,8,0,0,0,0,0,2645,21,21
+"mv bench_out/hello.txt bench_out/a/b",write,2.6646,,0.0251,0,3255,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,13,0,0,0,0,0,2995,20,20
+"ls -R bench_out/a",write,2.6417,,0.0165,41,3097,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,4,0,0,0,0,0,2837,13,13
+"rm bench_out/a/b/hello.txt",write,2.2876,,0.0193,0,2413,"yes","documents +0 -1; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,4,0,0,0,0,0,2153,15,15
+"rmdir bench_out/a/b",write,2.6534,,0.0186,0,2292,"yes","documents +0 -0; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,3,0,0,0,0,0,2032,14,14
+"rm -r bench_out/dir_moved",write,114.1918,,4.5543,0,3295,"yes","documents +0 -1; postings +0; list bytes rewritten 0; rebuilds 0",0,0,0,0,2,0,0,0,0,0,3035,4532,4544
+"rm -rf bench_out",write,107.6971,,1.6732,0,13245,"yes","documents +0 -2902; postings +0; list bytes rewritten 192488; rebuilds 0",0,0,0,0,1,0,0,0,0,0,12985,1665,1665
