@@ -119,7 +119,7 @@ impl Spool {
             }
         }
         let (_, f) = self.file.as_mut().unwrap();
-        self.scratch.used.set(self.scratch.used.get() + self.mem.len() as u64);
+        crate::tree::count_scratch(self.mem.len() as u64);
         if let Err(e) = f.write_at(self.len - self.mem.len() as u64, &self.mem) {
             self.error = Some(e);
         }

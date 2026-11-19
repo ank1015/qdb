@@ -36,9 +36,9 @@ use crate::disk::{self, damage, Damage, Packed, PackedWriter, Piece, Reader, Seg
 use crate::index::{self, Index, Lists, Postings};
 pub use crate::index::{IndexStats, IndexWork};
 use crate::query::{Query, Trigram};
-use std::cell::Cell;
-use std::rc::Rc;
-use crate::vfs::{MemFs, RealFs, Vfs};
+use std::cell::{Cell, RefCell};
+use std::sync::Arc;
+use crate::vfs::{MemFs, RealFs, Vfs, VfsRef};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io;
@@ -281,6 +281,10 @@ pub struct Config {
     /// A unit is stopped once it has run this many commands, so that a
     /// loop without an end cannot hold the database for good.
     pub command_limit: u64,
+    /// The data file being written gets an index file of its own at
+    /// close only once it holds this many bytes; below that, opening
+    /// indexes its content again, which is quicker than reading a file.
+    pub index_file_min: u64,
 }
 
 /// With `index_later`: how much text may wait to be indexed.
@@ -288,7 +292,7 @@ const INDEX_WAIT: u64 = 16 << 20;
 
 impl Default for Config {
     fn default() -> Config {
-        Config { piece: 64 * 1024, segment: 128 << 20, sync: SyncMode::Always, batch_lines: 64, batch_bytes: 4 << 20, index: true, checkpoint: 1 << 20, spool: 8 << 20, upkeep: true, compress: false, index_later: false, command_limit: 1_000_000 }
+        Config { piece: 64 * 1024, segment: 128 << 20, sync: SyncMode::Always, batch_lines: 64, batch_bytes: 4 << 20, index: true, checkpoint: 1 << 20, spool: 8 << 20, upkeep: true, compress: false, index_later: false, command_limit: 1_000_000, index_file_min: 256 << 10 }
     }
 }
 
@@ -296,16 +300,14 @@ impl Default for Config {
 /// one is used. Without a place, everything is held in memory.
 #[derive(Clone)]
 pub struct Scratch {
-    pub vfs: Option<Rc<dyn Vfs>>,
+    pub vfs: Option<VfsRef>,
     pub limit: usize,
-    /// Bytes written to scratch files, for the cost report.
-    pub used: Rc<Cell<u64>>,
 }
 
 impl Scratch {
     /// No place: everything is held in memory.
     pub fn none() -> Scratch {
-        Scratch { vfs: None, limit: 0, used: Rc::default() }
+        Scratch { vfs: None, limit: 0 }
     }
 }
 
@@ -343,6 +345,8 @@ pub struct Cost {
 }
 
 impl Cost {
+    pub const ZERO: Cost = Cost { text_bytes: 0, text_pieces: 0, index_bytes: 0, index_lookups: 0, tree_nodes: 0, content_written: 0, records_written: 0, upkeep_written: 0, syncs: 0, scratch_bytes: 0, memory: 0, cpu_ns: 0, elapsed_ns: 0 };
+
     /// The counts without the two times: what must repeat exactly.
     pub fn counts(&self) -> Cost {
         Cost { cpu_ns: 0, elapsed_ns: 0, ..*self }
@@ -394,15 +398,44 @@ impl std::fmt::Display for Cost {
     }
 }
 
-/// Running counts of what was read, behind `Cost`.
-#[derive(Default)]
-struct Tally {
-    text_bytes: Cell<u64>,
-    text_pieces: Cell<u64>,
-    index_bytes: Cell<u64>,
-    index_lookups: Cell<u64>,
-    tree_nodes: Cell<u64>,
-    scratch: Rc<Cell<u64>>,
+/// Running counts of what was read, behind `Cost`. They are kept per
+/// thread: a unit runs on one thread, and several units may read one
+/// database at once, each counting its own. Helpers of a unit (a search
+/// split over threads) hand their counts back with `add_reads`.
+const T_TEXT_BYTES: usize = 0;
+const T_TEXT_PIECES: usize = 1;
+const T_INDEX_BYTES: usize = 2;
+const T_INDEX_LOOKUPS: usize = 3;
+const T_TREE_NODES: usize = 4;
+const T_SCRATCH: usize = 5;
+
+thread_local! {
+    static TALLY: [Cell<u64>; 6] = const { [const { Cell::new(0) }; 6] };
+    /// The folder relative paths start from, while a unit runs on this
+    /// thread: its components, empty for the root. It is the session's,
+    /// lent for the length of a unit; nothing of it is stored.
+    static CWD: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    static UNIT: RefCell<Option<UnitStart>> = const { RefCell::new(None) };
+    static LAST_COST: Cell<Cost> = const { Cell::new(Cost::ZERO) };
+}
+
+/// What this thread has read so far, by counter.
+pub fn reads_now() -> [u64; 6] {
+    TALLY.with(|t| std::array::from_fn(|i| t[i].get()))
+}
+
+/// Add what a helper thread read on a unit's behalf.
+pub fn add_reads(r: &[u64; 6]) {
+    TALLY.with(|t| {
+        for i in 0..6 {
+            t[i].set(t[i].get() + r[i]);
+        }
+    });
+}
+
+/// Bytes a command sent to scratch files, for the cost report.
+pub fn count_scratch(bytes: u64) {
+    bump(T_SCRATCH, bytes);
 }
 
 /// Where the counts stood when a unit began.
@@ -419,9 +452,9 @@ struct UnitStart {
 static COUNTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 #[inline]
-fn bump(c: &Cell<u64>, by: u64) {
+fn bump(which: usize, by: u64) {
     if COUNTING.load(std::sync::atomic::Ordering::Relaxed) {
-        c.set(c.get() + by);
+        TALLY.with(|t| t[which].set(t[which].get() + by));
     }
 }
 
@@ -539,7 +572,7 @@ pub struct Db {
     nodes: Nodes,
     root: NodeId,
     next_id: NodeId,
-    vfs: Rc<dyn Vfs>,
+    vfs: VfsRef,
     /// The files are in memory and there is no log.
     volatile: bool,
     cfg: Config,
@@ -559,7 +592,7 @@ pub struct Db {
     epoch: u64,
     /// Totals a command worked out over whole folders, with the epoch
     /// they are good for.
-    totals: std::cell::RefCell<(u64, std::collections::HashMap<(NodeId, u8), u64>)>,
+    totals: std::sync::Mutex<(u64, std::collections::HashMap<(NodeId, u8), u64>)>,
     /// Pieces it has taken out of files. Their content is forgotten when
     /// the command line ends.
     retired: Vec<(NodeId, Piece)>,
@@ -580,6 +613,8 @@ pub struct Db {
     /// The current checkpoint, the data file the log continues in from
     /// there, and its size.
     ckp: u32,
+    /// The current checkpoint is inside MANIFEST, not a file of its own.
+    ckp_inline: bool,
     ckp_seg: u32,
     ckp_size: u64,
     live_pieces: u64,
@@ -587,13 +622,6 @@ pub struct Db {
     /// Work done by indexes that are no longer in memory.
     work: IndexWork,
     io: IoStats,
-    tally: Tally,
-    /// The folder relative paths start from, while a command runs: its
-    /// components. Empty for the root. It is the session's, lent to the
-    /// database for the length of a command; nothing of it is stored.
-    cwd: Vec<Vec<u8>>,
-    unit: Option<UnitStart>,
-    last_cost: Cost,
     /// Upkeep under way, done a step at a time as command lines end: an
     /// index file being written, the tree being saved, and the data file
     /// whose content is being moved out so that it can be removed (and
@@ -630,6 +658,13 @@ struct CkpJob {
     /// `log_since` when the save began.
     log_before: u64,
 }
+
+// The database is shared between threads: units that only read run on
+// it together.
+const _: fn() = || {
+    fn shared<T: Send + Sync>() {}
+    shared::<Db>();
+};
 
 impl Default for Db {
     fn default() -> Self {
@@ -786,7 +821,7 @@ impl Db {
     }
 
     fn blank(vfs: Box<dyn Vfs>, cfg: Config) -> Db {
-        let vfs: Rc<dyn Vfs> = Rc::from(vfs);
+        let vfs: VfsRef = Arc::from(vfs);
         let mut nodes = Nodes::default();
         nodes.insert(Node { id: 0, name: Vec::new(), parent: None, kind: NodeKind::Folder(BTreeMap::new()), aux: 0, mtime: 0 });
         let volatile = vfs.volatile();
@@ -813,16 +848,13 @@ impl Db {
             unsynced_lines: 0,
             log_since: 0,
             ckp: 0,
+            ckp_inline: false,
             ckp_seg: 1,
             ckp_size: 0,
             live_pieces: 0,
             failed: None,
             work: IndexWork::default(),
             io: IoStats::default(),
-            tally: Tally::default(),
-            cwd: Vec::new(),
-            unit: None,
-            last_cost: Cost::default(),
             idx_job: None,
             ckp_job: None,
             clean: None,
@@ -860,8 +892,8 @@ impl Db {
         let mut report = OpenReport::default();
         let io = |e: io::Error| e.to_string();
         let names = db.vfs.list().map_err(io)?;
-        let number = match disk::read_manifest(&*db.vfs)? {
-            Some(n) => n,
+        let manifest = match disk::read_manifest(&*db.vfs)? {
+            Some(m) => m,
             None => {
                 if let Some(other) = names.iter().find(|n| *n != "LOCK" && !n.ends_with(".tmp")) {
                     return Err(format!("{}: there are files here but no MANIFEST: this is not a qdb database, or its MANIFEST is lost", db.vfs.describe(other)));
@@ -884,9 +916,11 @@ impl Db {
         };
 
         // The saved tree.
-        let (entries, size) = disk::read_checkpoint(&*db.vfs, number)?;
-        let ckp_file = db.vfs.describe(&disk::ckp_name(number));
+        let number = manifest.number;
+        let (entries, size) = disk::read_checkpoint(&*db.vfs, number, manifest.inline.as_deref())?;
+        let ckp_file = if manifest.inline.is_some() { db.vfs.describe("MANIFEST") } else { db.vfs.describe(&disk::ckp_name(number)) };
         db.ckp = number;
+        db.ckp_inline = manifest.inline.is_some();
         db.ckp_size = size;
         db.nodes = Nodes::default();
         let mut r = Reader::new(&entries);
@@ -1154,10 +1188,21 @@ impl Db {
                 seg.packed = packed;
             }
             let (rebuilt, bytes) = db.index_backlog().map_err(io)?;
-            report.rebuilt = rebuilt.iter().map(|id| disk::seg_name(*id)).collect();
+            // A small data file still being written has no index file by
+            // design: indexing it again is part of every open, not news.
+            let active = db.active;
+            let troubled = report.removed.iter().any(|r| r.starts_with(&disk::idx_name(active)));
+            let small = !db.active_wants_index_file();
+            report.rebuilt = rebuilt.iter().filter(|id| **id != active || troubled || !small).map(|id| disk::seg_name(*id)).collect();
             report.rebuilt_bytes = bytes;
         }
         Ok((db, report))
+    }
+
+    /// Whether the data file being written is large enough to be given an
+    /// index file of its own when the database is closed.
+    fn active_wants_index_file(&self) -> bool {
+        self.segs[self.active as usize].as_ref().is_some_and(|s| s.end - SEG_HEADER >= self.cfg.index_file_min)
     }
 
     /// Apply the changes one command line logged. Applying a change that
@@ -1385,7 +1430,7 @@ impl Db {
         self.unsynced_lines = 0;
         let (log_off, log_ords) = (active.end, active.owners.len() as u32);
         let number = self.ckp + 1;
-        let mut w = disk::CheckpointWriter::new(&*self.vfs, number)?;
+        let mut w = disk::CheckpointWriter::new(&self.vfs, number)?;
         let e = w.entry();
         disk::put_u64(e, 0);
         disk::put_u64(e, self.seq);
@@ -1398,19 +1443,32 @@ impl Db {
             encode_node(node, w.entry());
             w.entry_done()?;
         }
-        let size = w.finish(&*self.vfs)?;
-        self.io.syncs += 2;
-        self.io.dir_syncs += 2;
-        self.io.tree_bytes += size + 20;
-        self.io.checkpoints += 1;
-        if self.ckp != 0 {
+        let (size, inline) = w.finish()?;
+        self.count_checkpoint(size, inline);
+        if self.ckp != 0 && !self.ckp_inline {
             self.vfs.remove(&disk::ckp_name(self.ckp))?;
         }
         self.ckp = number;
+        self.ckp_inline = inline;
         self.ckp_seg = self.active;
         self.ckp_size = size;
         self.log_since = 0;
         self.drop_empty()
+    }
+
+    /// What finishing a checkpoint wrote and synced.
+    fn count_checkpoint(&mut self, size: u64, inline: bool) {
+        if inline {
+            // MANIFEST, holding it: one file synced, one rename synced.
+            self.io.syncs += 1;
+            self.io.dir_syncs += 1;
+            self.io.tree_bytes += size + 24;
+        } else {
+            self.io.syncs += 2;
+            self.io.dir_syncs += 2;
+            self.io.tree_bytes += size + 24;
+        }
+        self.io.checkpoints += 1;
     }
 
     /// Begin saving the tree a step at a time. The checkpoint names the
@@ -1420,7 +1478,7 @@ impl Db {
     /// right tree, because applying a change twice does nothing.
     fn ckp_start(&mut self) -> io::Result<()> {
         let active = self.segs[self.active as usize].as_ref().unwrap();
-        let mut w = disk::CheckpointWriter::new(&*self.vfs, self.ckp + 1)?;
+        let mut w = disk::CheckpointWriter::new(&self.vfs, self.ckp + 1)?;
         let e = w.entry();
         disk::put_u64(e, 0);
         disk::put_u64(e, self.seq);
@@ -1464,15 +1522,13 @@ impl Db {
             self.unsynced_lines = 0;
         }
         let number = job.w.number;
-        let size = job.w.finish(&*self.vfs)?;
-        self.io.syncs += 2;
-        self.io.dir_syncs += 2;
-        self.io.tree_bytes += size + 20;
-        self.io.checkpoints += 1;
-        if self.ckp != 0 {
+        let (size, inline) = job.w.finish()?;
+        self.count_checkpoint(size, inline);
+        if self.ckp != 0 && !self.ckp_inline {
             self.vfs.remove(&disk::ckp_name(self.ckp))?;
         }
         self.ckp = number;
+        self.ckp_inline = inline;
         self.ckp_seg = job.seg;
         self.ckp_size = size;
         self.log_since = self.log_since.saturating_sub(job.log_before);
@@ -1691,7 +1747,9 @@ impl Db {
         let r = (|| {
             if self.cfg.index {
                 self.index_backlog()?;
-                self.save_index(self.active)?;
+                if self.active_wants_index_file() {
+                    self.save_index(self.active)?;
+                }
             }
             self.checkpoint()?;
             self.dying_step(u64::MAX)
@@ -1702,52 +1760,50 @@ impl Db {
     /// A storage failure, if there has been one. After a failure nothing
     /// more is written, and what commands report is not to be relied on.
     /// Where output bound for a file may wait: see `engine::Spool`.
-    pub fn begin_unit(&mut self) {
+    /// Begin counting a unit on this thread.
+    pub fn begin_unit(&self) {
         if !COUNTING.load(std::sync::atomic::Ordering::Relaxed) {
-            self.unit = None;
+            UNIT.with(|u| *u.borrow_mut() = None);
             return;
         }
-        self.unit = Some(UnitStart { reads: self.reads(), io: self.io, live: crate::mem::mark(), cpu: crate::mem::cpu_ns(), at: std::time::Instant::now() });
+        let start = UnitStart { reads: reads_now(), io: self.io, live: crate::mem::mark(), cpu: crate::mem::cpu_ns(), at: std::time::Instant::now() };
+        UNIT.with(|u| *u.borrow_mut() = Some(start));
     }
 
-    fn reads(&self) -> [u64; 6] {
-        let t = &self.tally;
-        [t.text_bytes.get(), t.text_pieces.get(), t.index_bytes.get(), t.index_lookups.get(), t.tree_nodes.get(), t.scratch.get()]
-    }
-
-    /// What the unit begun with `begin_unit` used. Kept as `last_cost`.
-    pub fn end_unit(&mut self) -> Cost {
-        let Some(start) = self.unit.take() else { return Cost::default() };
-        let now = self.reads();
+    /// What the unit begun on this thread with `begin_unit` used. Kept
+    /// as `last_cost`.
+    pub fn end_unit(&self) -> Cost {
+        let Some(start) = UNIT.with(|u| u.borrow_mut().take()) else { return Cost::default() };
+        let now = reads_now();
         let d = |i: usize| now[i] - start.reads[i];
         let (a, b) = (&start.io, &self.io);
         let moved = b.moved_bytes - a.moved_bytes;
         let cost = Cost {
-            text_bytes: d(0),
-            text_pieces: d(1),
-            index_bytes: d(2),
-            index_lookups: d(3),
-            tree_nodes: d(4),
+            text_bytes: d(T_TEXT_BYTES),
+            text_pieces: d(T_TEXT_PIECES),
+            index_bytes: d(T_INDEX_BYTES),
+            index_lookups: d(T_INDEX_LOOKUPS),
+            tree_nodes: d(T_TREE_NODES),
             content_written: b.content_bytes - a.content_bytes - moved,
             records_written: b.log_bytes - a.log_bytes,
             upkeep_written: b.index_bytes - a.index_bytes + b.tree_bytes - a.tree_bytes + moved,
             syncs: b.syncs - a.syncs + b.dir_syncs - a.dir_syncs,
-            scratch_bytes: d(5),
+            scratch_bytes: d(T_SCRATCH),
             memory: crate::mem::rise(start.live) as u64,
             cpu_ns: crate::mem::cpu_ns().saturating_sub(start.cpu),
             elapsed_ns: start.at.elapsed().as_nanos() as u64,
         };
-        self.last_cost = cost;
+        LAST_COST.with(|c| c.set(cost));
         cost
     }
 
-    /// The cost of the last unit that ended.
+    /// The cost of the last unit that ended on this thread.
     pub fn last_cost(&self) -> Cost {
-        self.last_cost
+        LAST_COST.with(|c| c.get())
     }
 
     pub fn scratch(&self) -> Scratch {
-        Scratch { vfs: if self.volatile { None } else { Some(self.vfs.clone()) }, limit: self.cfg.spool, used: self.tally.scratch.clone() }
+        Scratch { vfs: if self.volatile { None } else { Some(self.vfs.clone()) }, limit: self.cfg.spool }
     }
 
     /// A scratch file could not be written: the storage has failed.
@@ -2356,8 +2412,8 @@ impl Db {
     /// The text of one piece.
     #[inline]
     pub fn text_of(&self, p: &Piece) -> Cow<'_, [u8]> {
-        bump(&self.tally.text_bytes, p.len as u64);
-        bump(&self.tally.text_pieces, 1);
+        bump(T_TEXT_BYTES, p.len as u64);
+        bump(T_TEXT_PIECES, 1);
         let stored = self.seg(p.seg).piece(p);
         if p.enc == disk::ENC_LZ4 {
             return match lz4_flex::block::decompress(stored, p.len as usize) {
@@ -2409,8 +2465,8 @@ impl Db {
                     for p in pieces {
                         seg.piece(p);
                     }
-                    bump(&self.tally.text_bytes, end - first.off as u64);
-                    bump(&self.tally.text_pieces, pieces.len() as u64);
+                    bump(T_TEXT_BYTES, end - first.off as u64);
+                    bump(T_TEXT_PIECES, pieces.len() as u64);
                     return Cow::Borrowed(seg.bytes(first.off as u64, (end - first.off as u64) as usize));
                 }
                 let mut all = Vec::with_capacity(self.text(id).len as usize);
@@ -2568,13 +2624,13 @@ impl Db {
             // Documents are numbered from 1, pieces from 0. The index
             // file covers the lower numbers, so the result is ascending.
             if let Some(p) = &seg.packed {
-                bump(&self.tally.index_bytes, index::cost(p, query) as u64);
-                bump(&self.tally.index_lookups, query.trigrams() as u64);
+                bump(T_INDEX_BYTES, index::cost(p, query) as u64);
+                bump(T_INDEX_LOOKUPS, query.trigrams() as u64);
                 ords.extend(index::eval(p, query)?.into_iter().map(|d| d - 1));
             }
             if let Some(d) = &seg.dynamic {
-                bump(&self.tally.index_bytes, index::cost(d, query) as u64);
-                bump(&self.tally.index_lookups, query.trigrams() as u64);
+                bump(T_INDEX_BYTES, index::cost(d, query) as u64);
+                bump(T_INDEX_LOOKUPS, query.trigrams() as u64);
                 ords.extend(index::eval(d, query)?.into_iter().map(|d| d - 1));
             }
             // Pieces in no index can always match.
@@ -2744,7 +2800,7 @@ impl Db {
     /// A total over everything under a folder that a command worked out
     /// since the tree last changed, by the command's own `kind` number.
     pub fn total(&self, folder: NodeId, kind: u8) -> Option<u64> {
-        let t = self.totals.borrow();
+        let t = crate::vfs::lock(&self.totals);
         if t.0 == self.epoch {
             t.1.get(&(folder, kind)).copied()
         } else {
@@ -2754,7 +2810,7 @@ impl Db {
 
     /// Remember a total until the tree next changes.
     pub fn set_total(&self, folder: NodeId, kind: u8, sum: u64) {
-        let mut t = self.totals.borrow_mut();
+        let mut t = crate::vfs::lock(&self.totals);
         if t.0 != self.epoch {
             t.0 = self.epoch;
             t.1.clear();
@@ -2790,7 +2846,7 @@ impl Db {
     pub fn children(&self, id: NodeId) -> &BTreeMap<Vec<u8>, NodeId> {
         match &self.nodes[id].kind {
             NodeKind::Folder(c) => {
-                bump(&self.tally.tree_nodes, c.len() as u64);
+                bump(T_TREE_NODES, c.len() as u64);
                 c
             }
             NodeKind::File(_) => panic!("children() on a file"),
@@ -2798,7 +2854,7 @@ impl Db {
     }
 
     pub fn child(&self, id: NodeId, name: &[u8]) -> Option<NodeId> {
-        bump(&self.tally.tree_nodes, 1);
+        bump(T_TREE_NODES, 1);
         match &self.nodes[id].kind {
             NodeKind::Folder(c) => c.get(name).copied(),
             NodeKind::File(_) => None,
@@ -2834,36 +2890,47 @@ impl Db {
 
     /// Set the folder relative paths start from: an absolute path
     /// without `.` or `..`, as a session keeps it.
-    pub fn set_cwd(&mut self, path: &[u8]) {
-        if path.len() <= 1 && self.cwd.is_empty() {
-            return;
-        }
-        self.cwd.clear();
-        self.cwd.extend(path.split(|c| *c == b'/').filter(|c| !c.is_empty()).map(|c| c.to_vec()));
+    /// It belongs to the thread running the unit, not to the database.
+    pub fn set_cwd(&self, path: &[u8]) {
+        CWD.with(|cwd| {
+            let mut cwd = cwd.borrow_mut();
+            if path.len() <= 1 && cwd.is_empty() {
+                return;
+            }
+            cwd.clear();
+            cwd.extend(path.split(|c| *c == b'/').filter(|c| !c.is_empty()).map(|c| c.to_vec()));
+        });
     }
 
     /// The current directory as a path: `/`, or `/a/b`.
     pub fn cwd(&self) -> Vec<u8> {
-        if self.cwd.is_empty() {
-            return b"/".to_vec();
-        }
-        let mut out = Vec::new();
-        for c in &self.cwd {
-            out.push(b'/');
-            out.extend_from_slice(c);
-        }
-        out
+        CWD.with(|cwd| {
+            let cwd = cwd.borrow();
+            if cwd.is_empty() {
+                return b"/".to_vec();
+            }
+            let mut out = Vec::new();
+            for c in cwd.iter() {
+                out.push(b'/');
+                out.extend_from_slice(c);
+            }
+            out
+        })
     }
 
     /// The folder relative paths start from, if it is still there.
     pub fn here(&self) -> Result<NodeId, Errno> {
         let mut cur = self.root;
-        for comp in &self.cwd {
-            cur = match &self.nodes[cur].kind {
-                NodeKind::Folder(c) => *c.get(comp.as_slice()).ok_or(Errno::NoEnt)?,
-                NodeKind::File(_) => return Err(Errno::NoEnt),
-            };
-        }
+        let found = CWD.with(|cwd| {
+            for comp in cwd.borrow().iter() {
+                cur = match &self.nodes[cur].kind {
+                    NodeKind::Folder(c) => *c.get(comp.as_slice()).ok_or(Errno::NoEnt)?,
+                    NodeKind::File(_) => return Err(Errno::NoEnt),
+                };
+            }
+            Ok(())
+        });
+        found?;
         match &self.nodes[cur].kind {
             NodeKind::Folder(_) => Ok(cur),
             NodeKind::File(_) => Err(Errno::NoEnt),
@@ -2881,7 +2948,8 @@ impl Db {
         if path == b"/dev/null" {
             return Ok(NULL);
         }
-        let mut cur = if self.cwd.is_empty() || path[0] == b'/' { self.root } else { self.here()? };
+        let at_root = CWD.with(|cwd| cwd.borrow().is_empty());
+        let mut cur = if at_root || path[0] == b'/' { self.root } else { self.here()? };
         for comp in path.split(|b| *b == b'/') {
             let children = match &self.nodes[cur].kind {
                 NodeKind::Folder(c) => c,
@@ -2894,7 +2962,7 @@ impl Db {
                 cur = self.nodes[cur].parent.unwrap_or(self.root);
                 continue;
             }
-            bump(&self.tally.tree_nodes, 1);
+            bump(T_TREE_NODES, 1);
             cur = *children.get(comp).ok_or(Errno::NoEnt)?;
         }
         Ok(cur)
@@ -3221,7 +3289,9 @@ impl Db {
             }
             if self.cfg.index {
                 self.index_backlog()?;
-                self.save_index(self.active)?;
+                if self.active_wants_index_file() {
+                    self.save_index(self.active)?;
+                }
             }
             self.checkpoint()?;
             self.dying_step(u64::MAX)

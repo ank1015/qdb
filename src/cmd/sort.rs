@@ -545,8 +545,8 @@ impl Sorter {
             self.failed = Some(e);
         }
         self.written += out.len() as u64;
-        if let Some(sc) = &self.scratch {
-            sc.used.set(sc.used.get() + self.written - start);
+        if self.scratch.is_some() {
+            crate::tree::count_scratch(self.written - start);
         }
         self.runs.push((start, self.written));
         self.buf.clear();

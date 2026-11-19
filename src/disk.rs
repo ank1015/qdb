@@ -18,12 +18,12 @@
 use crate::index::{Index, Lists};
 use crate::query::Trigram;
 use crate::tree::NodeId;
-use crate::vfs::{VFile, Vfs};
-use std::cell::RefCell;
+use crate::vfs::{lock, VFile, Vfs, VfsRef};
+use std::sync::Mutex;
 use std::collections::HashMap;
 use std::io;
 
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 /// How content was folded for the index: 1 means ASCII letters lowered
 /// and nothing else (`bytes::fold`).
 pub const FOLD_ASCII: u32 = 1;
@@ -259,7 +259,7 @@ pub struct Segment {
     pub live_bytes: u64,
     /// Which pieces have had their checksum compared since the database
     /// was opened: each is checked the first time it is read.
-    checked: RefCell<Vec<u64>>,
+    checked: Mutex<Vec<u64>>,
     /// False when the files are in memory and cannot have been damaged.
     check: bool,
     /// The index of the pieces below `packed.ndocs`, from the index file.
@@ -304,7 +304,7 @@ impl Segment {
             shared: HashMap::new(),
             live_pieces: 0,
             live_bytes: 0,
-            checked: RefCell::new(Vec::new()),
+            checked: Mutex::new(Vec::new()),
             check: !vfs.volatile(),
             packed: None,
             dynamic: None,
@@ -366,13 +366,16 @@ impl Segment {
         let bytes = self.bytes(p.off as u64, p.slen as usize);
         if self.check {
             let (word, bit) = (p.ord as usize / 64, 1u64 << (p.ord % 64));
-            let mut checked = self.checked.borrow_mut();
-            if checked.len() <= word {
-                checked.resize(word + 1, 0);
-            }
-            if checked[word] & bit == 0 {
+            // The checksum is worked out without the lock held, so that
+            // readers on other threads are not held up by it.
+            let seen = lock(&self.checked).get(word).is_some_and(|w| w & bit != 0);
+            if !seen {
                 if crc(bytes) != p.crc {
                     damage(format!("{}: damaged: the {} bytes at offset {} do not match their checksum", self.name, p.slen, p.off));
+                }
+                let mut checked = lock(&self.checked);
+                if checked.len() <= word {
+                    checked.resize(word + 1, 0);
                 }
                 checked[word] |= bit;
             }
@@ -441,7 +444,7 @@ impl Segment {
         }
         // What this process wrote it need not check on reading back.
         if self.check {
-            let mut checked = self.checked.borrow_mut();
+            let mut checked = lock(&self.checked);
             checked.resize(self.owners.len() / 64 + 1, 0);
             for p in &pieces {
                 checked[p.ord as usize / 64] |= 1u64 << (p.ord % 64);
@@ -665,9 +668,9 @@ const OFFSET_MASK: u64 = (1 << 40) - 1;
 /// lists    every posting list, end to end, in trigram order
 /// table    one 8-byte entry per trigram, ascending: trigram << 40 | offset
 ///          of its list within `lists`; then one more entry, for the end
-/// buckets  65,537 4-byte numbers: for each value of a trigram's first two
-///          bytes, the position in `table` of the first trigram at or
-///          above it
+/// buckets  2^bits + 1 4-byte numbers, `bits` from the footer and at
+///          most 16: for each value of a trigram's first `bits` bits,
+///          the position in `table` of the first trigram at or above it
 /// sums     a checksum for every 4,096 bytes of all of the above
 /// footer   where each part is, how many pieces the lists cover, which
 ///          folding rule built them, checksums of `sums` and of itself
@@ -684,9 +687,23 @@ pub struct Packed {
     pub lists_len: u64,
     table_off: u64,
     buckets_off: u64,
+    /// The table is found through 2^bits + 1 buckets, by the trigram's
+    /// first `bits` bits: as many as the trigrams need, so that a small
+    /// index file is small.
+    bucket_bits: u32,
     sums_off: u64,
-    checked: RefCell<Vec<u64>>,
+    checked: Mutex<Vec<u64>>,
     check: bool,
+}
+
+/// How many bits of a trigram choose its bucket, for so many trigrams:
+/// about eight trigrams a bucket, and at most 65,536 buckets.
+pub fn bucket_bits(trigrams: usize) -> u32 {
+    let mut bits = 0;
+    while bits < 16 && (8usize << bits) < trigrams {
+        bits += 1;
+    }
+    bits
 }
 
 impl Packed {
@@ -707,9 +724,8 @@ impl Packed {
         if !self.check || len == 0 {
             return true;
         }
-        let mut checked = self.checked.borrow_mut();
         for block in off as usize / BLOCK..=(off as usize + len - 1) / BLOCK {
-            if checked[block / 64] & (1 << (block % 64)) != 0 {
+            if lock(&self.checked)[block / 64] & (1 << (block % 64)) != 0 {
                 continue;
             }
             let start = block * BLOCK;
@@ -718,7 +734,7 @@ impl Packed {
             if crc(self.raw(start as u64, end - start)) != want {
                 return false;
             }
-            checked[block / 64] |= 1 << (block % 64);
+            lock(&self.checked)[block / 64] |= 1 << (block % 64);
         }
         true
     }
@@ -734,7 +750,7 @@ impl Packed {
         };
         let len = file.len();
         let name = vfs.describe(&name);
-        let mut p = Packed { seg, name, file, len, ndocs: 0, ntrigrams: 0, lists_off: IDX_HEADER, lists_len: 0, table_off: 0, buckets_off: 0, sums_off: 0, checked: RefCell::new(Vec::new()), check: !vfs.volatile() };
+        let mut p = Packed { seg, name, file, len, ndocs: 0, ntrigrams: 0, lists_off: IDX_HEADER, lists_len: 0, table_off: 0, buckets_off: 0, bucket_bits: 16, sums_off: 0, checked: Mutex::new(Vec::new()), check: !vfs.volatile() };
         if len < IDX_HEADER + IDX_FOOTER as u64 {
             return Err(format!("{}: too short to be an index file", p.name));
         }
@@ -756,18 +772,20 @@ impl Packed {
         p.table_off = u64_at(foot, 32);
         p.buckets_off = u64_at(foot, 40);
         p.sums_off = u64_at(foot, 48);
+        p.bucket_bits = u32_at(foot, 64);
         let blocks = (p.sums_off as usize + BLOCK - 1) / BLOCK;
         let sound = u32_at(head, 12) == seg
             && p.lists_off == IDX_HEADER
             && p.table_off == p.lists_off + p.lists_len
             && p.buckets_off == p.table_off + (p.ntrigrams as u64 + 1) * 8
-            && p.sums_off == p.buckets_off + 65537 * 4
+            && p.bucket_bits <= 16
+            && p.sums_off == p.buckets_off + ((1u64 << p.bucket_bits) + 1) * 4
             && len == p.sums_off + blocks as u64 * 4 + IDX_FOOTER as u64
             && crc(p.raw(p.sums_off, blocks * 4)) == u32_at(foot, 60);
         if !sound {
             return Err(format!("{}: damaged: its parts are not where its footer says", p.name));
         }
-        *p.checked.borrow_mut() = vec![0u64; blocks / 64 + 1];
+        *lock(&p.checked) = vec![0u64; blocks / 64 + 1];
         // The table and the buckets are read by every search: check them
         // now. The lists are checked as they are read.
         if !p.verified(0, IDX_HEADER as usize) || !p.verified(p.table_off, (p.sums_off - p.table_off) as usize) {
@@ -807,7 +825,7 @@ impl Packed {
 impl Lists for Packed {
     #[inline]
     fn list(&self, t: Trigram) -> &[u8] {
-        let b = (t >> 8) as u64;
+        let b = (t >> (24 - self.bucket_bits)) as u64;
         let range = self.raw(self.buckets_off + b * 4, 8);
         // The entries of a bucket are in order of trigram: halve the
         // range until few are left, then look at each.
@@ -957,9 +975,10 @@ impl PackedWriter {
             self.buf.extend_from_slice(&e.to_le_bytes());
         }
         let buckets_off = self.pos();
+        let bits = bucket_bits(self.keys.len());
         let mut at = 0usize;
-        for b in 0..=65536u64 {
-            while at < self.keys.len() && ((self.keys[at] >> 8) as u64) < b {
+        for b in 0..=(1u64 << bits) {
+            while at < self.keys.len() && ((self.keys[at] >> (24 - bits)) as u64) < b {
                 at += 1;
             }
             self.buf.extend_from_slice(&(at as u32).to_le_bytes());
@@ -980,7 +999,7 @@ impl PackedWriter {
         }
         tail.extend_from_slice(&FOLD_ASCII.to_le_bytes());
         tail.extend_from_slice(&sums_crc.to_le_bytes());
-        tail.extend_from_slice(&[0u8; 4]);
+        tail.extend_from_slice(&bits.to_le_bytes());
         let c = crc(&tail[foot..]);
         tail.extend_from_slice(&c.to_le_bytes());
         self.file.write_at(sums_off, &tail)?;
@@ -997,7 +1016,11 @@ impl PackedWriter {
 /// with its length and checksum, then an end mark with the number of
 /// blocks.
 pub struct CheckpointWriter {
-    file: Box<dyn VFile>,
+    vfs: VfsRef,
+    /// The file, once the checkpoint is too large to go inside MANIFEST.
+    /// Until then the bytes wait in `mem`.
+    file: Option<Box<dyn VFile>>,
+    mem: Vec<u8>,
     at: u64,
     block: Vec<u8>,
     blocks: u64,
@@ -1006,6 +1029,10 @@ pub struct CheckpointWriter {
     pub syncs: u64,
 }
 
+/// A checkpoint up to this size is kept inside MANIFEST, so that a small
+/// database is a MANIFEST and a data file and nothing else.
+pub const INLINE_CHECKPOINT: usize = 3072;
+
 const CKP_BLOCK: usize = 64 * 1024;
 
 pub fn ckp_tmp(n: u32) -> String {
@@ -1013,16 +1040,14 @@ pub fn ckp_tmp(n: u32) -> String {
 }
 
 impl CheckpointWriter {
-    pub fn new(vfs: &dyn Vfs, number: u32) -> io::Result<CheckpointWriter> {
-        let mut file = vfs.create(&ckp_tmp(number), 0)?;
+    pub fn new(vfs: &VfsRef, number: u32) -> io::Result<CheckpointWriter> {
         let mut h = Vec::new();
         h.extend_from_slice(TREE_MAGIC);
         h.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
         h.extend_from_slice(&number.to_le_bytes());
         let c = crc(&h);
         h.extend_from_slice(&c.to_le_bytes());
-        file.write_at(0, &h)?;
-        Ok(CheckpointWriter { file, at: h.len() as u64, block: Vec::new(), blocks: 0, number, synced_to: 0, syncs: 0 })
+        Ok(CheckpointWriter { vfs: vfs.clone(), file: None, at: h.len() as u64, mem: h, block: Vec::new(), blocks: 0, number, synced_to: 0, syncs: 0 })
     }
 
     /// Where the next entry goes. End the entry with `entry_done`.
@@ -1037,23 +1062,41 @@ impl CheckpointWriter {
         Ok(())
     }
 
+    fn write(&mut self, data: &[u8]) -> io::Result<()> {
+        if self.file.is_none() && self.mem.len() + data.len() + 24 > INLINE_CHECKPOINT {
+            let mut file = self.vfs.create(&ckp_tmp(self.number), 0)?;
+            file.write_at(0, &self.mem)?;
+            self.mem = Vec::new();
+            self.file = Some(file);
+        }
+        match &mut self.file {
+            Some(f) => f.write_at(self.at, data)?,
+            None => self.mem.extend_from_slice(data),
+        }
+        self.at += data.len() as u64;
+        Ok(())
+    }
+
     /// End the block here, so that the next entry starts a new one.
     pub fn end_block(&mut self) -> io::Result<()> {
         if self.block.is_empty() {
             return Ok(());
         }
-        let mut head = Vec::with_capacity(8);
-        head.extend_from_slice(&(self.block.len() as u32).to_le_bytes());
-        head.extend_from_slice(&crc(&self.block).to_le_bytes());
-        self.file.write_at(self.at, &head)?;
-        self.file.write_at(self.at + 8, &self.block)?;
-        self.at += 8 + self.block.len() as u64;
+        let block = std::mem::take(&mut self.block);
+        let mut head = Vec::with_capacity(8 + block.len());
+        head.extend_from_slice(&(block.len() as u32).to_le_bytes());
+        head.extend_from_slice(&crc(&block).to_le_bytes());
+        head.extend_from_slice(&block);
+        self.write(&head)?;
+        self.block = block;
         self.block.clear();
         self.blocks += 1;
-        if self.at - self.synced_to >= SYNC_EVERY {
-            self.file.sync()?;
-            self.synced_to = self.at;
-            self.syncs += 1;
+        if let Some(f) = &mut self.file {
+            if self.at - self.synced_to >= SYNC_EVERY {
+                f.sync()?;
+                self.synced_to = self.at;
+                self.syncs += 1;
+            }
         }
         Ok(())
     }
@@ -1062,9 +1105,11 @@ impl CheckpointWriter {
         self.at + self.block.len() as u64
     }
 
-    /// Finish the file, sync it, give it its name and make it the current
-    /// checkpoint.
-    pub fn finish(mut self, vfs: &dyn Vfs) -> io::Result<u64> {
+    /// Finish the checkpoint, make it durable and the current one: a file
+    /// of its own, synced, named and pointed at by MANIFEST, or inside
+    /// MANIFEST if it is small. Returns its size and whether it is inside
+    /// MANIFEST.
+    pub fn finish(mut self) -> io::Result<(u64, bool)> {
         self.end_block()?;
         let mut end = Vec::new();
         end.extend_from_slice(&0u32.to_le_bytes());
@@ -1072,66 +1117,107 @@ impl CheckpointWriter {
         end.extend_from_slice(&self.blocks.to_le_bytes());
         let c = crc(&end);
         end.extend_from_slice(&c.to_le_bytes());
-        self.file.write_at(self.at, &end)?;
-        self.file.sync()?;
-        let size = self.at + end.len() as u64;
-        drop(self.file);
-        vfs.rename(&ckp_tmp(self.number), &ckp_name(self.number))?;
-        // The file must be known to the directory before MANIFEST points
-        // at it.
-        vfs.sync_dir()?;
-        let mut m = Vec::new();
-        m.extend_from_slice(MANIFEST_MAGIC);
-        m.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        m.extend_from_slice(&self.number.to_le_bytes());
-        let c = crc(&m);
-        m.extend_from_slice(&c.to_le_bytes());
-        let mut f = vfs.create("MANIFEST.tmp", 0)?;
-        f.write_at(0, &m)?;
-        f.sync()?;
-        drop(f);
-        vfs.rename("MANIFEST.tmp", "MANIFEST")?;
-        vfs.sync_dir()?;
-        Ok(size)
+        self.write(&end)?;
+        let size = self.at;
+        let vfs = self.vfs.clone();
+        match self.file.take() {
+            None => {
+                write_manifest(&*vfs, self.number, Some(&self.mem))?;
+                Ok((size, true))
+            }
+            Some(mut file) => {
+                file.sync()?;
+                drop(file);
+                vfs.rename(&ckp_tmp(self.number), &ckp_name(self.number))?;
+                // The file must be known to the directory before MANIFEST
+                // points at it.
+                vfs.sync_dir()?;
+                write_manifest(&*vfs, self.number, None)?;
+                Ok((size, false))
+            }
+        }
     }
 }
 
-/// Which checkpoint MANIFEST names. None if there is no MANIFEST.
-pub fn read_manifest(vfs: &dyn Vfs) -> Result<Option<u32>, String> {
+/// Replace MANIFEST: it names the current checkpoint, and holds it when
+/// `inline` is given.
+pub fn write_manifest(vfs: &dyn Vfs, number: u32, inline: Option<&[u8]>) -> io::Result<()> {
+    let body = inline.unwrap_or(&[]);
+    let mut m = Vec::with_capacity(24 + body.len());
+    m.extend_from_slice(MANIFEST_MAGIC);
+    m.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+    m.extend_from_slice(&number.to_le_bytes());
+    m.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    m.extend_from_slice(body);
+    let c = crc(&m);
+    m.extend_from_slice(&c.to_le_bytes());
+    let mut f = vfs.create("MANIFEST.tmp", 0)?;
+    f.write_at(0, &m)?;
+    f.sync()?;
+    drop(f);
+    vfs.rename("MANIFEST.tmp", "MANIFEST")?;
+    vfs.sync_dir()
+}
+
+/// What MANIFEST says: the number of the current checkpoint, and the
+/// checkpoint itself when it is kept inside.
+pub struct Manifest {
+    pub number: u32,
+    pub inline: Option<Vec<u8>>,
+}
+
+/// What MANIFEST says. None if there is no MANIFEST.
+pub fn read_manifest(vfs: &dyn Vfs) -> Result<Option<Manifest>, String> {
     let file = match vfs.open("MANIFEST", 0) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("{}: {}", vfs.describe("MANIFEST"), e)),
     };
     let name = vfs.describe("MANIFEST");
-    if file.len() != 20 {
-        return Err(format!("{}: damaged: it is {} bytes long, not 20", name, file.len()));
+    let len = file.len() as usize;
+    if len < 12 {
+        return Err(format!("{}: damaged: it is only {} bytes long", name, len));
     }
-    // SAFETY: twenty bytes of a file that is that long.
-    let m = unsafe { std::slice::from_raw_parts(file.base(), 20) };
-    if &m[..8] != MANIFEST_MAGIC || crc(&m[..16]) != u32_at(m, 16) {
-        return Err(format!("{}: damaged: not a qdb manifest, or its checksum does not match", name));
+    // SAFETY: the whole of a file that is that long and that nothing changes.
+    let m = unsafe { std::slice::from_raw_parts(file.base(), len) };
+    if &m[..8] != MANIFEST_MAGIC {
+        return Err(format!("{}: damaged: not a qdb manifest", name));
     }
+    // The version is looked at before the checksum: an older format's
+    // MANIFEST has another layout, and deserves the message about formats.
     if u32_at(m, 8) != FORMAT_VERSION {
         return Err(wrong_version(&name, u32_at(m, 8)));
     }
-    Ok(Some(u32_at(m, 12)))
+    if len < 24 || 20 + u32_at(m, 16) as usize + 4 != len || crc(&m[..len - 4]) != u32_at(m, len - 4) {
+        return Err(format!("{}: damaged: its length or its checksum does not match", name));
+    }
+    let n = u32_at(m, 16) as usize;
+    Ok(Some(Manifest { number: u32_at(m, 12), inline: (n > 0).then(|| m[20..20 + n].to_vec()) }))
 }
 
-/// The blocks of a checkpoint file, each checked, joined into one buffer
-/// of entries. Returns the entries and the size of the file.
-pub fn read_checkpoint(vfs: &dyn Vfs, number: u32) -> Result<(Vec<u8>, u64), String> {
-    let name = ckp_name(number);
-    let file = vfs.open(&name, 0).map_err(|e| format!("{}: {}", vfs.describe(&name), e))?;
-    let name = vfs.describe(&name);
-    let len = file.len() as usize;
-    // SAFETY: the whole file, which nothing changes.
-    let all = unsafe { std::slice::from_raw_parts(file.base(), len) };
+/// The blocks of a checkpoint, each checked, joined into one buffer of
+/// entries: from its file, or from the copy MANIFEST holds. Returns the
+/// entries and the size of the checkpoint.
+pub fn read_checkpoint(vfs: &dyn Vfs, number: u32, inline: Option<&[u8]>) -> Result<(Vec<u8>, u64), String> {
+    let file;
+    let (all, name) = match inline {
+        Some(bytes) => (bytes, format!("{} (the checkpoint inside it)", vfs.describe("MANIFEST"))),
+        None => {
+            let name = ckp_name(number);
+            file = vfs.open(&name, 0).map_err(|e| format!("{}: {}", vfs.describe(&name), e))?;
+            // SAFETY: the whole file, which nothing changes.
+            (unsafe { std::slice::from_raw_parts(file.base(), file.len() as usize) }, vfs.describe(&name))
+        }
+    };
+    let len = all.len();
     if len < 20 || &all[..8] != TREE_MAGIC || crc(&all[..16]) != u32_at(all, 16) {
         return Err(format!("{}: damaged: not a qdb checkpoint, or its header does not match its checksum", name));
     }
     if u32_at(all, 8) != FORMAT_VERSION {
         return Err(wrong_version(&name, u32_at(all, 8)));
+    }
+    if u32_at(all, 12) != number {
+        return Err(format!("{}: damaged: it is checkpoint {}, and MANIFEST names {}", name, u32_at(all, 12), number));
     }
     let mut out = Vec::with_capacity(len);
     let mut at = 20usize;

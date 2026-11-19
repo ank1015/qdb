@@ -1009,7 +1009,7 @@ fn digest_of(db: &Db, times: bool) -> u64 {
         h.write(&path);
         // Modification times are part of what must survive.
         if times {
-            h.write_i64(db.mtime(db.resolve(&path).expect("a path of the snapshot")));
+            h.write_i64(db.mtime(db.resolve(&[b"/", &path[..]].concat()).expect("a path of the snapshot")));
         }
         match content {
             None => h.write_u8(0),
@@ -1118,16 +1118,16 @@ fn crash_point(image: MemFs, cfg: &Config, history: &History, rng: &mut Rng, cou
             let at = 1 + rng.below(ops as usize) as u64;
             let seed = rng.next();
             let again = image.crash(0);
-            let second: std::rc::Rc<std::cell::RefCell<Option<MemFs>>> = Default::default();
+            let second: std::sync::Arc<std::sync::Mutex<Option<MemFs>>> = Default::default();
             let slot = second.clone();
             again.set_hook(Some(Box::new(move |fs, n| {
                 if n == at {
-                    *slot.borrow_mut() = Some(fs.crash(seed));
+                    *slot.lock().unwrap() = Some(fs.crash(seed));
                 }
             })));
             drop(Db::open(Box::new(again.clone()), cfg.clone()));
             again.set_hook(None);
-            let left = second.borrow_mut().take();
+            let left = second.lock().unwrap().take();
             if let Some(left) = left {
                 counts.during_recovery += 1;
                 counts.points += 1;
@@ -1166,14 +1166,13 @@ fn crash_point(image: MemFs, cfg: &Config, history: &History, rng: &mut Rng, cou
 /// Every few hundred command lines the run itself goes on from a crash
 /// image, or from a disk that failed.
 fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bool, index_later: bool) -> Result<bool, String> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
     let cfg = Config { piece: 512, segment: 96 << 10, sync, batch_lines: 8, batch_bytes: 24 << 10, index, checkpoint: 12 << 10, spool: 300, upkeep: true, compress, index_later, ..Config::default() };
     let mut gen = Gen::new(seed);
     let mut rng = Rng(seed.wrapping_mul(0xD1B54A32D192ED03) | 1);
-    let counts: Rc<RefCell<CrashCounts>> = Default::default();
-    let failure: Rc<RefCell<Option<String>>> = Default::default();
-    let history = Rc::new(RefCell::new(History { states: Vec::new(), returned: 0, running: false, upkeep: false }));
+    let counts: Arc<Mutex<CrashCounts>> = Default::default();
+    let failure: Arc<Mutex<Option<String>>> = Default::default();
+    let history = Arc::new(Mutex::new(History { states: Vec::new(), returned: 0, running: false, upkeep: false }));
     let mut fs = MemFs::tracked();
     let mut db = Db::open(Box::new(fs.clone()), cfg.clone())?.0;
     let mut shadow = Db::without_index();
@@ -1186,7 +1185,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
         let (counts, failure, history, cfg) = (counts.clone(), failure.clone(), history.clone(), cfg.clone());
         let mut rng = Rng(hook_seed | 1);
         fs.set_hook(Some(Box::new(move |fs, _| {
-            if failure.borrow().is_some() || counts.borrow().points >= points {
+            if failure.lock().unwrap().is_some() || counts.lock().unwrap().points >= points {
                 return;
             }
             let names = fs.list().unwrap_or_default();
@@ -1195,23 +1194,23 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             if !(merge || tree_save) && rng.below(spread) != 0 {
                 return;
             }
-            let history = history.borrow();
+            let history = history.lock().unwrap();
             {
-                let mut c = counts.borrow_mut();
+                let mut c = counts.lock().unwrap();
                 c.during_merge += merge as usize;
                 c.during_tree_save += tree_save as usize;
                 c.in_a_command += history.running as usize;
             }
             let image = fs.crash(rng.next());
-            let mut c = counts.borrow_mut();
+            let mut c = counts.lock().unwrap();
             if let Err(e) = crash_point(image, &cfg, &history, &mut rng, &mut c) {
-                *failure.borrow_mut() = Some(e);
+                *failure.lock().unwrap() = Some(e);
             }
         })));
     };
-    history.borrow_mut().states.push((digest(&shadow), db.commit_seq()));
+    history.lock().unwrap().states.push((digest(&shadow), db.commit_seq()));
     hook_for(&fs, rng.next());
-    while counts.borrow().points < points {
+    while counts.lock().unwrap().points < points {
         let tree = shadow.snapshot();
         let (_, commands) = gen.step(&tree, (60, 160 << 10));
         for command in &commands {
@@ -1222,7 +1221,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             db.set_clock(Some(now));
             let want = execute(&mut shadow, command.as_bytes());
             {
-                let mut h = history.borrow_mut();
+                let mut h = history.lock().unwrap();
                 let before = h.states[h.returned];
                 let after = digest(&shadow);
                 h.states.push((after, before.1 + (after != before.0) as u64));
@@ -1231,11 +1230,11 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             let got = execute(&mut db, command.as_bytes());
             last_line = command.clone();
             lines += 1;
-            if let Some(e) = failure.borrow().as_ref() {
+            if let Some(e) = failure.lock().unwrap().as_ref() {
                 fail_line!("FAIL  seed {} sync {:?}: at a power cut during command line {} ({}): {}", seed, sync, lines, command, e);
                 return Ok(false);
             }
-            let mut h = history.borrow_mut();
+            let mut h = history.lock().unwrap();
             h.running = false;
             h.returned += 1;
             let known = h.states[h.returned];
@@ -1251,7 +1250,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
         if (3..7).contains(&roll) {
             let before = (digest(&db), db.commit_seq());
             if roll < 5 {
-                counts.borrow_mut().closes += 1;
+                counts.lock().unwrap().closes += 1;
                 let closing = std::mem::replace(&mut db, Db::new());
                 closing.close().map_err(|e| format!("seed {}: close after command line {}: {}", seed, lines, e))?;
                 let (again, report) = Db::open(Box::new(fs.clone()), cfg.clone()).map_err(|e| format!("seed {}: open after a clean close, after command line {}: {}", seed, lines, e))?;
@@ -1261,17 +1260,17 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                 }
                 db = again;
             } else {
-                counts.borrow_mut().compactions += 1;
-                history.borrow_mut().upkeep = true;
+                counts.lock().unwrap().compactions += 1;
+                history.lock().unwrap().upkeep = true;
                 db.compact().map_err(|e| format!("seed {}: compact after command line {}: {}", seed, lines, e))?;
                 // The records the compaction logged are behind us: count
                 // from here.
-                let mut h = history.borrow_mut();
+                let mut h = history.lock().unwrap();
                 h.upkeep = false;
                 h.states = vec![(before.0, db.commit_seq())];
                 h.returned = 0;
             }
-            if let Some(e) = failure.borrow().as_ref() {
+            if let Some(e) = failure.lock().unwrap().as_ref() {
                 fail_line!("FAIL  seed {} sync {:?}: at a power cut during a {} after command line {} ({}): {}", seed, sync, if roll < 5 { "close or the open after it" } else { "compaction" }, lines, last_line, e);
                 return Ok(false);
             }
@@ -1286,7 +1285,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             let image = if roll == 0 {
                 // The disk goes away part of the way through the next
                 // few operations: everything fails from there on.
-                counts.borrow_mut().disk_failures += 1;
+                counts.lock().unwrap().disk_failures += 1;
                 let at = fs.counts().ops() + 1 + rng.below(12) as u64;
                 fs.fail_from(Some(at));
                 let mut failed = false;
@@ -1301,7 +1300,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                     }
                     execute(&mut shadow, line.as_bytes());
                     {
-                        let mut h = history.borrow_mut();
+                        let mut h = history.lock().unwrap();
                         let before = h.states[h.returned];
                         let after = digest(&shadow);
                         h.states.push((after, before.1 + (after != before.0) as u64));
@@ -1312,7 +1311,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                     if execute(&mut db, line.as_bytes()).code == 2 {
                         failed = true;
                     } else {
-                        let mut h = history.borrow_mut();
+                        let mut h = history.lock().unwrap();
                         h.running = false;
                         h.returned += 1;
                     }
@@ -1326,9 +1325,9 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                 fs.crash(rng.next())
             };
             let recovered = {
-                let mut c = counts.borrow_mut();
+                let mut c = counts.lock().unwrap();
                 c.points += 1;
-                recover(&image, &cfg, &history.borrow(), &mut c)
+                recover(&image, &cfg, &history.lock().unwrap(), &mut c)
             };
             db = match recovered {
                 Ok(db) => db,
@@ -1341,7 +1340,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             // The reference becomes what was recovered.
             shadow = db.clone();
             shadow.set_index(false);
-            let mut h = history.borrow_mut();
+            let mut h = history.lock().unwrap();
             h.states = vec![(digest(&shadow), db.commit_seq())];
             h.returned = 0;
             h.running = false;
@@ -1350,7 +1349,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
         }
     }
     fs.set_hook(None);
-    let c = counts.borrow();
+    let c = counts.lock().unwrap();
     println!(
         "seed {} sync {}{}: {} power cuts over {} command lines, every one recovered to the tree after a whole number of command lines and passed every check",
         seed,
@@ -1469,7 +1468,7 @@ fn kill_run(kills: usize, seed: u64, sync: SyncMode, scratch: &mut Scratch) -> R
             // one must be a moment of this test.
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0);
             for (path, _) in db.snapshot() {
-                let t = db.mtime(db.resolve(&path).expect("a path of the snapshot"));
+                let t = db.mtime(db.resolve(&[b"/", &path[..]].concat()).expect("a path of the snapshot"));
                 if t < started || t > now {
                     return Err(format!("after recovery, {} has a modification time outside the test ({} ns)", String::from_utf8_lossy(&path), t));
                 }
