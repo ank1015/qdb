@@ -1153,15 +1153,19 @@ fn long_run(addr: &str, o: &Opts, pid: u32) -> i32 {
                             units.fetch_add(1, Relaxed);
                             if line.starts_with("while") {
                                 let j = Json::parse(&r.body).unwrap_or(Json::Null);
-                                if j.get("stopped").and_then(Json::as_str) == Some("deadline") {
+                                let why = j.get("stopped").and_then(Json::as_str);
+                                if why == Some("deadline") {
                                     stopped.fetch_add(1, Relaxed);
+                                } else if why == Some("deleted") {
+                                    // Another connection deleted its filesystem first.
                                 } else {
                                     fail(format!("a unit with a deadline was not stopped by it: {}", String::from_utf8_lossy(&r.body)));
                                 }
                                 // Leave the filesystem as small as it was.
                             } else if body.get("stream").is_some() {
                                 let last = r.body.split(|&b| b == b'\n').filter(|l| !l.is_empty()).last().unwrap_or(b"");
-                                if !String::from_utf8_lossy(last).contains("\"exit_status\":0") {
+                                let last_text = String::from_utf8_lossy(last);
+                                if !last_text.contains("\"exit_status\":0") && !last_text.contains("\"stopped\":\"deleted\"") {
                                     fail(format!("a streamed unit ended badly: {}", String::from_utf8_lossy(last)));
                                 }
                                 streamed.fetch_add(1, Relaxed);
@@ -1183,6 +1187,12 @@ fn long_run(addr: &str, o: &Opts, pid: u32) -> i32 {
         }
         stop.store(true, Relaxed);
     });
+    let samples = samples.into_inner().unwrap();
+    let mut sheet = String::from("seconds\trss_kb\topen_files\n");
+    for (t, r, f) in &samples {
+        sheet.push_str(&format!("{:.0}\t{}\t{}\n", t, r, f));
+    }
+    let _ = std::fs::write(format!("{}/long-samples.tsv", o.spawn.as_deref().unwrap()), &sheet);
     if let Some(f) = failure.into_inner().unwrap() {
         println!("FAIL  long run after {:.0} s: {}", t0.elapsed().as_secs_f64(), f);
         return 1;
@@ -1201,12 +1211,6 @@ fn long_run(addr: &str, o: &Opts, pid: u32) -> i32 {
             return 1;
         }
     }
-    let samples = samples.into_inner().unwrap();
-    let mut sheet = String::from("seconds\trss_kb\topen_files\n");
-    for (t, r, f) in &samples {
-        sheet.push_str(&format!("{:.0}\t{}\t{}\n", t, r, f));
-    }
-    let _ = std::fs::write(format!("{}/long-samples.tsv", o.spawn.as_deref().unwrap()), &sheet);
     // Level: after the first fifth of the run, the most is within a margin
     // of the level reached by the end of that fifth.
     let settle = o.seconds / 5.0;
