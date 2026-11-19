@@ -247,12 +247,15 @@ pub fn poll() {
     })
 }
 
+/// What a planted fault panics with.
+const PLANTED: &str = "a fault planted by a test";
+
 #[cold]
 #[inline(never)]
 fn stopped(why: u8) -> ! {
     let why = Reason::from_u8(why);
     if why == Reason::Fault {
-        panic!("a fault planted by a test");
+        std::panic::panic_any(PLANTED);
     }
     std::panic::panic_any(Stopped(why))
 }
@@ -269,7 +272,8 @@ fn install_quiet_hook() {
     let usual = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let p = info.payload();
-        let meant = p.is::<crate::disk::Damage>() || p.is::<Stopped>() || p.is::<crate::engine::ReadOnly>() || p.is::<crate::tree::QuotaReached>();
+        let planted = p.downcast_ref::<&str>().is_some_and(|m| *m == PLANTED);
+        let meant = planted || p.is::<crate::disk::Damage>() || p.is::<Stopped>() || p.is::<crate::engine::ReadOnly>() || p.is::<crate::tree::QuotaReached>();
         if !meant {
             usual(info);
         }

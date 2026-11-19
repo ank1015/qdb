@@ -53,6 +53,12 @@ With no case files, runs every tests/cases/*.case.
   --threads N       let every recursive grep and rg use N threads from its
                     first file, as a server lends idle workers; output
                     and counts must not change
+  --stops N         instead of the cases: N generated units on a host's
+                    filesystem, each run whole or stopped at a random
+                    moment: by its deadline, by its caller going away, or
+                    by a panic planted inside the engine. After each the
+                    filesystem must equal a reference that ran only the
+                    units that finished, and pass its check
   --crash-writers N instead of the cases: the crash test with several
                     writers (--writers, default 8) on one database at
                     once, sharing syncs as the server has them do. Cut
@@ -1274,6 +1280,99 @@ fn crash_point(image: MemFs, cfg: &Config, history: &History, rng: &mut Rng, cou
 /// the way the host runs them: a writer applies its unit holding the
 /// database, lets it go, and waits for a sync that covers its unit before
 /// it counts as answered.
+/// Units stopped at random moments leave nothing: see `--stops`.
+fn stops_run(n: usize, seed: u64) -> Result<bool, String> {
+    use qdb::host::{Host, HostConfig, Limits, Quotas, Request};
+    use qdb::unit::{Reason, Stop};
+    qdb::unit::quiet_panics();
+    let dir = std::env::temp_dir().join(format!("qdb-stops-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let host = Host::open(&dir, HostConfig::default())?;
+    let fs = host.create().map_err(|e| e.to_string())?;
+    let mut shadow = Db::without_index();
+    let mut gen = Gen::new(seed);
+    let mut rng = Rng(seed.wrapping_mul(0xD1B54A32D192ED03) | 1);
+    let mut counts = [0usize; 4];
+    let mut stopped = [0usize; 4];
+    let mut step = 0usize;
+    let mut result = Ok(true);
+    'outer: while step < n {
+        let tree = shadow.snapshot();
+        let (_, commands) = gen.step(&tree, (60, 160 << 10));
+        for command in commands {
+            if step >= n {
+                break;
+            }
+            step += 1;
+            // A longer unit now and then, for a stop to land inside.
+            let line = match rng.below(4) {
+                0 => format!("for i in $(seq 1 40); do {}; done", command),
+                1 => format!("{c}; {c}; {c}", c = command),
+                _ => command.clone(),
+            };
+            let now = CLOCK_BASE + step as i64 * 1_000_000_000;
+            shadow.set_clock(Some(now));
+            host.with_db_mut(&fs, |db| db.set_clock(Some(now))).map_err(|e| e.to_string())?;
+            let how = rng.below(4);
+            counts[how] += 1;
+            let stop = Stop::new();
+            let delay = std::time::Duration::from_micros(rng.below(600) as u64);
+            let limits = match how {
+                1 => Limits { time: delay, ..Limits::default() },
+                _ => Limits::default(),
+            };
+            let req = Request { line: line.as_bytes(), stdin: None, quotas: Quotas::default(), limits, stop: stop.clone() };
+            let mut sess = qdb::Session::new();
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let end = std::thread::scope(|s| {
+                if how >= 2 {
+                    let stop = stop.clone();
+                    s.spawn(move || {
+                        std::thread::sleep(delay);
+                        stop.request(if how == 2 { Reason::Gone } else { Reason::Fault });
+                    });
+                }
+                host.run(&fs, &req, &mut sess, &mut out, &mut err)
+            });
+            let end = match end {
+                Ok(e) => e,
+                // Stopped while it waited for its turn: it never began.
+                Err(qdb::host::HostError::Stopped(_)) => {
+                    stopped[how] += 1;
+                    continue;
+                }
+                Err(e) => return Err(format!("step {}: {}", step, e)),
+            };
+            let finished = matches!(end.ending, qdb::engine::Ending::Ran | qdb::engine::Ending::Quota(_)) || end.ending == qdb::engine::Ending::Limit;
+            if finished && end.ending == qdb::engine::Ending::Ran {
+                let _ = execute(&mut shadow, line.as_bytes());
+            } else {
+                stopped[how] += 1;
+            }
+            let (got, check) = host.with_db(&fs, |db| (db.snapshot(), db.check())).map_err(|e| e.to_string())?;
+            if let Err(e) = check {
+                fail_line!("FAIL  seed {} step {}: {:?} ({:?}): check: {}", seed, step, line, end.ending, e);
+                result = Ok(false);
+                break 'outer;
+            }
+            if let Some(d) = tree_diff(&shadow.snapshot(), &got) {
+                fail_line!("FAIL  seed {} step {}: {:?} ended {:?}, and the filesystem is not what the units that finished make:\n{}", seed, step, line, end.ending, d);
+                result = Ok(false);
+                break 'outer;
+            }
+        }
+    }
+    host.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+    if result == Ok(true) {
+        println!(
+            "stopping units, seed {}: {} units on a host's filesystem: {} run whole, {} given a deadline ({} stopped by it), {} whose caller went away ({} stopped), {} with a panic planted ({} stopped); after each the filesystem equalled the reference and passed its check",
+            seed, n, counts[0], counts[1], stopped[1], counts[2], stopped[2], counts[3], stopped[3]
+        );
+    }
+    result
+}
+
 fn crash_writers_run(points: usize, seed: u64, writers: usize) -> Result<bool, String> {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
     use std::sync::{Arc, Mutex};
@@ -1923,6 +2022,7 @@ fn run() -> Result<bool, String> {
     let mut crash = 0usize;
     let mut kill = 0usize;
     let mut crash_writers = 0usize;
+    let mut stops = 0usize;
     let mut writers = 8usize;
     let mut setup = Setup { mode: Mode::Memory, cfg: Config::default() };
     let mut args = std::env::args().skip(1);
@@ -1977,6 +2077,7 @@ fn run() -> Result<bool, String> {
                 // Every recursive search shares from its first file.
                 qdb::par::set_threshold(0);
             }
+            "--stops" => stops = value("--stops")?.parse().map_err(|_| "--stops needs a number")?,
             "--crash-writers" => crash_writers = value("--crash-writers")?.parse().map_err(|_| "--crash-writers needs a number")?,
             "--writers" => writers = value("--writers")?.parse().map_err(|_| "--writers needs a number")?,
             "-v" => verbose = true,
@@ -1992,6 +2093,9 @@ fn run() -> Result<bool, String> {
     setup.cfg.index = index;
     if crash > 0 {
         return crash_run(crash, seed, setup.cfg.sync, index, setup.cfg.compress, setup.cfg.index_later);
+    }
+    if stops > 0 {
+        return stops_run(stops, seed);
     }
     if crash_writers > 0 {
         return crash_writers_run(crash_writers, seed, writers);

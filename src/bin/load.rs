@@ -36,6 +36,20 @@ Workloads (each prints one line of results):
               output. Some units are given a deadline so short that they
               are stopped; they must leave nothing
 
+  kill        the kill test, with --spawn DATA: --clients connections
+              append numbered lines to --filesystems filesystems, and the
+              server is killed with SIGKILL at a random moment, --count
+              times; after each kill every filesystem is opened and
+              checked, and must hold every unit that was answered, whole
+
+  isolation   two accounts with marker text in their filesystems; --count
+              requests from --clients connections with each key against
+              its own and the other's IDs, guessed IDs and odd paths, and
+              commands that reach for what lies outside a filesystem. No
+              answer may hold the other account's markers or IDs, and a
+              request for the other's filesystem must be answered as one
+              for a filesystem that does not exist
+
 import makes an account and a filesystem in DATA (the server must not
 be running), loads DIR into it, and prints the account, key and
 filesystem as JSON.
@@ -263,6 +277,9 @@ fn main() {
     if o.rest.first().map(String::as_str) == Some("import") {
         return import(&o);
     }
+    if o.rest.first().map(String::as_str) == Some("kill") {
+        std::process::exit(kill_run(&o));
+    }
     if o.admin.len() < 16 {
         die("an admin key of at least 16 characters is needed: --admin-key or QDB_ADMIN_KEY");
     }
@@ -361,6 +378,7 @@ fn main() {
                     }
                     Err(e) => {
                         println!("FAIL  order checker, run {} (seed {}): {}", run + 1, o.seed.wrapping_add(run as u64), e);
+                        drop(_child);
                         std::process::exit(1);
                     }
                 }
@@ -377,6 +395,11 @@ fn main() {
                 stopped,
                 t0.elapsed().as_secs_f64()
             );
+        }
+        "isolation" => {
+            let r = isolation(&addr, &o.admin, o.count, o.clients, o.seed);
+            drop(_child);
+            std::process::exit(r);
         }
         _ => die(&format!("no workload {}\n{}", workload, USAGE)),
     }
@@ -426,7 +449,7 @@ fn make_unit(rng: &mut Rng, id: usize) -> (String, Vec<usize>, Vec<usize>, bool)
         }
         v
     };
-    let read = |files: &[usize]| files.iter().map(|f| format!("echo '== {f}'; cat f{f}.txt 2>/dev/null; ")).collect::<String>();
+    let read = |files: &[usize]| files.iter().map(|f| format!("echo '== {f}'; cat f{f}.txt 2>/dev/null || true; ")).collect::<String>();
     let write = |files: &[usize]| files.iter().map(|f| format!("echo u{id} >> f{f}.txt; ")).collect::<String>();
     let r = rng.below(100);
     // Some units run long and are given a deadline they cannot meet.
@@ -517,7 +540,7 @@ fn order_run(addr: &str, key: &str, fs: &str, clients: usize, count: usize, seed
     // each.
     let mut c = Client::new(addr);
     let finals = {
-        let line: String = (0..FILES).map(|f| format!("echo '== {f}'; cat f{f}.txt 2>/dev/null; ")).collect();
+        let line: String = (0..FILES).map(|f| format!("echo '== {f}'; cat f{f}.txt 2>/dev/null || true; ")).collect();
         let (_, j) = unit(&mut c, key, fs, &line);
         parse_reads(j.get("stdout").and_then(Json::as_str).unwrap_or(""))?
     };
@@ -526,6 +549,22 @@ fn order_run(addr: &str, key: &str, fs: &str, clients: usize, count: usize, seed
         order[f] = toks;
     }
     let n = units.len();
+    // To see the checker catch a stale read: one read is made to look as
+    // if it was sent after an append it did not see had been answered.
+    if std::env::var_os("QDB_ORDER_MUTATE").is_some() {
+        let pick = units.iter().position(|u| u.writes.is_empty() && u.stopped.is_none() && u.reads.iter().any(|f| {
+            let seen = parse_reads(&u.out).ok().and_then(|g| g.iter().find(|x| x.0 == *f).map(|x| x.1.len())).unwrap_or(0);
+            order[*f].len() > seen
+        }));
+        if let Some(i) = pick {
+            let got = parse_reads(&units[i].out).unwrap();
+            let (f, toks) = got.iter().find(|(f, t)| order[*f].len() > t.len()).unwrap();
+            let unseen = order[*f][toks.len()];
+            units[i].start = units[unseen].end + std::time::Duration::from_nanos(1);
+            units[i].end = units[i].end.max(units[i].start);
+            eprintln!("mutated: unit {} now sent after unit {} was answered", i, unseen);
+        }
+    }
     let mut stopped = 0;
     // Checks on each unit alone.
     let mut kept = vec![false; n];
@@ -648,4 +687,274 @@ fn order_run(addr: &str, key: &str, fs: &str, clients: usize, count: usize, seed
         return Err(format!("no order of the units explains every output; units on a cycle (or after one):\n    {}", stuck.join("\n    ")));
     }
     Ok((n, stopped))
+}
+
+// ------------------------------------------------------------ the kill test
+
+fn kill_run(o: &Opts) -> i32 {
+    let data = o.spawn.clone().unwrap_or_else(|| die("kill needs --spawn DATA"));
+    let _ = std::fs::remove_dir_all(&data);
+    let kills = o.count.min(100_000);
+    let nfs = o.filesystems.max(1);
+    let clients = o.clients.max(1);
+    let mut rng = Rng(o.seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
+    let (child, addr) = spawn(&data, &o.admin);
+    let mut child = Some(child);
+    let mut c = Client::new(&addr);
+    let key = account(&mut c, &o.admin);
+    let fss: Vec<String> = (0..nfs).map(|_| new_fs(&mut c, &key)).collect();
+    // For each client: the next number it sends, and the last one
+    // answered.
+    let mut next = vec![0u64; clients];
+    let mut answered_total = 0u64;
+    let mut units_total = 0u64;
+    let mut addr = addr;
+    let t0 = Instant::now();
+    for k in 0..kills {
+        let stop = AtomicBool::new(false);
+        let answered: Vec<AtomicU64> = (0..clients).map(|_| AtomicU64::new(u64::MAX)).collect();
+        let sent: Vec<AtomicU64> = (0..clients).map(|_| AtomicU64::new(0)).collect();
+        let units = AtomicU64::new(0);
+        let wait = Duration::from_millis(50 + rng.below(400) as u64);
+        std::thread::scope(|s| {
+            for (i, start) in next.iter().enumerate() {
+                let (stop, answered, sent, units, fss, key, addr) = (&stop, &answered, &sent, &units, &fss, &key, &addr);
+                let start = *start;
+                s.spawn(move || {
+                    let mut c = Client::new(addr);
+                    let fs = &fss[i % fss.len()];
+                    let mut n = start;
+                    let mut reads = 0u64;
+                    while !stop.load(Relaxed) {
+                        // A read now and then, to load the server.
+                        let line = if reads % 4 == 3 { format!("tail -n 1 c{i}.txt 2>/dev/null; true") } else { format!("echo {n} >> c{i}.txt; echo {n} >> d{i}.txt") };
+                        let body = Json::obj().with("command", line.as_str()).to_string();
+                        let writing = reads % 4 != 3;
+                        reads += 1;
+                        if writing {
+                            sent[i].store(n, Relaxed);
+                        }
+                        match c.request("POST", &format!("/v1/filesystems/{}/run", fs), Some(key), body.as_bytes()) {
+                            Ok(r) if r.status == 200 => {
+                                units.fetch_add(1, Relaxed);
+                                if writing {
+                                    let j = Json::parse(&r.body).unwrap();
+                                    if j.get("exit_status").and_then(Json::as_i64) == Some(0) {
+                                        answered[i].store(n, Relaxed);
+                                        n += 1;
+                                    }
+                                }
+                            }
+                            _ => return,
+                        }
+                    }
+                });
+            }
+            std::thread::sleep(wait);
+            // SIGKILL: nothing is flushed, nothing is closed.
+            if let Some(mut ch) = child.take() {
+                unsafe { libc::kill(ch.0.id() as i32, libc::SIGKILL) };
+                let _ = ch.0.wait();
+                std::mem::forget(ch);
+            }
+            stop.store(true, Relaxed);
+        });
+        units_total += units.load(Relaxed);
+        // Every filesystem opened as the server would, and checked.
+        for (f, fs) in fss.iter().enumerate() {
+            let dir = std::path::Path::new(&data).join("fs").join(&fs[..2]).join(fs);
+            let (db, _) = match qdb::Db::open_dir(&dir, qdb::Config::default()) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("FAIL  kill {}: filesystem {} does not open: {}", k + 1, f, e);
+                    return 1;
+                }
+            };
+            if let Err(e) = db.check() {
+                println!("FAIL  kill {}: filesystem {}: check: {}", k + 1, f, e);
+                return 1;
+            }
+            for i in (0..clients).filter(|i| i % nfs == f) {
+                let read = |name: String| -> Vec<u64> {
+                    match db.resolve(name.as_bytes()) {
+                        Ok(id) => String::from_utf8_lossy(&db.content(id)).lines().map(|l| l.parse().unwrap_or(u64::MAX)).collect(),
+                        Err(_) => Vec::new(),
+                    }
+                };
+                let (cs, ds) = (read(format!("c{i}.txt")), read(format!("d{i}.txt")));
+                let want: Vec<u64> = (0..cs.len() as u64).collect();
+                if cs != want || ds != cs {
+                    println!("FAIL  kill {}: client {}: the files are not the whole units 0 to {} in order: c has {:?}..., d has {} lines", k + 1, i, cs.len(), &cs[..cs.len().min(5)], ds.len());
+                    return 1;
+                }
+                let got = cs.len() as u64;
+                let a = answered[i].load(Relaxed);
+                if a != u64::MAX && got < a + 1 {
+                    println!("FAIL  kill {}: client {}: unit {} was answered, but the filesystem holds only units up to {}", k + 1, i, a, got as i64 - 1);
+                    return 1;
+                }
+                if got > sent[i].load(Relaxed).max(next[i]) + 1 {
+                    println!("FAIL  kill {}: client {}: the filesystem holds units that were never sent", k + 1, i);
+                    return 1;
+                }
+                if a != u64::MAX {
+                    answered_total += a + 1 - next[i];
+                }
+                next[i] = got;
+            }
+            db.close().ok();
+        }
+        let (ch, a) = spawn(&data, &o.admin);
+        child = Some(ch);
+        addr = a;
+        // The account and its key outlived the kill.
+        let mut c = Client::new(&addr);
+        let r = c.request("GET", "/v1/filesystems", Some(&key), b"").unwrap_or_else(|e| die(&format!("after kill {}: {}", k + 1, e)));
+        if r.status != 200 {
+            println!("FAIL  kill {}: the account's key no longer works: HTTP {}", k + 1, r.status);
+            return 1;
+        }
+    }
+    drop(child);
+    println!(
+        "kill test: {} kills with SIGKILL under load from {} connections on {} filesystems, seed {}: {} units run, {} answered writes; after every kill each filesystem opened, passed its check and held every answered unit, whole and in order ({:.0} s)",
+        kills,
+        clients,
+        nfs,
+        o.seed,
+        units_total,
+        answered_total,
+        t0.elapsed().as_secs_f64()
+    );
+    0
+}
+
+// ------------------------------------------------------- the isolation test
+
+fn isolation(addr: &str, admin: &str, count: usize, clients: usize, seed: u64) -> i32 {
+    let mut c = Client::new(addr);
+    struct Acc {
+        key: String,
+        id: String,
+        fss: Vec<String>,
+        marker: String,
+        session: String,
+    }
+    let mut accs = Vec::new();
+    for name in ["A", "B"] {
+        let j = call(&mut c, "POST", "/v1/accounts", admin, r#"{"limits":{"units_at_once":1000}}"#);
+        let key = j.get("key").and_then(Json::as_str).unwrap().to_string();
+        let id = j.get("account").and_then(Json::as_str).unwrap().to_string();
+        let marker = format!("MARKER-{}-{}", name, &qdb::host::new_id()[..12]);
+        let fss: Vec<String> = (0..3).map(|_| new_fs(&mut c, &key)).collect();
+        for f in &fss {
+            unit(&mut c, &key, f, &format!("mkdir -p a/b .hidden; echo {m} > m.txt; echo {m} > a/b/deep.txt; echo {m} > .hidden/x; echo {m} > 'odd name %2e.txt'", m = marker));
+        }
+        let session = call(&mut c, "POST", &format!("/v1/filesystems/{}/sessions", fss[0]), &key, "").get("session").and_then(Json::as_str).unwrap().to_string();
+        accs.push(Acc { key, id, fss, marker, session });
+    }
+    let accs = &accs;
+    const LINES: &[&str] = &[
+        "cat m.txt",
+        "cat /m.txt /../m.txt ../../m.txt",
+        "ls -la / .. ../.. /..",
+        "find / -name '*'",
+        "grep -r MARKER /",
+        "rg MARKER /",
+        "cat ../../../../server/registry.log",
+        "cat /../../../fs/*/*/m.txt",
+        "ls ../../../../fs",
+        "cd ..; cd ..; pwd; ls",
+        "cat \"$HOME/m.txt\"; echo $HOME $PWD",
+        "find .. -maxdepth 3",
+        "cat /proc/self/environ /etc/passwd",
+        "ls -R /",
+        "xargs cat < m.txt",
+        "cat a/b/../../m.txt",
+    ];
+    let failures = AtomicU64::new(0);
+    let done = AtomicU64::new(0);
+    let first_failure: Mutex<Option<String>> = Mutex::new(None);
+    // A self-test of the checker: send every 100th request with the other
+    // account's key, which must be caught.
+    let mutate = std::env::var_os("QDB_ISOLATION_MUTATE").is_some();
+    let t0 = Instant::now();
+    std::thread::scope(|s| {
+        for t in 0..clients.max(1) {
+            let (failures, done, first_failure) = (&failures, &done, &first_failure);
+            s.spawn(move || {
+                let mut rng = Rng(seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(t as u64 * 104729) | 1);
+                let mut c = Client::new(addr);
+                let mut none = Client::new(addr);
+                while (done.fetch_add(1, Relaxed) as usize) < count {
+                    let me = rng.below(2);
+                    let swap = mutate && rng.below(100) == 0;
+                    let (mine, other) = (&accs[me], &accs[1 - me]);
+                    // Whose filesystem the request names.
+                    let target_other = rng.below(2) == 0;
+                    let fs: String = match rng.below(8) {
+                        0..=3 => (if target_other { &other.fss } else { &mine.fss })[rng.below(3)].clone(),
+                        4 => qdb::host::new_id(),
+                        5 => other.fss[0].to_uppercase(),
+                        6 => format!("{}/../{}", mine.fss[0], other.fss[0]),
+                        _ => {
+                            let mut f = other.fss[rng.below(3)].clone().into_bytes();
+                            let i = rng.below(32);
+                            f[i] = if f[i] == b'0' { b'1' } else { b'0' };
+                            String::from_utf8(f).unwrap()
+                        }
+                    };
+                    let (method, path, body) = match rng.below(8) {
+                        0 => ("GET", format!("/v1/filesystems/{}", fs), String::new()),
+                        1 => ("DELETE", format!("/v1/filesystems/{}/sessions/{}", fs, other.session), String::new()),
+                        2 => ("POST", format!("/v1/filesystems/{}/run", fs), Json::obj().with("command", "pwd").with("session", other.session.as_str()).to_string()),
+                        3 => ("GET", format!("/v1/accounts/{}", other.id), String::new()),
+                        4 => ("POST", format!("/v1/filesystems/{}/sessions", fs), String::new()),
+                        _ => ("POST", format!("/v1/filesystems/{}/run", fs), Json::obj().with("command", LINES[rng.below(LINES.len())]).to_string()),
+                    };
+                    let key = if swap { &other.key } else { &mine.key };
+                    let r = match c.request(method, &path, Some(key), body.as_bytes()) {
+                        Ok(r) => r,
+                        Err(e) => die(&format!("{} {}: {}", method, path, e)),
+                    };
+                    let text = String::from_utf8_lossy(&r.body);
+                    let mut bad = None;
+                    if text.contains(&other.marker) {
+                        bad = Some("holds the other account's marker");
+                    } else if other.fss.iter().any(|f| text.contains(f.as_str())) || text.contains(&other.id) || text.contains(&other.key) || text.contains(&other.session) {
+                        bad = Some("names one of the other account's IDs");
+                    } else if fs.len() == 32 && other.fss.contains(&fs) {
+                        // The same answer as for a filesystem that is not there.
+                        let fake = qdb::host::new_id();
+                        let r2 = none.request(method, &path.replace(&fs, &fake), Some(&mine.key), body.replace(&fs, &fake).as_bytes()).unwrap_or_else(|e| die(&e.to_string()));
+                        if r2.status != r.status || r2.body != r.body {
+                            bad = Some("is not the answer for a filesystem that does not exist");
+                        }
+                    }
+                    if let Some(why) = bad {
+                        failures.fetch_add(1, Relaxed);
+                        let mut f = first_failure.lock().unwrap();
+                        if f.is_none() {
+                            *f = Some(format!("{} {} {} with the key of account {}: the answer {}: HTTP {} {}", method, path, body, me, why, r.status, text.chars().take(300).collect::<String>()));
+                        }
+                    }
+                }
+            });
+        }
+    });
+    let n = failures.load(Relaxed);
+    if n > 0 {
+        println!("FAIL  isolation: {} answers leaked; the first: {}", n, first_failure.into_inner().unwrap().unwrap());
+        return 1;
+    }
+    // Each still sees its own.
+    for a in accs.iter() {
+        let (_, j) = unit(&mut c, &a.key, &a.fss[0], "cat m.txt");
+        if j.get("stdout").and_then(Json::as_str) != Some(&format!("{}\n", a.marker)) {
+            println!("FAIL  isolation: an account no longer reads its own file");
+            return 1;
+        }
+    }
+    println!("isolation: {} requests from {} connections with two accounts' keys, against their own and each other's filesystems, guessed IDs and odd paths, seed {}: no answer held the other account's markers or IDs, and every request for the other's filesystem was answered as for one that does not exist ({:.0} s)", count, clients, seed, t0.elapsed().as_secs_f64());
+    0
 }
