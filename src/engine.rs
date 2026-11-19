@@ -1025,6 +1025,8 @@ pub enum Ending {
 pub struct UnitEnd {
     pub code: i32,
     pub ending: Ending,
+    /// What the unit used (the counters of `Cost`).
+    pub cost: Cost,
 }
 
 /// Run one unit with the access given: a reader with the database
@@ -1033,10 +1035,17 @@ pub struct UnitEnd {
 /// tries to write is stopped as an engine fault, having changed nothing.
 ///
 /// The session is left as it was if the unit is stopped.
-pub fn run_unit(mut db: Access, sess: &mut Session, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> UnitEnd {
+pub fn run_unit(db: Access, sess: &mut Session, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> UnitEnd {
+    run_unit_with(db, sess, line, None, out, err)
+}
+
+/// As `run_unit`, with standard input for the unit: `read` takes a line
+/// of it, and any other command that reads its standard input takes the
+/// rest, as in a script that bash reads from elsewhere.
+pub fn run_unit_with(mut db: Access, sess: &mut Session, line: &[u8], stdin: Option<&[u8]>, out: &mut dyn Sink, err: &mut dyn Sink) -> UnitEnd {
     if let Some(e) = db.failure() {
         err.write(format!("qdb: {}\n", e).as_bytes());
-        return UnitEnd { code: 2, ending: Ending::Ran };
+        return UnitEnd { code: 2, ending: Ending::Ran, cost: Cost::ZERO };
     }
     db.begin_unit();
     db.set_cwd(sess.cwd());
@@ -1044,7 +1053,7 @@ pub fn run_unit(mut db: Access, sess: &mut Session, line: &[u8], out: &mut dyn S
     // Reads cannot return an error, so damage found while reading is
     // thrown (`disk::Damage`), and so is a request to stop.
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let (code, limited) = run_line(&mut db, sess, line, out, err);
+        let (code, limited) = run_line(&mut db, sess, line, stdin, out, err);
         // The unit's changes become one record of the log; a file that
         // `>` emptied and nothing wrote to is now empty for good.
         if !limited {
@@ -1055,13 +1064,13 @@ pub fn run_unit(mut db: Access, sess: &mut Session, line: &[u8], out: &mut dyn S
         (code, limited)
     }));
     let end = match ran {
-        Ok((code, false)) => UnitEnd { code, ending: Ending::Ran },
+        Ok((code, false)) => UnitEnd { code, ending: Ending::Ran, cost: Cost::ZERO },
         Ok((code, true)) => {
             if let Access::Write(db) = &mut db {
                 db.rollback();
             }
             *sess = saved;
-            UnitEnd { code, ending: Ending::Limit }
+            UnitEnd { code, ending: Ending::Limit, cost: Cost::ZERO }
         }
         Err(payload) => {
             let payload = match payload.downcast::<crate::unit::Stopped>() {
@@ -1078,8 +1087,8 @@ pub fn run_unit(mut db: Access, sess: &mut Session, line: &[u8], out: &mut dyn S
                         _ => 143,
                     };
                     db.set_cwd(b"/");
-                    db.end_unit();
-                    return UnitEnd { code, ending: Ending::Stopped(why) };
+                    let cost = db.end_unit();
+                    return UnitEnd { code, ending: Ending::Stopped(why), cost };
                 }
                 Err(other) => other,
             };
@@ -1091,8 +1100,8 @@ pub fn run_unit(mut db: Access, sess: &mut Session, line: &[u8], out: &mut dyn S
                     *sess = saved;
                     err.write(format!("qdb: {}; nothing the unit changed was kept\n", q.0).as_bytes());
                     db.set_cwd(b"/");
-                    db.end_unit();
-                    return UnitEnd { code: 1, ending: Ending::Quota(q.0) };
+                    let cost = db.end_unit();
+                    return UnitEnd { code: 1, ending: Ending::Quota(q.0), cost };
                 }
                 Err(other) => other,
             };
@@ -1103,11 +1112,11 @@ pub fn run_unit(mut db: Access, sess: &mut Session, line: &[u8], out: &mut dyn S
                         db.after_damage(&d);
                     }
                     db.set_cwd(b"/");
-                    db.end_unit();
+                    let cost = db.end_unit();
                     if let Some(e) = db.failure() {
                         err.write(format!("qdb: {}\n", e).as_bytes());
                     }
-                    return UnitEnd { code: 2, ending: Ending::Damaged(d.0.clone(), d.1) };
+                    return UnitEnd { code: 2, ending: Ending::Damaged(d.0.clone(), d.1), cost };
                 }
                 Err(other) => other,
             };
@@ -1129,15 +1138,16 @@ pub fn run_unit(mut db: Access, sess: &mut Session, line: &[u8], out: &mut dyn S
                 db.fail_internal(&what);
             }
             err.write(format!("qdb: internal error: {}; nothing the unit changed was kept\n", what).as_bytes());
-            UnitEnd { code: 2, ending: Ending::Fault(what) }
+            UnitEnd { code: 2, ending: Ending::Fault(what), cost: Cost::ZERO }
         }
     };
     db.set_cwd(b"/");
-    db.end_unit();
+    let mut end = end;
+    end.cost = db.end_unit();
     if let Some(e) = db.failure() {
         if end.ending == Ending::Ran {
             err.write(format!("qdb: {}\n", e).as_bytes());
-            return UnitEnd { code: 2, ending: Ending::Ran };
+            end.code = 2;
         }
     }
     end
@@ -1160,7 +1170,7 @@ pub fn is_complete(text: &[u8]) -> bool {
 
 /// Run a unit's text. Returns its status, and whether it was stopped at
 /// the command limit.
-fn run_line(db: &mut Access, sess: &mut Session, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> (i32, bool) {
+fn run_line(db: &mut Access, sess: &mut Session, line: &[u8], stdin: Option<&[u8]>, out: &mut dyn Sink, err: &mut dyn Sink) -> (i32, bool) {
     let script = match shell::parse(line) {
         Ok(s) => s,
         Err(ParseError::Unsupported(what)) => return (fail(format!("unsupported syntax: {}", what), err), false),
@@ -1168,11 +1178,11 @@ fn run_line(db: &mut Access, sess: &mut Session, line: &[u8], out: &mut dyn Sink
     };
     let limit = db.config().command_limit;
     let ctx = Ctx::new(crate::unit::command_limit().map_or(limit, |n| n.min(limit)));
-    let code = run_script(db, sess, &script, &ctx, out, err);
+    let code = run_script(db, sess, &script, &ctx, stdin, out, err);
     (code, ctx.limited.get())
 }
 
-fn run_script(db: &mut Access, sess: &mut Session, script: &Script, ctx: &Ctx, out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
+fn run_script(db: &mut Access, sess: &mut Session, script: &Script, ctx: &Ctx, stdin: Option<&[u8]>, out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
     // Check everything the text shows before running anything.
     let mut ready = Vec::new();
     if let Err(what) = check_list(db, &script.items, Some(&mut ready)) {
@@ -1181,7 +1191,7 @@ fn run_script(db: &mut Access, sess: &mut Session, script: &Script, ctx: &Ctx, o
     for w in &script.warnings {
         err.write(format!("qdb: {}\n", w).as_bytes());
     }
-    let mut none = None;
+    let mut none = stdin;
     let gone = Cell::new(false);
     let mut r = Run { ctx, out, err, stdin: &mut none, gone: &gone, merged: false };
     // An expansion that fails gives up the rest of its line; the unit

@@ -24,7 +24,7 @@
 //! DATA/trash/                    filesystems being deleted
 //! ```
 
-use crate::engine::{self, classify, run_unit, Access, Ending, Kind, Sink, UnitEnd};
+use crate::engine::{self, classify, run_unit_with, Access, Ending, Kind, Sink, UnitEnd};
 use crate::gate::{Gate, Pass};
 use crate::session::Session;
 use crate::tree::{Config, Db};
@@ -122,6 +122,8 @@ pub struct FsInfo {
 /// One unit to run.
 pub struct Request<'a> {
     pub line: &'a [u8],
+    /// Standard input for the unit.
+    pub stdin: Option<&'a [u8]>,
     pub quotas: Quotas,
     pub limits: Limits,
     /// Set by whoever may stop the unit: the caller going away, shutdown.
@@ -143,7 +145,8 @@ struct Fs {
 pub struct Host {
     dir: PathBuf,
     cfg: HostConfig,
-    _lock: std::fs::File,
+    /// The data directory's lock, let go at shutdown.
+    dir_lock: Mutex<Option<std::fs::File>>,
     fss: Mutex<HashMap<String, Arc<Fs>>>,
     start: Instant,
     closing: AtomicBool,
@@ -181,9 +184,11 @@ pub fn new_id() -> String {
 
 impl Host {
     /// Take the data directory, making it if need be. Refused if another
-    /// host (in this process or another) has it.
+    /// host (in this process or another) has it. Stopping a unit unwinds
+    /// it, so the panic hook is set to say nothing of those unwinds.
     pub fn open(dir: &Path, cfg: HostConfig) -> Result<Arc<Host>, String> {
         use std::os::unix::io::AsRawFd;
+        unit::quiet_panics();
         std::fs::create_dir_all(dir.join("fs")).map_err(|e| format!("{}: {}", dir.display(), e))?;
         std::fs::create_dir_all(dir.join("trash")).map_err(|e| format!("{}: {}", dir.display(), e))?;
         let lockfile = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join("LOCK")).map_err(|e| format!("{}: {}", dir.join("LOCK").display(), e))?;
@@ -201,7 +206,7 @@ impl Host {
         let host = Arc::new(Host {
             dir: dir.to_path_buf(),
             cfg,
-            _lock: lockfile,
+            dir_lock: Mutex::new(Some(lockfile)),
             fss: Mutex::new(HashMap::new()),
             start: Instant::now(),
             closing: AtomicBool::new(false),
@@ -346,13 +351,13 @@ impl Host {
             match kind {
                 Kind::Reader => {
                     let g = fs.db.read().unwrap_or_else(|e| e.into_inner());
-                    run_unit(Access::Read(g.as_ref().unwrap()), sess, req.line, out, err)
+                    run_unit_with(Access::Read(g.as_ref().unwrap()), sess, req.line, req.stdin, out, err)
                 }
                 Kind::Writer => {
                     let mut g = fs.db.write().unwrap_or_else(|e| e.into_inner());
                     let db = g.as_mut().unwrap();
                     db.set_quotas(req.quotas.text, req.quotas.nodes, req.quotas.disk);
-                    run_unit(Access::Write(db), sess, req.line, out, err)
+                    run_unit_with(Access::Write(db), sess, req.line, req.stdin, out, err)
                 }
             }
         };
@@ -523,6 +528,7 @@ impl Host {
             let _ = j.join();
         }
         self.watch.stop();
+        lock(&self.dir_lock).take();
     }
 }
 

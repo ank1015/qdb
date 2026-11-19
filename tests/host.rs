@@ -26,7 +26,7 @@ impl Drop for Dir {
 
 fn req(line: &str) -> (Request<'_>, Arc<Stop>) {
     let stop = Stop::new();
-    (Request { line: line.as_bytes(), quotas: Quotas::default(), limits: Limits::default(), stop: stop.clone() }, stop)
+    (Request { line: line.as_bytes(), stdin: None, quotas: Quotas::default(), limits: Limits::default(), stop: stop.clone() }, stop)
 }
 
 fn run(host: &Host, id: &str, line: &str) -> Result<(String, String, i32, Ending), HostError> {
@@ -121,6 +121,7 @@ fn a_unit_past_its_deadline_is_stopped_and_leaves_nothing() {
     let stop = Stop::new();
     let r = Request {
         line: b"rm k.txt; while true; do echo x >> x.txt; done",
+        stdin: None,
         quotas: Quotas::default(),
         limits: Limits { time: Duration::from_millis(100), commands: u64::MAX, ..Limits::default() },
         stop,
@@ -167,7 +168,7 @@ fn delete_stops_what_runs_there() {
     let a2 = a.clone();
     let t = std::thread::spawn(move || {
         let stop = Stop::new();
-        let r = Request { line: b"while true; do echo x >> x.txt; done", quotas: Quotas::default(), limits: Limits { commands: u64::MAX, ..Limits::default() }, stop };
+        let r = Request { line: b"while true; do echo x >> x.txt; done", stdin: None, quotas: Quotas::default(), limits: Limits { commands: u64::MAX, ..Limits::default() }, stop };
         let mut sess = Session::new();
         let (mut out, mut err) = (Vec::new(), Vec::new());
         h.run(&a2, &r, &mut sess, &mut out, &mut err)

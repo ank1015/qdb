@@ -245,6 +245,11 @@ fn stopped(why: u8) -> ! {
 /// throws on purpose (damage found, a unit stopped, a reader that tried
 /// to write) and reports the others as before.
 pub fn quiet_panics() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(install_quiet_hook);
+}
+
+fn install_quiet_hook() {
     let usual = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let p = info.payload();
