@@ -50,6 +50,15 @@ Workloads (each prints one line of results):
               request for the other's filesystem must be answered as one
               for a filesystem that does not exist
 
+  small       --count small filesystems made from --clients connections,
+              each given one small file: the time to make one; then,
+              with --spawn, the server's memory once all are closed
+              (start it with --idle-close-secs 1), and the time of a
+              unit on a closed filesystem against an open one
+  deadline    units that cannot finish in time, each given a 100 ms
+              deadline, on --fs of --key (or a small filesystem of their
+              own): how long after the deadline each is answered, and
+              that the filesystem then takes a write
   long        the long run, with --spawn DATA: --clients connections, for
               --seconds, on up to --filesystems filesystems that are made,
               used (mostly a few hot ones, so the rest go idle and are
@@ -65,8 +74,15 @@ filesystem as JSON.
   --clients N --seconds N --count N --filesystems N --fs ID --key KEY
   --search COMMAND (default: grep -rn define .)";
 
+/// The server this program started, if any: stopped when it gives up.
+static CHILD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 fn die(msg: &str) -> ! {
     eprintln!("qdb-load: {}", msg);
+    let pid = CHILD.load(Relaxed);
+    if pid != 0 {
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    }
     std::process::exit(2);
 }
 
@@ -155,6 +171,7 @@ fn spawn(data: &str, admin: &str) -> (Spawned, String) {
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap_or_else(|e| die(&format!("qdb-server: {}", e)));
+    CHILD.store(child.id(), Relaxed);
     let mut line = String::new();
     std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
     (Spawned(child), line.trim().to_string())
@@ -280,10 +297,45 @@ fn import(o: &Opts) {
     println!("{}", Json::obj().with("key", key).with("filesystem", fs).to_string());
 }
 
+/// Counted, for `open`.
+#[global_allocator]
+static ALLOC: qdb::mem::Counting = qdb::mem::Counting;
+
+/// Open a database directory --count times: the median time, and the
+/// heap it holds once open.
+fn open_run(o: &Opts) {
+    let dir = o.rest.get(1).unwrap_or_else(|| die("open needs a database directory"));
+    let mut times = Vec::new();
+    let mut heap = 0usize;
+    let mut estimate = 0u64;
+    for _ in 0..o.count.max(1) {
+        let before = qdb::mem::thread_live();
+        let t = Instant::now();
+        let (db, _) = qdb::tree::Db::open_dir(std::path::Path::new(dir), qdb::tree::Config::default()).unwrap_or_else(|e| die(&e));
+        times.push(t.elapsed().as_nanos() as u64);
+        heap = qdb::mem::thread_live().saturating_sub(before);
+        estimate = db.memory_estimate();
+        db.close().unwrap_or_else(|e| die(&e));
+    }
+    times.sort_unstable();
+    println!(
+        "open {}: {} times, median {:.3} ms, least {:.3} ms; heap once open {:.1} KB (the engine's own estimate {:.1} KB)",
+        dir,
+        times.len(),
+        times[times.len() / 2] as f64 / 1e6,
+        times[0] as f64 / 1e6,
+        heap as f64 / 1024.0,
+        estimate as f64 / 1024.0
+    );
+}
+
 fn main() {
     let o = parse();
     if o.rest.first().map(String::as_str) == Some("import") {
         return import(&o);
+    }
+    if o.rest.first().map(String::as_str) == Some("open") {
+        return open_run(&o);
     }
     if o.rest.first().map(String::as_str) == Some("kill") {
         std::process::exit(kill_run(&o));
@@ -403,6 +455,13 @@ fn main() {
                 stopped,
                 t0.elapsed().as_secs_f64()
             );
+        }
+        "small" => {
+            let pid = _child.as_ref().map(|c| c.0.id());
+            small_run(&addr, &o, pid);
+        }
+        "deadline" => {
+            deadline_run(&addr, &o);
         }
         "long" => {
             let pid = _child.as_ref().map(|c| c.0.id()).unwrap_or_else(|| die("long needs --spawn DATA"));
@@ -1179,4 +1238,157 @@ fn long_run(addr: &str, o: &Opts, pid: u32) -> i32 {
         slowest as f64 / 1000.0
     );
     if level { 0 } else { 1 }
+}
+
+// ------------------------------------------------- small filesystems
+
+fn small_run(addr: &str, o: &Opts, pid: Option<u32>) {
+    let mut c = Client::new(addr);
+    let key = account(&mut c, &o.admin);
+    let made: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let create_us: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+    let next = AtomicU64::new(0);
+    let base = pid.map(sample);
+    let t0 = Instant::now();
+    std::thread::scope(|s| {
+        for _ in 0..o.clients.max(1) {
+            let (made, create_us, next, key) = (&made, &create_us, &next, &key);
+            s.spawn(move || {
+                let mut c = Client::new(addr);
+                let mut mine = Vec::new();
+                let mut us = Vec::new();
+                while (next.fetch_add(1, Relaxed) as usize) < o.count {
+                    let t = Instant::now();
+                    let f = new_fs(&mut c, key);
+                    us.push(t.elapsed().as_micros() as u64);
+                    unit(&mut c, key, &f, "echo 'a small file' > a.txt");
+                    mine.push(f);
+                }
+                made.lock().unwrap().extend(mine);
+                create_us.lock().unwrap().extend(us);
+            });
+        }
+    });
+    let took = t0.elapsed();
+    let made = made.into_inner().unwrap();
+    let mut us = create_us.into_inner().unwrap();
+    println!(
+        "small filesystems: {} made, each with one small file, from {} connections in {:.1} s; making one took median {:.3} ms, 99th percentile {:.3} ms",
+        made.len(),
+        o.clients,
+        took.as_secs_f64(),
+        pct(&mut us, 0.5),
+        pct(&mut us, 0.99)
+    );
+    if let Some(d) = &o.spawn {
+        let mut bytes = 0u64;
+        let mut blocks = 0u64;
+        let mut n = 0u64;
+        for f in made.iter().take(1000) {
+            let dir = std::path::Path::new(d).join("fs").join(&f[..2]).join(f);
+            for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                use std::os::unix::fs::MetadataExt;
+                if let Ok(m) = e.metadata() {
+                    bytes += m.len();
+                    blocks += m.blocks() * 512;
+                }
+            }
+            blocks += 4096; // the directory itself
+            n += 1;
+        }
+        println!("    on disk, of {} of them: {:.0} bytes of files a filesystem, {:.1} KB in blocks with its directory", n, bytes as f64 / n as f64, blocks as f64 / n as f64 / 1024.0);
+    }
+    let Some(pid) = pid else { return };
+    // All closed: the server's own memory.
+    let mut idle = sample(pid);
+    let wait = Instant::now();
+    loop {
+        std::thread::sleep(Duration::from_secs(2));
+        let now = sample(pid);
+        if now.1 + 32 >= idle.1 && wait.elapsed() > Duration::from_secs(10) {
+            idle = now;
+            break;
+        }
+        idle = now;
+        if wait.elapsed() > Duration::from_secs(120) {
+            break;
+        }
+    }
+    let (b_rss, b_fds) = base.unwrap_or((0, 0));
+    println!("    the server with all of them idle: {:.1} MB resident ({:.1} MB before any were made), {} open files ({} before)", idle.0 as f64 / 1024.0, b_rss as f64 / 1024.0, idle.1, b_fds);
+    // A unit on a closed filesystem, against the same unit on it open.
+    let mut cold = Vec::new();
+    let mut warm = Vec::new();
+    let mut rng = Rng(o.seed | 1);
+    for _ in 0..o.count.min(2000) {
+        let f = &made[rng.below(made.len())];
+        let (a, _) = unit(&mut c, &key, f, "cat a.txt");
+        let (b, _) = unit(&mut c, &key, f, "cat a.txt");
+        cold.push(a);
+        warm.push(b);
+        // Let it close again.
+    }
+    println!(
+        "    cat a.txt on a closed filesystem: median {:.3} ms; on the same one open: median {:.3} ms; so opening costs about {:.3} ms (of {} tries, each on a filesystem not used for a while)",
+        pct(&mut cold, 0.5),
+        pct(&mut warm, 0.5),
+        pct(&mut cold.clone(), 0.5) - pct(&mut warm.clone(), 0.5),
+        cold.len()
+    );
+}
+
+// ------------------------------------------------------------ deadlines
+
+fn deadline_run(addr: &str, o: &Opts) {
+    let mut c = Client::new(addr);
+    let (key, fs) = match (&o.key, &o.fs) {
+        (Some(k), Some(f)) => (k.clone(), f.clone()),
+        _ => {
+            let k = account(&mut c, &o.admin);
+            let f = new_fs(&mut c, &k);
+            unit(&mut c, &k, &f, "seq 1 200000 > n.txt; mkdir d; for i in 1 2 3 4 5 6 7 8 9; do seq $i 300000 > d/f$i.txt; done");
+            (k, f)
+        }
+    };
+    const LINES: &[&str] = &[
+        "while true; do :; done",
+        "while true; do echo x >> spin.txt; done",
+        "for i in $(seq 1 100000000); do echo $i; done | wc -l",
+        "seq 1 100000000000 | wc -l",
+        "while true; do grep -rc 1 . > /dev/null; done",
+        "while true; do sort -r n.txt > s.txt; done",
+        "while true; do cat d/* | sort | uniq -c > /dev/null; done",
+        "while true; do awk '{s+=$1} END {print s}' n.txt; done",
+    ];
+    let mut late = Vec::new();
+    let mut worst = (0u64, "");
+    for k in 0..o.count.max(1) {
+        let line = LINES[k % LINES.len()];
+        let body = Json::obj().with("command", line).with("limits", Json::obj().with("time_ms", 100u64));
+        let t = Instant::now();
+        let r = c.request("POST", &format!("/v1/filesystems/{}/run", fs), Some(&key), body.to_string().as_bytes()).unwrap_or_else(|e| die(&e.to_string()));
+        let us = t.elapsed().as_micros() as u64;
+        let j = Json::parse(&r.body).unwrap_or(Json::Null);
+        if j.get("stopped").and_then(Json::as_str) != Some("deadline") {
+            die(&format!("{:?} was not stopped by its deadline: {}", line, String::from_utf8_lossy(&r.body)));
+        }
+        let after = us.saturating_sub(100_000);
+        if after > worst.0 {
+            worst = (after, line);
+        }
+        late.push(after);
+        // Nothing left, and the filesystem takes a write.
+        let (_, j) = unit(&mut c, &key, &fs, "ls spin.txt s.txt 2>/dev/null | wc -l; echo ok > after.txt; cat after.txt");
+        if j.get("stdout").and_then(Json::as_str) != Some("0\nok\n") {
+            die(&format!("after {:?}: {:?}", line, j.get("stdout")));
+        }
+    }
+    println!(
+        "deadlines: {} units given 100 ms, each stopped by it; answered after the deadline by median {:.2} ms, 99th percentile {:.2} ms, most {:.2} ms ({:?}); after each, nothing it wrote was there and the filesystem took a write",
+        late.len(),
+        pct(&mut late.clone(), 0.5),
+        pct(&mut late.clone(), 0.99),
+        worst.0 as f64 / 1000.0,
+        worst.1
+    );
 }

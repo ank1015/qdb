@@ -20,10 +20,19 @@ flags people use on the first fifteen commands; `rg` with its ignore
 rules; and eighteen more commands, from `sort` and `xargs` to `date`.
 Files and folders now carry a modification time, and a copy shares its
 content with the original until one of them changes.
-There is no concurrency yet: one process, one thread.
+Stage 5 added the shell constructs people reach for, `diff` and `awk`,
+and a report of what each command line costs. Stage 6 made it a
+service: `qdb-server` hosts many filesystems, each owned by one account,
+and runs command lines on them from many callers at once over an HTTP
+and JSON API. Units that only read run together; a unit that may write
+runs alone on its filesystem; every unit is all or nothing, and one the
+server stops (its time limit, its caller going away, a fault) leaves
+nothing behind. A recursive `grep` or `rg` uses idle workers as extra
+threads, and writers on one filesystem share syncs.
 
 Nothing is borrowed from an existing database, storage engine, search
-library or regex library. The crate depends on `memchr` (finding a byte
+library or regex library. The server's HTTP, JSON, SHA-256 and base64
+are written here too. The crate depends on `memchr` (finding a byte
 or a substring), `libc` (mmap, flock, limits), `crc32fast` (checksums),
 `lz4_flex` (the one compression codec, used with `--compress`) and
 `regex-syntax` (parsing `rg` patterns only; the matching is the
@@ -113,6 +122,28 @@ let code = qdb::execute_to(&mut db, b"grep -rn hello .", &mut out, &mut err);
 `db.set_index(false)` do without it. Results never depend on the index.
 `Db::open_dir(path, Config::default())` opens a database directory and
 returns the database with a report of what opening found and did.
+
+## The service
+
+```
+export QDB_ADMIN_KEY=$(head -c 24 /dev/urandom | base64)
+./target/release/qdb-server --data /tmp/qdb-data &        # prints 127.0.0.1:7878
+
+K=$(curl -s -X POST -H "Authorization: Bearer $QDB_ADMIN_KEY" localhost:7878/v1/accounts | jq -r .key)
+F=$(curl -s -X POST -H "Authorization: Bearer $K" localhost:7878/v1/filesystems | jq -r .filesystem)
+curl -s -X POST -H "Authorization: Bearer $K" localhost:7878/v1/filesystems/$F/run \
+     -d '{"command":"mkdir notes; echo hello > notes/a.txt; grep -rn hello ."}'
+# {"exit_status":0,"stdout":"./notes/a.txt:1:hello\n","stderr":"", ...}
+```
+
+`docs/API.md` has every request and answer; `docs/OPERATIONS.md` how to
+run, configure, back up and recover the server. `qdb-load` (bench/README.md)
+puts load on a server and runs the service's tests: the units-at-once
+order checker, the kill test, the isolation test and the long run.
+
+The command line takes `--threads N` to let a recursive `grep` or `rg`
+use N threads, as the server does with idle workers; `rg -j N` limits
+one search to N.
 
 ## What a command costs
 
@@ -361,10 +392,23 @@ the construct's output so far.
 | `src/bin/bench.rs` | The benchmark. See `bench/README.md`. |
 | `src/bin/replay.rs` | Runs a file of units against a database and reports what they cost, by command and by kind of work. |
 | `src/bin/stress.rs` | One very large file, a long run of writes, the cost of a sync, and the comparison of the switches. See `bench/README.md`. |
+| `src/host.rs` | Many filesystems in one process: made, opened when needed, closed when idle or when too many are open, deleted; units run on them from any number of threads, with deadlines watched. |
+| `src/gate.rs` | Readers together, a writer alone, on one filesystem, let in in the order they came. |
+| `src/unit.rs` | Stopping a unit: the request to stop, the points where the engine looks, the limits on its memory and scratch over all its threads. |
+| `src/group.rs` | Group commit: one sync for every writer logged by then. |
+| `src/par.rs` | One search on several threads: files handed to borrowed threads, results written in order. |
+| `src/service.rs` | Accounts, keys, quotas, sessions, usage, and the HTTP requests. |
+| `src/net/` | HTTP/1.1, JSON, SHA-256 and base64. |
+| `src/bin/server.rs` | `qdb-server`. See `docs/OPERATIONS.md`. |
+| `src/bin/load.rs` | `qdb-load`: load and the service's tests. See `bench/README.md`. |
 
 ## Where to read next
 
 - `docs/briefs/`: the briefs this was built from.
+- `docs/HANDBACK-6.md`: stage 6. The service: every target with its
+  measured value, a capacity sheet, the concurrency tests and what they
+  found, security notes, and questions.
+- `docs/API.md` and `docs/OPERATIONS.md`: using and running the server.
 - `docs/HANDBACK-5.md`: stage 5. The shell constructs, diff and awk,
   every target with its measured value, the cost report (what uses the
   CPU, what waits for the disk, what runs short first), what is still
