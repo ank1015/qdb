@@ -3082,6 +3082,26 @@ impl Db {
         self.nodes.len
     }
 
+    /// About how much memory the open database holds: the tree, the
+    /// piece tables and the index in memory. Index files are mapped, not
+    /// counted.
+    pub fn memory_estimate(&self) -> u64 {
+        let mut n = self.nodes.len as u64 * 192 + self.live_pieces * 48;
+        for seg in self.segs.iter().flatten() {
+            n += seg.owners.capacity() as u64 * 8 + 512;
+            if let Some(d) = &seg.dynamic {
+                let (table, lists, docs) = d.sizes();
+                n += (table + lists + docs) as u64;
+            }
+        }
+        n
+    }
+
+    /// How many files the tree holds.
+    pub fn file_count(&self) -> u64 {
+        self.nodes[self.root].aux as u64
+    }
+
     /// Bytes of text in all files, kept as the tree changes.
     pub fn text_bytes(&self) -> u64 {
         self.text_total
