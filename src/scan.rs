@@ -20,6 +20,7 @@ use crate::query::Query;
 use crate::regex::{Dfa, Literals, MatchError, Regex};
 
 /// One or more fixed strings, searched for together.
+#[derive(Clone)]
 struct Strings {
     finders: Vec<Finder>,
     /// For each string, its next occurrence at or after `valid_from` in
@@ -67,6 +68,7 @@ impl Strings {
     }
 }
 
+#[derive(Clone)]
 enum Kind {
     /// Every line matches.
     All,
@@ -85,7 +87,9 @@ enum Kind {
     },
 }
 
-/// A compiled search for the lines that match.
+/// A compiled search for the lines that match. A clone starts with what
+/// the original has learned, and goes on learning on its own.
+#[derive(Clone)]
 pub struct Searcher {
     kind: Kind,
     /// What a file must contain to have a matching line.

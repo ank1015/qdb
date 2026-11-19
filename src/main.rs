@@ -49,6 +49,8 @@ Runs bash command lines against a tree of text files.
   --compact        do all outstanding upkeep now: rewrite content so that
                    no space is wasted, save the index and the tree
   --dump DIR       when done, write the tree into the empty directory DIR
+  --threads N      let a recursive grep or rg that reads much of the tree
+                   use up to N threads (default 1); output is the same
   --cost           after each unit, print what it used on standard error,
                    on one line: `cost` and then NAME=NUMBER fields. The
                    fields up to `memory` are counts and repeat exactly;
@@ -108,6 +110,11 @@ fn run() -> Result<i32, String> {
                 }
             }
             "--cost" => cost = true,
+            "--threads" => {
+                let n: usize = value("--threads")?.parse().map_err(|_| "--threads needs a number".to_string())?;
+                qdb::par::set_default_lender(Some(std::sync::Arc::new(qdb::par::Fixed(n.saturating_sub(1)))));
+                qdb::par::set_max_threads(n);
+            }
             "--command-limit" => cfg.command_limit = value("--command-limit")?.parse().map_err(|_| "--command-limit needs a number")?,
             "--check" => check = true,
             "--stats" => stats = true,

@@ -239,9 +239,29 @@ pub struct Io<'a> {
     stdin_size: Option<u64>,
     piped: bool,
     scratch: Scratch,
+    /// All output is kept in `buf`, never handed on: see `gathering`.
+    gather: bool,
 }
 
 impl<'a> Io<'a> {
+    /// Output and errors into buffers of their own, no input: for part of
+    /// a search done on a helper thread (`par`), whose results are
+    /// written out later in order.
+    pub fn detached(out: &'a mut dyn Sink, buf: &'a mut Vec<u8>, err: &'a mut Vec<u8>, scratch: Scratch) -> Io<'a> {
+        Io { stdin: &[], out, buf, stopped: false, err, out_file: None, merged: false, exact: false, stdin_size: None, piped: false, scratch, gather: false }
+    }
+
+    /// As `detached`, with all output kept in `buf`, which grows as it
+    /// must: one copy less of everything written.
+    pub fn gathering(nowhere: &'a mut dyn Sink, buf: &'a mut Vec<u8>, err: &'a mut Vec<u8>, scratch: Scratch) -> Io<'a> {
+        Io { gather: true, ..Io::detached(nowhere, buf, err, scratch) }
+    }
+
+    /// Whether standard error goes where standard output goes.
+    pub fn is_merged(&self) -> bool {
+        self.merged
+    }
+
     /// Where a command may keep what does not fit in memory.
     pub fn scratch(&self) -> Scratch {
         self.scratch.clone()
@@ -299,6 +319,10 @@ impl<'a> Io<'a> {
         if self.stopped {
             return;
         }
+        if self.gather {
+            self.buf.extend_from_slice(data);
+            return;
+        }
         if self.buf.len() + data.len() > OUT_BUFFER {
             self.flush();
             if data.len() >= OUT_BUFFER {
@@ -315,6 +339,9 @@ impl<'a> Io<'a> {
     /// here.
     pub fn flush(&mut self) {
         crate::unit::poll();
+        if self.gather {
+            return;
+        }
         if self.merged && !self.err.is_empty() {
             // Errors are not buffered: they go ahead of the output that
             // still is.
@@ -1996,7 +2023,7 @@ impl<'a> Stage<'a> {
             Dest::File(i) => &mut spools[i],
             Dest::Null => &mut nowhere,
         };
-        let mut io = Io { stdin, out, buf, stopped: false, err, out_file, merged: plan.d1 == plan.d2 || (*merge_down && plan.d1 == Dest::Down && plan.d2 == Dest::Err), exact: true, stdin_size: *stdin_size, piped: *piped, scratch: scratch.clone() };
+        let mut io = Io { stdin, out, buf, stopped: false, err, out_file, merged: plan.d1 == plan.d2 || (*merge_down && plan.d1 == Dest::Down && plan.d2 == Dest::Err), exact: true, stdin_size: *stdin_size, piped: *piped, scratch: scratch.clone(), gather: false };
         let r = f(&mut io);
         io.flush();
         *left = io.stdin.len();

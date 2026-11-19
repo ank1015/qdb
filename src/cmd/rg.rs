@@ -10,6 +10,7 @@ use crate::util::lossy;
 use memchr::{memchr, memrchr};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 // ------------------------------------------------------------------- globs
 
@@ -628,6 +629,7 @@ fn arguments(args: &[Vec<u8>]) -> Result<Parsed, String> {
 // ---------------------------------------------------------------- the search
 
 /// Finds the lines a pattern matches in a stretch of whole lines.
+#[derive(Clone)]
 struct Matcher {
     searcher: Searcher,
     pattern: RgPattern,
@@ -696,6 +698,32 @@ struct Search<'a> {
     /// folder as if every entry sat directly in that searched folder.
     met_from: HashMap<NodeId, NodeId>,
     base: NodeId,
+    /// Files handed to helper threads (`par`), during a walk.
+    ahead: Option<crate::par::Ahead<Job, Found>>,
+    /// Bytes searched on this thread in this walk; u64::MAX once helpers
+    /// were asked for and none came.
+    alone_bytes: u64,
+    shared_pieces: Option<Arc<Shortlist>>,
+    batch: Job,
+    batch_bytes: u64,
+    spare: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+/// Files a helper searches, one after another, and what it found.
+struct Job {
+    files: Vec<(Vec<u8>, NodeId)>,
+    pieces: Option<Arc<Shortlist>>,
+}
+
+/// A job is handed on once it holds this many bytes, or files.
+const JOB_BYTES: u64 = 2 << 20;
+const JOB_FILES: usize = 256;
+
+struct Found {
+    out: Vec<u8>,
+    err: Vec<u8>,
+    matched: bool,
+    failed: bool,
 }
 
 /// The lines of a file that have been dealt with so far.
@@ -708,6 +736,28 @@ struct Progress {
 }
 
 impl<'a> Search<'a> {
+    fn new(o: &'a Opts, m: Option<Matcher>) -> Search<'a> {
+        Search {
+            o,
+            m,
+            printed: false,
+            matched: false,
+            failed: false,
+            searched: 0,
+            rules: HashMap::new(),
+            skipped: HashMap::new(),
+            root: 0,
+            met_from: HashMap::new(),
+            base: 0,
+            ahead: None,
+            alone_bytes: 0,
+            shared_pieces: None,
+            batch: Job { files: Vec::new(), pieces: None },
+            batch_bytes: 0,
+            spare: Arc::default(),
+        }
+    }
+
     fn line(&self, io: &mut Io, label: &Label, number: u64, text: &[u8], sep: u8) {
         if let Some(l) = label.0 {
             io.put(l);
@@ -918,6 +968,107 @@ impl<'a> Search<'a> {
         }
     }
 
+    /// Search a file a walk has reached: here, or on a helper thread once
+    /// the walk has read enough on its own to be worth sharing.
+    fn visit(&mut self, db: &Db, io: &mut Io, shown: &[u8], id: NodeId, pieces: Option<&Shortlist>) {
+        let o = self.o;
+        if self.ahead.is_none() && self.alone_bytes != u64::MAX && self.alone_bytes >= crate::par::threshold() as u64 {
+            // Only when each file's result stands alone: no context (a
+            // `--` between groups), no errors merged into the output.
+            let alone = o.mode != Mode::Files && o.before == 0 && o.after == 0 && !io.is_merged() && o.threads != 1;
+            self.ahead = if alone { self.helpers(db) } else { None };
+            if self.ahead.is_none() {
+                self.alone_bytes = u64::MAX;
+            }
+        }
+        match &mut self.ahead {
+            None => {
+                if self.alone_bytes != u64::MAX {
+                    self.alone_bytes += db.size(id);
+                }
+                self.file(db, io, &Label(Some(shown)), shown, id, pieces);
+            }
+            Some(_) => {
+                self.searched += 1;
+                let pieces = pieces.map(|f| self.shared_pieces.get_or_insert_with(|| Arc::new(f.clone())).clone());
+                if self.batch.pieces.is_some() != pieces.is_some() {
+                    self.hand_on(io);
+                }
+                self.batch.pieces = pieces;
+                self.batch.files.push((shown.to_vec(), id));
+                self.batch_bytes += db.size(id) + 256;
+                if self.batch_bytes >= JOB_BYTES || self.batch.files.len() >= JOB_FILES {
+                    self.hand_on(io);
+                }
+            }
+        }
+    }
+
+    fn hand_on(&mut self, io: &mut Io) {
+        if self.batch.files.is_empty() {
+            return;
+        }
+        let job = std::mem::replace(&mut self.batch, Job { files: Vec::new(), pieces: None });
+        self.batch_bytes = 0;
+        let (matched, failed, spare) = (&mut self.matched, &mut self.failed, &self.spare);
+        if let Some(a) = &mut self.ahead {
+            a.submit(job, &mut |f| Search::take_found(spare, matched, failed, io, f));
+        }
+    }
+
+    fn take_found(spare: &Mutex<Vec<Vec<u8>>>, matched: &mut bool, failed: &mut bool, io: &mut Io, mut f: Found) {
+        io.put(&f.out);
+        io.err.extend_from_slice(&f.err);
+        *matched |= f.matched;
+        *failed |= f.failed;
+        f.out.clear();
+        let mut s = spare.lock().unwrap_or_else(|e| e.into_inner());
+        if s.len() < 64 {
+            s.push(std::mem::take(&mut f.out));
+        }
+    }
+
+    /// The files handed to helpers so far, written out in order.
+    fn settle(&mut self, io: &mut Io) {
+        if self.ahead.is_some() && !io.stopped() {
+            self.hand_on(io);
+        }
+        if let Some(mut a) = self.ahead.take() {
+            if !io.stopped() {
+                let (matched, failed, spare) = (&mut self.matched, &mut self.failed, &self.spare);
+                a.finish(&mut |f| Search::take_found(spare, matched, failed, io, f));
+            }
+        }
+        self.batch.files.clear();
+        self.batch_bytes = 0;
+        self.shared_pieces = None;
+    }
+
+    fn helpers(&self, db: &Db) -> Option<crate::par::Ahead<Job, Found>> {
+        let o = self.o;
+        let template = Mutex::new(self.m.clone());
+        let spare = self.spare.clone();
+        crate::par::Ahead::start(move || {
+            let m = template.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let mut w = Search::new(o, m);
+            let spare = spare.clone();
+            Box::new(move |job: Job| {
+                let mut out = spare.lock().unwrap_or_else(|e| e.into_inner()).pop().unwrap_or_default();
+                out.reserve(JOB_BYTES as usize);
+                let (mut nowhere, mut err) = (Vec::new(), Vec::new());
+                w.matched = false;
+                w.failed = false;
+                {
+                    let mut io = Io::gathering(&mut nowhere, &mut out, &mut err, crate::tree::Scratch::none());
+                    for (shown, id) in &job.files {
+                        w.file(db, &mut io, &Label(Some(shown)), shown, *id, job.pieces.as_deref());
+                    }
+                }
+                Found { out, err, matched: w.matched, failed: w.failed }
+            })
+        })
+    }
+
     fn file(&mut self, db: &Db, io: &mut Io, label: &Label, shown: &[u8], id: NodeId, pieces: Option<&Shortlist>) {
         self.searched += 1;
         if self.o.mode == Mode::Files {
@@ -1090,7 +1241,7 @@ impl<'a> Search<'a> {
                 self.searched += 1;
             } else {
                 let shown = path.clone();
-                self.file(db, io, &Label(Some(&shown)), &shown, *child, pieces);
+                self.visit(db, io, &shown, *child, pieces);
             }
             path.truncate(base);
         }
@@ -1112,6 +1263,7 @@ impl<'a> Search<'a> {
             self.met_from.entry(*d).or_insert(dir);
         }
         self.base = up.first().map_or(dir, |d| self.met_from[d]);
+        self.alone_bytes = 0;
         let ask = self.o.mode != Mode::Files && !self.o.invert;
         let answer = match &self.m {
             Some(m) if ask => db.candidates(dir, m.searcher.query()),
@@ -1120,9 +1272,11 @@ impl<'a> Search<'a> {
         match answer {
             Candidates::All => {
                 self.walk(db, io, dir, &mut path, None, false);
+                self.settle(io);
             }
             Candidates::Among(set) => {
                 self.walk(db, io, dir, &mut path, Some(&set), false);
+                self.settle(io);
             }
             Candidates::Files(files, set) => {
                 // Each candidate is searched if the walk would have
@@ -1150,8 +1304,9 @@ impl<'a> Search<'a> {
                         continue;
                     }
                     let shown = [prefix, &c.path[..]].concat();
-                    self.file(db, io, &Label(Some(&shown)), &shown, c.id, Some(&set));
+                    self.visit(db, io, &shown, c.id, Some(&set));
                 }
+                self.settle(io);
                 if self.searched == 0 {
                     // Nothing printed can still mean files were searched.
                     if self.walk(db, io, dir, &mut path, None, true) {
@@ -1196,7 +1351,15 @@ pub fn rg(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     let run: Runner = Box::new(move |db, io| {
         io.errors_first();
         let m = compiled.map(|pattern| Matcher { searcher: Searcher::regex(vec![pattern.ascii.clone()]), pattern });
-        let mut s = Search { o: &opts, m, printed: false, matched: false, failed: false, searched: 0, rules: HashMap::new(), skipped: HashMap::new(), root: 0, met_from: HashMap::new(), base: 0 };
+        let mut s = Search::new(&opts, m);
+        // -j N: the most threads the search may use.
+        struct Max(usize);
+        impl Drop for Max {
+            fn drop(&mut self) {
+                crate::par::set_max_threads(self.0);
+            }
+        }
+        let _max = (opts.threads > 0).then(|| Max(crate::par::set_max_threads(opts.threads as usize)));
         let mut errors = false;
         let stdin = io.take_stdin();
         if paths.is_empty() {

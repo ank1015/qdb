@@ -271,6 +271,29 @@ impl Slots {
     }
 }
 
+/// Idle workers are lent to searches (`par`), and taken back as soon as
+/// a unit waits for one.
+impl crate::par::Lender for Slots {
+    fn borrow(&self, want: usize) -> usize {
+        let mut s = lock(&self.state);
+        if s.1 > 0 {
+            return 0;
+        }
+        let n = want.min(self.max.saturating_sub(s.0));
+        s.0 += n;
+        n
+    }
+
+    fn give_back(&self, n: usize) {
+        lock(&self.state).0 -= n;
+        self.cv.notify_all();
+    }
+
+    fn wanted(&self) -> bool {
+        lock(&self.state).1 > 0
+    }
+}
+
 struct SlotGuard<'a>(&'a Slots);
 
 impl Drop for SlotGuard<'_> {
@@ -343,7 +366,7 @@ pub struct Service {
     usage: Mutex<Usage>,
     usage_file: Mutex<std::fs::File>,
     sessions: Mutex<HashMap<String, Arc<SessionSlot>>>,
-    slots: Slots,
+    slots: Arc<Slots>,
     watcher: Arc<Watcher>,
     start: Instant,
     stopping: Arc<AtomicBool>,
@@ -522,7 +545,7 @@ impl Service {
         let svc = Arc::new(Service {
             registry: Mutex::new(open_append(&reg_path).map_err(|e| e.to_string())?),
             usage_file: Mutex::new(open_append(&usage_path).map_err(|e| e.to_string())?),
-            slots: Slots { state: Mutex::new((0, 0)), cv: Condvar::new(), max: cfg.workers.max(1), queue: cfg.queue },
+            slots: Arc::new(Slots { state: Mutex::new((0, 0)), cv: Condvar::new(), max: cfg.workers.max(1), queue: cfg.queue }),
             watcher: Watcher::start(stopping.clone()),
             cfg,
             host,
@@ -1188,6 +1211,8 @@ fn run(svc: &Arc<Service>, req: &http::Request, acc: &str, fs: &str, w: &mut Tcp
     let Some(_slot) = svc.slots.take(&|| stop.requested().is_some()) else {
         return Some(fail(429, "too many units are waiting; try again"));
     };
+    // A search in the unit may borrow idle workers.
+    let _lending = crate::par::lend(svc.slots.clone());
     let mut fresh = Session::new();
     let mut held_session;
     let sess: &mut Session = match &session {

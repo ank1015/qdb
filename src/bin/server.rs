@@ -11,6 +11,10 @@ use std::time::Duration;
 
 static TERM: AtomicBool = AtomicBool::new(false);
 
+/// Counted, for the memory limit of a unit and its cost report.
+#[global_allocator]
+static ALLOC: qdb::mem::Counting = qdb::mem::Counting;
+
 extern "C" fn on_term(_: libc::c_int) {
     TERM.store(true, Ordering::SeqCst);
 }

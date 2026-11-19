@@ -50,6 +50,9 @@ With no case files, runs every tests/cases/*.case.
                     a simulated disk that loses what was not synced, and
                     require that every one recovers to the result of a
                     whole number of command lines
+  --threads N       let every recursive grep and rg use N threads from its
+                    first file, as a server lends idle workers; output
+                    and counts must not change
   --crash-writers N instead of the cases: the crash test with several
                     writers (--writers, default 8) on one database at
                     once, sharing syncs as the server has them do. Cut
@@ -1967,6 +1970,13 @@ fn run() -> Result<bool, String> {
             "--diff" => diff = value("--diff")?.parse().map_err(|_| "--diff needs a number")?,
             "--crash" => crash = value("--crash")?.parse().map_err(|_| "--crash needs a number")?,
             "--kill" => kill = value("--kill")?.parse().map_err(|_| "--kill needs a number")?,
+            "--threads" => {
+                let n: usize = value("--threads")?.parse().map_err(|_| "--threads needs a number")?;
+                qdb::par::set_default_lender(Some(std::sync::Arc::new(qdb::par::Fixed(n.saturating_sub(1)))));
+                qdb::par::set_max_threads(n);
+                // Every recursive search shares from its first file.
+                qdb::par::set_threshold(0);
+            }
             "--crash-writers" => crash_writers = value("--crash-writers")?.parse().map_err(|_| "--crash-writers needs a number")?,
             "--writers" => writers = value("--writers")?.parse().map_err(|_| "--writers needs a number")?,
             "-v" => verbose = true,

@@ -9,7 +9,8 @@
 //! ```
 //!
 //! Without it the figure is 0 and everything else works. Counts are kept
-//! per thread, since units run on several at once, and for the process.
+//! per thread, since units run on several at once, and for the process
+//! (`LIVE`, to within 64 KB a thread).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -30,14 +31,43 @@ thread_local! {
     static MINE: Cell<isize> = const { Cell::new(0) };
     /// The most `MINE` has been since `mark`.
     static MY_PEAK: Cell<isize> = const { Cell::new(0) };
+    /// What this thread allocated, less what it freed, not yet added to
+    /// `LIVE`: the process count is changed in steps of `STEP` or more,
+    /// so that threads allocating at once do not all write one counter.
+    static OWED: Cell<isize> = const { Cell::new(0) };
+}
+
+/// `LIVE` lags the truth by less than this much a thread.
+const STEP: isize = 64 << 10;
+
+#[inline]
+fn settle(by: isize) {
+    let owed = OWED.try_with(|o| {
+        let v = o.get() + by;
+        if v.abs() >= STEP {
+            o.set(0);
+            v
+        } else {
+            o.set(v);
+            0
+        }
+    });
+    // A thread being torn down has no counts of its own: straight to the
+    // total.
+    let v = owed.unwrap_or(by);
+    if v > 0 {
+        let live = LIVE.fetch_add(v as usize, Relaxed) + v as usize;
+        if live > PEAK.load(Relaxed) {
+            PEAK.store(live, Relaxed);
+        }
+    } else if v < 0 {
+        LIVE.fetch_sub((-v) as usize, Relaxed);
+    }
 }
 
 #[inline]
 fn grew(by: usize) {
-    let live = LIVE.fetch_add(by, Relaxed) + by;
-    if live > PEAK.load(Relaxed) {
-        PEAK.store(live, Relaxed);
-    }
+    settle(by as isize);
     let _ = MINE.try_with(|m| {
         let live = m.get().wrapping_add(by as isize);
         m.set(live);
@@ -51,7 +81,7 @@ fn grew(by: usize) {
 
 #[inline]
 fn shrank(by: usize) {
-    LIVE.fetch_sub(by, Relaxed);
+    settle(-(by as isize));
     let _ = MINE.try_with(|m| m.set(m.get().wrapping_sub(by as isize)));
 }
 

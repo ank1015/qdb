@@ -90,6 +90,8 @@ pub struct Stop {
     scratch: std::sync::atomic::AtomicU64,
     /// Scratch bytes written so far.
     scratch_used: std::sync::atomic::AtomicU64,
+    /// Memory the unit's threads hold, each as it last told at a `poll`.
+    live: std::sync::atomic::AtomicIsize,
 }
 
 impl Stop {
@@ -170,12 +172,15 @@ thread_local! {
     static CURRENT: Cell<*const Stop> = const { Cell::new(std::ptr::null()) };
     /// What this thread had allocated when the unit began.
     static BASE: Cell<usize> = const { Cell::new(0) };
+    /// What this thread last added to its unit's `Stop::live`.
+    static TOLD: Cell<isize> = const { Cell::new(0) };
 }
 
 /// While it lives, this thread runs the unit `stop` belongs to.
 pub struct Entered {
     prev: *const Stop,
     prev_base: usize,
+    prev_told: isize,
     _keep: Arc<Stop>,
 }
 
@@ -184,13 +189,15 @@ pub struct Entered {
 pub fn enter(stop: &Arc<Stop>) -> Entered {
     let prev = CURRENT.with(|c| c.replace(Arc::as_ptr(stop)));
     let prev_base = BASE.with(|b| b.replace(crate::mem::thread_live()));
-    Entered { prev, prev_base, _keep: stop.clone() }
+    let prev_told = TOLD.with(|t| t.replace(0));
+    Entered { prev, prev_base, prev_told, _keep: stop.clone() }
 }
 
 impl Drop for Entered {
     fn drop(&mut self) {
         CURRENT.with(|c| c.set(self.prev));
         BASE.with(|b| b.set(self.prev_base));
+        TOLD.with(|t| t.set(self.prev_told));
     }
 }
 
@@ -224,9 +231,18 @@ pub fn poll() {
             stopped(why);
         }
         let limit = stop.memory.load(Relaxed);
-        if limit != 0 && crate::mem::thread_live().saturating_sub(BASE.with(|b| b.get())) > limit {
-            stop.request(Reason::Memory);
-            stopped(Reason::Memory as u8);
+        if limit != 0 {
+            // What all of the unit's threads hold: each adds what it
+            // holds to the unit's total as it passes here. Memory handed
+            // from one thread to another is counted where it was
+            // allocated until it is freed where it went.
+            let mine = (crate::mem::thread_live() as isize).wrapping_sub(BASE.with(|b| b.get()) as isize);
+            let told = TOLD.with(|t| t.replace(mine));
+            let total = stop.live.fetch_add(mine - told, Relaxed) + (mine - told);
+            if total > limit as isize {
+                stop.request(Reason::Memory);
+                stopped(Reason::Memory as u8);
+            }
         }
     })
 }

@@ -23,6 +23,7 @@ pub mod host;
 pub mod index;
 pub mod mem;
 pub mod net;
+pub mod par;
 pub mod query;
 pub mod regex;
 pub mod scan;
