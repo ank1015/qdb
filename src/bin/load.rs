@@ -50,6 +50,14 @@ Workloads (each prints one line of results):
               request for the other's filesystem must be answered as one
               for a filesystem that does not exist
 
+  long        the long run, with --spawn DATA: --clients connections, for
+              --seconds, on up to --filesystems filesystems that are made,
+              used (mostly a few hot ones, so the rest go idle and are
+              closed), and deleted; some units are stopped at a deadline,
+              some streamed, some in sessions. The server's memory and
+              open files are sampled each 10 s; at the end every
+              filesystem left must take a write at once
+
 import makes an account and a filesystem in DATA (the server must not
 be running), loads DIR into it, and prints the account, key and
 filesystem as JSON.
@@ -395,6 +403,12 @@ fn main() {
                 stopped,
                 t0.elapsed().as_secs_f64()
             );
+        }
+        "long" => {
+            let pid = _child.as_ref().map(|c| c.0.id()).unwrap_or_else(|| die("long needs --spawn DATA"));
+            let r = long_run(&addr, &o, pid);
+            drop(_child);
+            std::process::exit(r);
         }
         "isolation" => {
             let r = isolation(&addr, &o.admin, o.count, o.clients, o.seed);
@@ -957,4 +971,212 @@ fn isolation(addr: &str, admin: &str, count: usize, clients: usize, seed: u64) -
     }
     println!("isolation: {} requests from {} connections with two accounts' keys, against their own and each other's filesystems, guessed IDs and odd paths, seed {}: no answer held the other account's markers or IDs, and every request for the other's filesystem was answered as for one that does not exist ({:.0} s)", count, clients, seed, t0.elapsed().as_secs_f64());
     0
+}
+
+// ------------------------------------------------------------ the long run
+
+/// The server's resident memory in KB, and its open files.
+fn sample(pid: u32) -> (u64, usize) {
+    let status = std::fs::read_to_string(format!("/proc/{}/status", pid)).unwrap_or_default();
+    let rss = status.lines().find(|l| l.starts_with("VmRSS:")).and_then(|l| l.split_whitespace().nth(1)).and_then(|n| n.parse().ok()).unwrap_or(0);
+    let fds = std::fs::read_dir(format!("/proc/{}/fd", pid)).map(|d| d.count()).unwrap_or(0);
+    (rss, fds)
+}
+
+fn long_run(addr: &str, o: &Opts, pid: u32) -> i32 {
+    let mut c = Client::new(addr);
+    let key = account(&mut c, &o.admin);
+    let most = o.filesystems.max(16);
+    let pool: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let (made, deleted, units, stopped, streamed, sessions) = (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
+    let failure: Mutex<Option<String>> = Mutex::new(None);
+    let stop = AtomicBool::new(false);
+    let samples: Mutex<Vec<(f64, u64, usize)>> = Mutex::new(Vec::new());
+    const SETUP: &str = "mkdir -p src docs; for i in 1 2 3 4 5 6 7 8; do echo \"line $i of a small file with some words\" > src/f$i.txt; done; seq 1 300 > docs/n.txt";
+    const READS: &[&str] = &["cat src/f3.txt", "grep -rn words src", "wc -l docs/n.txt", "ls -la src", "head -n 5 docs/n.txt", "find . -name '*.txt'", "rg -c 1 docs", "sort -r docs/n.txt | head -n 3", "awk '{s+=$1} END {print s}' docs/n.txt", "sed -n 2p src/f1.txt"];
+    for _ in 0..16 {
+        let f = new_fs(&mut c, &key);
+        unit(&mut c, &key, &f, SETUP);
+        pool.lock().unwrap().push(f);
+    }
+    let t0 = Instant::now();
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            while !stop.load(Relaxed) {
+                let (rss, fds) = sample(pid);
+                samples.lock().unwrap().push((t0.elapsed().as_secs_f64(), rss, fds));
+                for _ in 0..100 {
+                    if stop.load(Relaxed) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        });
+        for t in 0..o.clients.max(1) {
+            let (pool, made, deleted, units, stopped, streamed, sessions, failure, stop, key) = (&pool, &made, &deleted, &units, &stopped, &streamed, &sessions, &failure, &stop, &key);
+            s.spawn(move || {
+                let mut rng = Rng(o.seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(t as u64 * 7919) | 1);
+                let mut c = Client::new(addr);
+                let fail = |m: String| {
+                    let mut f = failure.lock().unwrap();
+                    if f.is_none() {
+                        *f = Some(m);
+                    }
+                    stop.store(true, Relaxed);
+                };
+                let mut k = 0usize;
+                while !stop.load(Relaxed) && t0.elapsed().as_secs_f64() < o.seconds {
+                    k += 1;
+                    let r = rng.below(1000);
+                    let n = pool.lock().unwrap().len();
+                    if r < 8 && n < most {
+                        let f = new_fs(&mut c, key);
+                        unit(&mut c, key, &f, SETUP);
+                        pool.lock().unwrap().push(f);
+                        made.fetch_add(1, Relaxed);
+                        continue;
+                    }
+                    if r < 12 && n > most / 2 {
+                        let f = {
+                            let mut p = pool.lock().unwrap();
+                            let i = 16 + rng.below(p.len() - 16);
+                            p.swap_remove(i)
+                        };
+                        call(&mut c, "DELETE", &format!("/v1/filesystems/{}", f), key, "");
+                        deleted.fetch_add(1, Relaxed);
+                        continue;
+                    }
+                    // Most units go to the first few filesystems; the rest
+                    // are touched now and then and go idle between.
+                    let f = {
+                        let p = pool.lock().unwrap();
+                        if rng.below(10) < 8 { p[rng.below(16)].clone() } else { p[rng.below(p.len())].clone() }
+                    };
+                    let mut body = Json::obj();
+                    let line = match rng.below(100) {
+                        0..=4 => format!("echo {} > src/f{}.txt", k, k % 8 + 1),
+                        5 => format!("seq 1 {} > docs/n.txt", 100 + k % 400),
+                        6 => {
+                            body.set("limits", Json::obj().with("time_ms", 5u64));
+                            "while true; do echo x >> docs/spin.txt; done".to_string()
+                        }
+                        7 => {
+                            body.set("stream", true);
+                            "seq 1 20000".to_string()
+                        }
+                        _ => READS[rng.below(READS.len())].to_string(),
+                    };
+                    body.set("command", line.as_str());
+                    let session = if rng.below(50) == 0 {
+                        let r = c.request("POST", &format!("/v1/filesystems/{}/sessions", f), Some(key), b"");
+                        match r {
+                            Ok(r) if r.status == 201 => Json::parse(&r.body).ok().and_then(|j| j.get("session").and_then(Json::as_str).map(String::from)),
+                            Ok(r) if r.status == 404 => continue, // deleted meanwhile
+                            Ok(r) => {
+                                fail(format!("a session: HTTP {}: {}", r.status, String::from_utf8_lossy(&r.body)));
+                                break;
+                            }
+                            Err(e) => {
+                                fail(format!("a session: {}", e));
+                                break;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(sid) = &session {
+                        body.set("session", sid.as_str());
+                    }
+                    let r = c.request("POST", &format!("/v1/filesystems/{}/run", f), Some(key), body.to_string().as_bytes());
+                    match r {
+                        Ok(r) if r.status == 200 => {
+                            units.fetch_add(1, Relaxed);
+                            if line.starts_with("while") {
+                                let j = Json::parse(&r.body).unwrap_or(Json::Null);
+                                if j.get("stopped").and_then(Json::as_str) == Some("deadline") {
+                                    stopped.fetch_add(1, Relaxed);
+                                } else {
+                                    fail(format!("a unit with a deadline was not stopped by it: {}", String::from_utf8_lossy(&r.body)));
+                                }
+                                // Leave the filesystem as small as it was.
+                            } else if body.get("stream").is_some() {
+                                let last = r.body.split(|&b| b == b'\n').filter(|l| !l.is_empty()).last().unwrap_or(b"");
+                                if !String::from_utf8_lossy(last).contains("\"exit_status\":0") {
+                                    fail(format!("a streamed unit ended badly: {}", String::from_utf8_lossy(last)));
+                                }
+                                streamed.fetch_add(1, Relaxed);
+                            }
+                        }
+                        Ok(r) if r.status == 404 => {}
+                        Ok(r) => fail(format!("{:?}: HTTP {}: {}", line, r.status, String::from_utf8_lossy(&r.body).chars().take(300).collect::<String>())),
+                        Err(e) => fail(format!("{:?}: {}", line, e)),
+                    }
+                    if let Some(sid) = session {
+                        let _ = c.request("DELETE", &format!("/v1/filesystems/{}/sessions/{}", f, sid), Some(key), b"");
+                        sessions.fetch_add(1, Relaxed);
+                    }
+                }
+            });
+        }
+        while !stop.load(Relaxed) && t0.elapsed().as_secs_f64() < o.seconds {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        stop.store(true, Relaxed);
+    });
+    if let Some(f) = failure.into_inner().unwrap() {
+        println!("FAIL  long run after {:.0} s: {}", t0.elapsed().as_secs_f64(), f);
+        return 1;
+    }
+    // No filesystem left locked: each takes a write at once.
+    let left = pool.into_inner().unwrap();
+    let mut slowest = 0u64;
+    for f in &left {
+        let mut body = Json::obj().with("command", "echo last > last.txt; cat last.txt");
+        body.set("limits", Json::obj().with("time_ms", 2000u64));
+        let t = Instant::now();
+        let r = c.request("POST", &format!("/v1/filesystems/{}/run", f), Some(&key), body.to_string().as_bytes()).unwrap_or_else(|e| die(&e.to_string()));
+        slowest = slowest.max(t.elapsed().as_micros() as u64);
+        if r.status != 200 || !String::from_utf8_lossy(&r.body).contains("\"stdout\":\"last\\n\"") {
+            println!("FAIL  long run: filesystem {} did not take a write at the end: HTTP {}: {}", f, r.status, String::from_utf8_lossy(&r.body));
+            return 1;
+        }
+    }
+    let samples = samples.into_inner().unwrap();
+    let mut sheet = String::from("seconds\trss_kb\topen_files\n");
+    for (t, r, f) in &samples {
+        sheet.push_str(&format!("{:.0}\t{}\t{}\n", t, r, f));
+    }
+    let _ = std::fs::write(format!("{}/long-samples.tsv", o.spawn.as_deref().unwrap()), &sheet);
+    // Level: after the first fifth of the run, the most is within a margin
+    // of the level reached by the end of that fifth.
+    let settle = o.seconds / 5.0;
+    let early: Vec<_> = samples.iter().filter(|s| s.0 <= settle).collect();
+    let late: Vec<_> = samples.iter().filter(|s| s.0 > settle).collect();
+    let max = |v: &[&(f64, u64, usize)], i: usize| v.iter().map(|s| if i == 0 { s.1 } else { s.2 as u64 }).max().unwrap_or(0);
+    let (rss_early, rss_late, fd_early, fd_late) = (max(&early, 0), max(&late, 0), max(&early, 1), max(&late, 1));
+    let last = samples.last().copied().unwrap_or((0.0, 0, 0));
+    let level = rss_late as f64 <= rss_early as f64 * 1.25 + 8192.0 && fd_late <= fd_early + 16;
+    println!(
+        "{}long run: {:.0} s from {} connections; {} units ({} stopped at a deadline, {} streamed, {} in sessions); {} filesystems made and {} deleted, {} left; memory most {} MB in the first {:.0} s and {} MB after, {} MB at the end; open files most {} then {}, {} at the end; every filesystem left took a write at once (slowest {:.1} ms)",
+        if level { "" } else { "FAIL  " },
+        t0.elapsed().as_secs_f64(),
+        o.clients,
+        units.load(Relaxed),
+        stopped.load(Relaxed),
+        streamed.load(Relaxed),
+        sessions.load(Relaxed),
+        made.load(Relaxed) + 16,
+        deleted.load(Relaxed),
+        left.len(),
+        rss_early / 1024,
+        settle,
+        rss_late / 1024,
+        last.1 / 1024,
+        fd_early,
+        fd_late,
+        last.2,
+        slowest as f64 / 1000.0
+    );
+    if level { 0 } else { 1 }
 }

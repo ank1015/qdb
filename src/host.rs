@@ -369,6 +369,12 @@ impl Host {
         };
         if matches!(end.ending, Ending::Damaged(..) | Ending::Fault(_)) {
             // The filesystem is opened again from disk, which recovers it.
+            let what = match &end.ending {
+                Ending::Damaged(m, _) => format!("damage found: {}", m),
+                Ending::Fault(m) => format!("a fault: {}", m),
+                _ => String::new(),
+            };
+            crate::service::log(&format!("filesystem {}: {}; opened again from disk", fs.name(), what));
             drop(pass);
             let _alone = fs.gate.write();
             let mut g = fs.db.write().unwrap_or_else(|e| e.into_inner());
@@ -389,6 +395,7 @@ impl Host {
             match group.wait(seq) {
                 Ok(w) => end.cost.syncs += w.synced,
                 Err(e) => {
+                    crate::service::log(&format!("filesystem {}: {}; opened again from disk on its next unit", fs.name(), e));
                     let _ = err.write(format!("qdb: storage failed: {}; the filesystem is opened again from disk, and what this unit did may or may not be kept\n", e).as_bytes());
                     end.ending = Ending::Fault(e);
                     end.code = 2;
@@ -412,7 +419,10 @@ impl Host {
         }
         let mut g = fs.db.write().unwrap_or_else(|e| e.into_inner());
         if g.is_none() {
-            let (mut db, _) = Db::open_dir(&fs.path, self.cfg.db.clone()).map_err(|e| HostError::Failed(format!("the filesystem could not be opened: {}", e)))?;
+            let (mut db, _) = Db::open_dir(&fs.path, self.cfg.db.clone()).map_err(|e| {
+                crate::service::log(&format!("filesystem {} could not be opened: {}", fs.name(), e));
+                HostError::Failed(format!("the filesystem could not be opened: {}", e))
+            })?;
             self.prepare(&mut db);
             fs.mem.store(db.memory_estimate(), Relaxed);
             *g = Some(db);
@@ -593,6 +603,11 @@ impl Drop for Host {
 }
 
 impl Fs {
+    /// Its ID, for the log.
+    fn name(&self) -> String {
+        self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
     fn new(path: PathBuf) -> Fs {
         Fs { path, gate: Gate::new(), db: RwLock::new(None), used: AtomicU64::new(0), mem: AtomicU64::new(0), deleted: AtomicBool::new(false), running: Mutex::new(Vec::new()) }
     }

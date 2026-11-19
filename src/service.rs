@@ -364,7 +364,9 @@ pub struct Service {
     state: RwLock<State>,
     registry: Mutex<std::fs::File>,
     usage: Mutex<Usage>,
-    usage_file: Mutex<std::fs::File>,
+    /// The usage log, with the bytes appended to it since it was last
+    /// written whole, and its size then.
+    usage_file: Mutex<(std::fs::File, u64, u64)>,
     sessions: Mutex<HashMap<String, Arc<SessionSlot>>>,
     slots: Arc<Slots>,
     watcher: Arc<Watcher>,
@@ -544,7 +546,7 @@ impl Service {
         let stopping = Arc::new(AtomicBool::new(false));
         let svc = Arc::new(Service {
             registry: Mutex::new(open_append(&reg_path).map_err(|e| e.to_string())?),
-            usage_file: Mutex::new(open_append(&usage_path).map_err(|e| e.to_string())?),
+            usage_file: Mutex::new((open_append(&usage_path).map_err(|e| e.to_string())?, 0, std::fs::metadata(&usage_path).map_or(0, |m| m.len()))),
             slots: Arc::new(Slots { state: Mutex::new((0, 0)), cv: Condvar::new(), max: cfg.workers.max(1), queue: cfg.queue }),
             watcher: Watcher::start(stopping.clone()),
             cfg,
@@ -570,6 +572,10 @@ impl Service {
                 svc.housekeeping();
             })
             .expect("spawn housekeeping");
+        {
+            let st = svc.state.read().unwrap_or_else(|e| e.into_inner());
+            log(&format!("opened {}: {} accounts, {} filesystems", svc.cfg.data.display(), st.accounts.len(), st.owner.len()));
+        }
         Ok(svc)
     }
 
@@ -595,23 +601,56 @@ impl Service {
         }
     }
 
-    /// Append the usage totals that changed.
+    /// Append the usage totals that changed. When what was appended since
+    /// the log was last written whole is several times that size, it is
+    /// written whole again instead, so that it stays the size of the
+    /// totals.
     pub fn flush_usage(&self) -> io::Result<()> {
+        // Held throughout, so that flushes are one at a time and in order.
+        let mut f = lock(&self.usage_file);
+        let compact = f.1 > (8 << 20).max(4 * f.2);
         let lines = {
             let mut u = lock(&self.usage);
             let mut lines = Vec::new();
-            for f in std::mem::take(&mut u.dirty_fs) {
-                if let Some((a, t)) = u.fs.get(&f) {
-                    lines.push(Json::obj().with("fs", f.as_str()).with("account", a.as_str()).with("totals", t.to_json()));
+            if compact {
+                u.dirty_fs.clear();
+                u.dirty_gone.clear();
+                for (fs, (a, t)) in &u.fs {
+                    lines.push(Json::obj().with("fs", fs.as_str()).with("account", a.as_str()).with("totals", t.to_json()));
                 }
-            }
-            for a in std::mem::take(&mut u.dirty_gone) {
-                if let Some(t) = u.gone.get(&a) {
+                for (a, t) in &u.gone {
                     lines.push(Json::obj().with("gone_of", a.as_str()).with("totals", t.to_json()));
+                }
+            } else {
+                for fs in std::mem::take(&mut u.dirty_fs) {
+                    if let Some((a, t)) = u.fs.get(&fs) {
+                        lines.push(Json::obj().with("fs", fs.as_str()).with("account", a.as_str()).with("totals", t.to_json()));
+                    }
+                }
+                for a in std::mem::take(&mut u.dirty_gone) {
+                    if let Some(t) = u.gone.get(&a) {
+                        lines.push(Json::obj().with("gone_of", a.as_str()).with("totals", t.to_json()));
+                    }
                 }
             }
             lines
         };
+        if compact {
+            let path = self.cfg.data.join("server").join("usage.log");
+            if let Err(e) = write_whole(&path, &lines) {
+                // Everything is appended again on the next flush.
+                let mut u = lock(&self.usage);
+                let fss: Vec<String> = u.fs.keys().cloned().collect();
+                let gone: Vec<String> = u.gone.keys().cloned().collect();
+                u.dirty_fs.extend(fss);
+                u.dirty_gone.extend(gone);
+                f.1 = 0;
+                return Err(e);
+            }
+            let size = std::fs::metadata(&path)?.len();
+            *f = (open_append(&path)?, 0, size);
+            return Ok(());
+        }
         if lines.is_empty() {
             return Ok(());
         }
@@ -620,9 +659,9 @@ impl Service {
             j.write(&mut text);
             text.push('\n');
         }
-        let mut f = lock(&self.usage_file);
-        f.write_all(text.as_bytes())?;
-        f.sync_data()
+        f.0.write_all(text.as_bytes())?;
+        f.1 += text.len() as u64;
+        f.0.sync_data()
     }
 
     fn note_usage(&self, fs: &str, account: &str, end: &UnitEnd) {
