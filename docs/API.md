@@ -60,7 +60,7 @@ An error is an object with one field:
 | 404    | No such request, account, filesystem or session (or another account's)                     |
 | 405    | A request the path does not take, such as `PUT /v1/filesystems`                           |
 | 413    | The request body is larger than the server's limit (16 MB by default); the connection closes |
-| 429    | The account has as many units running as it may, or the server's queue is full: try again |
+| 429    | The account has as many units running (or sessions) as it may, or the server's queue is full: try again |
 | 500    | The server could not store a change (a disk error); nothing was changed                   |
 | 503    | The server is shutting down, or has as many connections as it takes                       |
 | 507    | The account has as many filesystems as its quota                                          |
@@ -328,6 +328,8 @@ DELETE /v1/filesystems/FS/sessions/s_2318...
 ```
 
 A session not used for `idle_timeout_ms` (15 minutes by default) ends.
+An account may hold 1,000 sessions at once; past that, making one is
+answered `429 {"error":"the account has 1000 sessions, the most it may; end some"}`.
 A unit stopped part way leaves its session as it was before the unit.
 Units in one session run one at a time. A
 session ID used on another filesystem, by another account, or after it

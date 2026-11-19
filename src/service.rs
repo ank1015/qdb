@@ -978,6 +978,9 @@ fn accounts(svc: &Service, req: &http::Request, m: &str, rest: &[&str]) -> Answe
     }
 }
 
+/// Sessions one account may hold at once.
+const MAX_SESSIONS: usize = 1000;
+
 /// The account's own filesystem, or None: another account's is answered
 /// as one that does not exist.
 fn owned(svc: &Service, acc: &str, fs: &str) -> bool {
@@ -1061,8 +1064,12 @@ fn filesystems(svc: &Arc<Service>, req: &http::Request, m: &str, rest: &[&str], 
                 return Some(not_found());
             }
             let id = format!("s_{}", host::new_id());
+            let mut map = lock(&svc.sessions);
+            if map.values().filter(|s| s.account == acc).count() >= MAX_SESSIONS {
+                return Some(fail(429, &format!("the account has {} sessions, the most it may; end some", MAX_SESSIONS)));
+            }
             let slot = Arc::new(SessionSlot { fs: fs.to_string(), account: acc.to_string(), sess: Mutex::new(Session::new()), used: AtomicU64::new(svc.tick()) });
-            lock(&svc.sessions).insert(id.clone(), slot);
+            map.insert(id.clone(), slot);
             Answer { status: 201, body: Json::obj().with("session", id).with("idle_timeout_ms", svc.cfg.session_idle.as_millis() as u64) }
         }
         ("DELETE", [fs, "sessions", sid]) => {
