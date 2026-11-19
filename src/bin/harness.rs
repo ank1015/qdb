@@ -59,6 +59,9 @@ With no case files, runs every tests/cases/*.case.
                     and none may be above tests/baseline/counters.tsv
   --update-baseline write tests/baseline/counters.tsv anew from this build.
                     Say why in the commit that changes it
+  --failures FILE   write every failure in full to FILE, after a line
+                    with the time and the command line of the run
+                    (default target/harness-failures.txt; runs add to it)
   -v                print every case as it runs";
 
 #[global_allocator]
@@ -76,6 +79,30 @@ enum Kind {
     Expect { stdout: Vec<u8>, stderr: Vec<u8>, code: i32 },
     /// Engine only, no checks: a setup step of an engine-only case.
     Setup,
+}
+
+/// Where every failure is written in full, with what ran it, so that a
+/// failure seen once can be looked at afterwards: `--failures FILE`, by
+/// default `target/harness-failures.txt`. Each run adds to the file.
+static FAILURES: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn log_failure(text: &str) {
+    use std::io::Write;
+    let path = FAILURES.lock().unwrap().clone().unwrap_or_else(|| "target/harness-failures.txt".to_string());
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let args: Vec<String> = std::env::args().collect();
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = write!(f, "=== {} (unix time {}), pid {}: {}\n{}\n\n", String::from_utf8_lossy(&qdb::when::format(now as i64 * 1_000_000_000, b"%Y-%m-%d %H:%M:%S UTC").unwrap_or_default()), now, std::process::id(), args.join(" "), text.trim_end());
+    }
+}
+
+/// Print a one-line failure and log it.
+macro_rules! fail_line {
+    ($($t:tt)*) => {{
+        let text = format!($($t)*);
+        log_failure(&text);
+        println!("{}", text);
+    }};
 }
 
 #[derive(Debug, Clone)]
@@ -861,7 +888,7 @@ fn diff_run(steps: usize, seed: u64, setup: &Setup, scratch: &mut Scratch) -> Re
             // a line where upkeep moved nothing can be held to this.
             let upkeep = on.db().io_stats().moved_bytes != moved;
             if kind == "same" && matches!(nth, 1..=4 | 6) && !upkeep && (on.db().index_work(), on.db().io_stats().content_bytes) != before {
-                println!("FAIL  seed {} step {}: a write that changes nothing reached the index or wrote content: {}", seed, step + 1, command);
+                fail_line!("FAIL  seed {} step {}: a write that changes nothing reached the index or wrote content: {}", seed, step + 1, command);
                 println!("    index work and content bytes before: {:?}", before);
                 println!("    and after: {:?}", (on.db().index_work(), on.db().io_stats().content_bytes));
                 println!("    all lines of the step: {:?}; the line printed: {}", all, show(&a.stderr));
@@ -887,7 +914,7 @@ fn diff_run(steps: usize, seed: u64, setup: &Setup, scratch: &mut Scratch) -> Re
             }
             let b = execute(&mut off, command.as_bytes());
             if a != b {
-                println!("FAIL  seed {} step {}: {}", seed, step + 1, command);
+                fail_line!("FAIL  seed {} step {}: {}", seed, step + 1, command);
                 println!("    exit status: index on {}, index off {}", a.code, b.code);
                 println!("    stdout, index on:\n{}    stdout, index off:\n{}", show(&a.stdout), show(&b.stdout));
                 println!("    stderr, index on:\n{}    stderr, index off:\n{}", show(&a.stderr), show(&b.stderr));
@@ -904,14 +931,14 @@ fn diff_run(steps: usize, seed: u64, setup: &Setup, scratch: &mut Scratch) -> Re
             }
         }
         if ((step + 1) % 50 == 0 || step + 1 == steps) && on.db().snapshot() != off.snapshot() {
-            println!("FAIL  seed {} step {}: the trees differ after {:?}", seed, step + 1, all);
+            fail_line!("FAIL  seed {} step {}: the trees differ after {:?}", seed, step + 1, all);
             return Ok(false);
         }
         let every: usize = std::env::var("QDB_DIFF_CHECK_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(1000);
         if (step + 1) % every == 0 || step + 1 == steps {
             if let Some(what) = rebuild_check(on.db()) {
                 println!("    the step: {:?}", all);
-                println!("FAIL  seed {} step {}: {}", seed, step + 1, what);
+                fail_line!("FAIL  seed {} step {}: {}", seed, step + 1, what);
                 return Ok(false);
             }
         }
@@ -1205,7 +1232,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             last_line = command.clone();
             lines += 1;
             if let Some(e) = failure.borrow().as_ref() {
-                println!("FAIL  seed {} sync {:?}: at a power cut during command line {} ({}): {}", seed, sync, lines, command, e);
+                fail_line!("FAIL  seed {} sync {:?}: at a power cut during command line {} ({}): {}", seed, sync, lines, command, e);
                 return Ok(false);
             }
             let mut h = history.borrow_mut();
@@ -1213,7 +1240,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             h.returned += 1;
             let known = h.states[h.returned];
             if got != want || db.commit_seq() != known.1 {
-                println!("FAIL  seed {} sync {:?}: command line {} ({}): the database on the tracked disk and the reference differ (logged line number {}, expected {})", seed, sync, lines, command, db.commit_seq(), known.1);
+                fail_line!("FAIL  seed {} sync {:?}: command line {} ({}): the database on the tracked disk and the reference differ (logged line number {}, expected {})", seed, sync, lines, command, db.commit_seq(), known.1);
                 return Ok(false);
             }
         }
@@ -1229,7 +1256,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                 closing.close().map_err(|e| format!("seed {}: close after command line {}: {}", seed, lines, e))?;
                 let (again, report) = Db::open(Box::new(fs.clone()), cfg.clone()).map_err(|e| format!("seed {}: open after a clean close, after command line {}: {}", seed, lines, e))?;
                 if !report.messages().is_empty() || report.replayed != 0 {
-                    println!("FAIL  seed {} sync {:?}: opening after a clean close (after command line {}) had work to do: {:?}", seed, sync, lines, report);
+                    fail_line!("FAIL  seed {} sync {:?}: opening after a clean close (after command line {}) had work to do: {:?}", seed, sync, lines, report);
                     return Ok(false);
                 }
                 db = again;
@@ -1245,11 +1272,11 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                 h.returned = 0;
             }
             if let Some(e) = failure.borrow().as_ref() {
-                println!("FAIL  seed {} sync {:?}: at a power cut during a {} after command line {} ({}): {}", seed, sync, if roll < 5 { "close or the open after it" } else { "compaction" }, lines, last_line, e);
+                fail_line!("FAIL  seed {} sync {:?}: at a power cut during a {} after command line {} ({}): {}", seed, sync, if roll < 5 { "close or the open after it" } else { "compaction" }, lines, last_line, e);
                 return Ok(false);
             }
             if digest(&db) != before.0 || (roll < 5 && db.commit_seq() != before.1) || db.check().is_err() {
-                println!("FAIL  seed {} sync {:?}: a {} after command line {} changed the tree, or left something a check finds: {:?}", seed, sync, if roll < 5 { "close and open" } else { "compaction" }, lines, db.check().err());
+                fail_line!("FAIL  seed {} sync {:?}: a {} after command line {} changed the tree, or left something a check finds: {:?}", seed, sync, if roll < 5 { "close and open" } else { "compaction" }, lines, db.check().err());
                 return Ok(false);
             }
         }
@@ -1267,7 +1294,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                     let line = format!("echo 'the disk is going {}' >> going_{}.txt", rng.below(1000), i % 3);
                     if failed {
                         if execute(&mut db, line.as_bytes()).code != 2 {
-                            println!("FAIL  seed {} sync {:?}: a command ran on a database whose disk had failed: {}", seed, sync, line);
+                            fail_line!("FAIL  seed {} sync {:?}: a command ran on a database whose disk had failed: {}", seed, sync, line);
                             return Ok(false);
                         }
                         continue;
@@ -1291,7 +1318,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                     }
                 }
                 if !failed {
-                    println!("FAIL  seed {} sync {:?}: the disk failed and no command noticed", seed, sync);
+                    fail_line!("FAIL  seed {} sync {:?}: the disk failed and no command noticed", seed, sync);
                     return Ok(false);
                 }
                 fs.crash(rng.next())
@@ -1306,7 +1333,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             db = match recovered {
                 Ok(db) => db,
                 Err(e) => {
-                    println!("FAIL  seed {} sync {:?}: going on from a crash after command line {} ({}): {}", seed, sync, lines, last_line, e);
+                    fail_line!("FAIL  seed {} sync {:?}: going on from a crash after command line {} ({}): {}", seed, sync, lines, last_line, e);
                     return Ok(false);
                 }
             };
@@ -1452,7 +1479,7 @@ fn kill_run(kills: usize, seed: u64, sync: SyncMode, scratch: &mut Scratch) -> R
         let (db, report) = match opened {
             Ok(x) => x,
             Err(e) => {
-                println!("FAIL  seed {} sync {:?}: kill {} at command line {}: {}", seed, sync, kill + 1, lines, e);
+                fail_line!("FAIL  seed {} sync {:?}: kill {} at command line {}: {}", seed, sync, kill + 1, lines, e);
                 // Keep the directory for a look.
                 let keep = std::env::temp_dir().join(format!("qdb-kill-failure-{}", std::process::id()));
                 let _ = std::fs::rename(&dir, &keep);
@@ -1592,7 +1619,7 @@ fn counters(update: bool) -> Result<bool, String> {
             ok = false;
             for k in 0..11 {
                 if first[i][k] != second[i][k] {
-                    println!("FAIL  counters: {} was {} in one run and {} in the next: {}", names[k], first[i][k], second[i][k], unit);
+                    fail_line!("FAIL  counters: {} was {} in one run and {} in the next: {}", names[k], first[i][k], second[i][k], unit);
                 }
             }
         }
@@ -1616,14 +1643,14 @@ fn counters(update: bool) -> Result<bool, String> {
     let stored = std::fs::read_to_string(BASELINE).map_err(|e| format!("{}: {}", BASELINE, e))?;
     let rows: Vec<&str> = stored.lines().filter(|l| !l.starts_with('#')).skip(1).collect();
     if rows.len() != units.len() {
-        println!("FAIL  counters: {} has {} units and {} has {}", BASELINE, rows.len(), UNITS, units.len());
+        fail_line!("FAIL  counters: {} has {} units and {} has {}", BASELINE, rows.len(), UNITS, units.len());
         return Ok(false);
     }
     let (mut above, mut below) = (0, 0);
     for (i, unit) in units.iter().enumerate() {
         let cols: Vec<&str> = rows[i].splitn(12, '\t').collect();
         if cols.len() != 12 || cols[11] != unit {
-            println!("FAIL  counters: line {} of {} is not for the unit: {}", i + 1, BASELINE, unit);
+            fail_line!("FAIL  counters: line {} of {} is not for the unit: {}", i + 1, BASELINE, unit);
             return Ok(false);
         }
         let mut lower = false;
@@ -1631,7 +1658,7 @@ fn counters(update: bool) -> Result<bool, String> {
             let base: u64 = cols[k].parse().map_err(|_| format!("{}: not a number: {}", BASELINE, cols[k]))?;
             if first[i][k] > base {
                 above += 1;
-                println!("FAIL  counters: {} is {}, above its baseline of {}: {}", names[k], first[i][k], base, unit);
+                fail_line!("FAIL  counters: {} is {}, above its baseline of {}: {}", names[k], first[i][k], base, unit);
             }
             lower |= first[i][k] < base;
         }
@@ -1710,6 +1737,7 @@ fn run() -> Result<bool, String> {
             "--crash" => crash = value("--crash")?.parse().map_err(|_| "--crash needs a number")?,
             "--kill" => kill = value("--kill")?.parse().map_err(|_| "--kill needs a number")?,
             "-v" => verbose = true,
+            "--failures" => *FAILURES.lock().unwrap() = Some(value("--failures")?),
             "-h" | "--help" => {
                 println!("{}", USAGE);
                 return Ok(true);
@@ -1764,8 +1792,10 @@ fn run() -> Result<bool, String> {
                     Err(what) => {
                         failed += 1;
                         if brief {
+                            log_failure(&what);
                             println!("FAIL  {}", what.lines().next().unwrap_or(""));
                         } else {
+                            log_failure(&what);
                             println!("FAIL  {}", what);
                         }
                     }
@@ -1819,8 +1849,10 @@ fn run() -> Result<bool, String> {
             Err(what) => {
                 failed += 1;
                 if brief {
-                    println!("FAIL  {}", what.lines().next().unwrap_or(""));
+                    log_failure(&what);
+                            println!("FAIL  {}", what.lines().next().unwrap_or(""));
                 } else {
+                    log_failure(&what);
                     println!("FAIL  {}", what);
                 }
             }
@@ -1861,7 +1893,7 @@ fn run() -> Result<bool, String> {
         let table = std::fs::read_to_string("tests/coverage.txt").map_err(|e| format!("tests/coverage.txt: {}", e))?;
         covered = coverage(&table, &every_command)?;
         if !covered {
-            println!("FAIL  coverage: a command or flag has no case");
+            fail_line!("FAIL  coverage: a command or flag has no case");
         }
     }
     println!("{} cases ({} steps), {}: {} passed, {} failed", passed + failed, steps, setup.describe(), passed, failed);

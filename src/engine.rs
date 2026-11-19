@@ -498,9 +498,6 @@ fn check_builtin(name: &[u8], args: &[Vec<u8>]) -> Result<(), String> {
     let flag = |a: &&Vec<u8>| a.len() > 1 && a[0] == b'-';
     match name {
         b"cd" => {
-            if args.iter().any(|a| a == b"-") {
-                return Err("cd -: going back to the directory before".into());
-            }
             if let Some(a) = args.iter().find(flag) {
                 return Err(format!("flag: cd {}", lossy(a)));
             }
@@ -1414,11 +1411,27 @@ fn builtin(db: &mut Db, sess: &mut Session, ctx: &Ctx, name: &[u8], args: &[Vec<
     io.errors_first();
     match name {
         b"cd" => {
+            let mut back = false;
             let dir = match args {
                 [] => match sess.get(b"HOME") {
                     Some(home) => home.to_vec(),
                     None => {
                         io.err_line("qdb: cd: HOME not set");
+                        return 1;
+                    }
+                },
+                // `cd -`: back to OLDPWD, printing where that is.
+                [dash] if dash == b"-" => match sess.get(b"OLDPWD") {
+                    Some(old) if old.is_empty() => {
+                        io.put(b"\n");
+                        return 0;
+                    }
+                    Some(old) => {
+                        back = true;
+                        old.to_vec()
+                    }
+                    None => {
+                        io.err_line("qdb: cd: OLDPWD not set");
                         return 1;
                     }
                 },
@@ -1435,6 +1448,11 @@ fn builtin(db: &mut Db, sess: &mut Session, ctx: &Ctx, name: &[u8], args: &[Vec<
                 Ok(id) if db.is_dir(id) => {
                     sess.chdir(&dir);
                     db.set_cwd(sess.cwd());
+                    if back {
+                        let mut line = sess.get(b"PWD").unwrap_or(b"/").to_vec();
+                        line.push(b'\n');
+                        io.put(&line);
+                    }
                     0
                 }
                 Ok(_) => {

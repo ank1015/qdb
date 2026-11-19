@@ -21,6 +21,15 @@ $ rg --sort path needle notes docs
 $ rg --sort path -l needle src/deep notes src
 $ rg needle nope
 $ rg needle nope README.md
+# One thread (--sort path, -j 1): real rg words a missing path otherwise.
+$ rg --sort path needle nope
+$ rg --sort path needle zz nope README.md
+$ rg --sort=path -l needle nope README.md/x .
+$ rg -j 1 needle nope
+$ rg -j 1 --sort none needle nope
+$ rg --sort path --sort none needle nope
+$ rg -j 2 needle nope
+$ rg --sort path --files nope README.md
 $ rg needle README.md/x
 $ rg nothinghere
 $ rg nothinghere README.md

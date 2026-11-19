@@ -108,6 +108,11 @@ $ date -d
 $ date -d '' +%T
 $ printf 'a b\n c  d\n' | xargs
 $ printf 'a b\nc d\n' | xargs -n 3
+# A failed command before xargs's own error: GNU exits 123, not 1.
+$ printf 'x\n' > a.txt; printf '%s\n' a.txt 'long name.txt' a.txt a.txt a.txt a.txt a.txt | xargs -L 3 -r -x -s 40 cat; echo $?
+$ printf 'x\n' > a.txt; printf '%s\n' nosuch a.txt aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | xargs -n 1 -s 30 cat; echo $?
+$ printf '%s\n' nosuch a b c | xargs -n 2 -x -s 25 cat; echo $?
+$ printf '%s\n' a 'b"' | xargs cat; echo $?
 $ printf 'a b\nc d\n' | xargs -L 1
 $ printf 'a b \nc d\ne\n' | xargs -L 1
 $ printf 'a b\nc d\n' | xargs -l

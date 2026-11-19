@@ -274,9 +274,7 @@ $ echo x | while read L; do false; done; echo $?
 2> qdb: unsupported command: perl
 ? 2
 + ls *.txt
-= X=-; cd $X
-2> qdb: unsupported cd -: going back to the directory before
-? 2
+$ X=-; cd $X; echo $?
 = X=-p; read $X Y
 2> qdb: unsupported flag: read -p
 ? 2

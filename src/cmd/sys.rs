@@ -900,6 +900,10 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
     let input = io.take_stdin();
     io.close_stdin();
     let mut status = 0;
+    // GNU xargs leaves through `exit`, and a handler it registered waits
+    // for the commands and, if one of them failed, makes that the status:
+    // its own error then ends with 123, not 1.
+    let fatal = |status: i32| if status != 0 { status } else { 1 };
     // Run one command. False when xargs must stop.
     let exec = |argv: &[Vec<u8>], db: &mut Db, io: &mut crate::engine::Io, status: &mut i32| -> bool {
         if x.trace {
@@ -970,7 +974,7 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
             let argv: Vec<Vec<u8>> = x.command.iter().map(|w| replace_all(w, pattern, item)).collect();
             if size(&argv) > x.max_chars {
                 io.err_line("xargs: argument list too long");
-                return 1;
+                return fatal(status);
             }
             if !exec(&argv, db, io, &mut status) {
                 return status;
@@ -988,11 +992,11 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
             if used + word.len() + 1 > x.max_chars {
                 if argv.len() == x.command.len() {
                     io.err_line("xargs: argument line too long");
-                    return 1;
+                    return fatal(status);
                 }
                 if x.exit_if_long && (x.max_args.is_some() || x.max_lines.is_some()) {
                     io.err_line("xargs: argument list too long");
-                    return 1;
+                    return fatal(status);
                 }
                 ran = true;
                 if !exec(&argv, db, io, &mut status) {
@@ -1003,7 +1007,7 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
                 lines_in = 0;
                 if used + word.len() + 1 > x.max_chars {
                     io.err_line("xargs: argument line too long");
-                    return 1;
+                    return fatal(status);
                 }
             }
             used += word.len() + 1;

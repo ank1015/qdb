@@ -64,6 +64,7 @@ shell	pwd	re:(^|; )pwd(;| |$)
 shell	pwd -L	re:pwd -L
 shell	pwd -P	re:pwd -P
 shell	PWD and OLDPWD	re:OLDPWD
+shell	cd -	re:(^|; )cd -( |;|$)
 shell	relative path after cd	re:cd src; [a-z]+ .*\.\./
 shell	for	re:for [a-z]+ in .*; ?do
 shell	if	re:if .*; ?then
@@ -509,6 +510,9 @@ awk	- as a file	re:awk '[^']*' (\S+ )?-( |$|;)
 awk	a file that is missing	re:awk .* nofile
 awk	a folder as a file	re:awk '[^']*' d 
 awk	input that is not ASCII	re:\\303\\251.*awk
+awk	exit	re:awk .*exit
+awk	delete	re:awk .*delete
+awk	do ... while	re:awk .*do .*while
 awk	a division by zero	re:awk .*1/
 awk	a syntax error	re:awk 'BEGIN \{ print \( \}'
 awk	in a pipeline	re:awk .*\| *(head|sort|awk)

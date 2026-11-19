@@ -414,6 +414,19 @@ struct Opts {
     types: Vec<TypeSel>,
     /// A -t was given: a file of no selected type is left out.
     selected: bool,
+    /// The last `--sort` was `path`.
+    sorted: bool,
+    /// `-j N`: the most threads the search may use; 0 for as many as
+    /// it likes.
+    threads: u64,
+}
+
+impl Opts {
+    /// Real rg walks on one thread with `--sort path` or `-j 1`, and that
+    /// walker words a missing path differently.
+    fn serial(&self) -> bool {
+        self.sorted || self.threads == 1
+    }
 }
 
 /// What stops rg before it searches: its own message, with status 2.
@@ -428,7 +441,7 @@ struct Parsed {
 }
 
 fn arguments(args: &[Vec<u8>]) -> Result<Parsed, String> {
-    let mut o = Opts { mode: Mode::Lines, invert: false, numbers: false, null: false, before: 0, after: 0, max: None, hidden: false, no_ignore: false, overrides: Rules::default(), types: Vec::new(), selected: false };
+    let mut o = Opts { mode: Mode::Lines, invert: false, numbers: false, null: false, before: 0, after: 0, max: None, hidden: false, no_ignore: false, overrides: Rules::default(), types: Vec::new(), selected: false, sorted: false, threads: 0 };
     let mut syn = RgSyntax::default();
     let mut positional: Vec<Vec<u8>> = Vec::new();
     let mut fatal: Option<Fatal> = None;
@@ -561,9 +574,7 @@ fn arguments(args: &[Vec<u8>]) -> Result<Parsed, String> {
             b'B' => before = Some(number(&mut fatal) as usize),
             b'C' => around = Some(number(&mut fatal) as usize),
             b'm' => o.max = Some(number(&mut fatal)),
-            b'j' => {
-                number(&mut fatal);
-            }
+            b'j' => o.threads = number(&mut fatal),
             b'g' => {
                 if let Some(g) = &value {
                     if let Err(e) = o.overrides.add_line(g) {
@@ -596,7 +607,8 @@ fn arguments(args: &[Vec<u8>]) -> Result<Parsed, String> {
             3 => o.hidden = true,
             4 => o.no_ignore = true,
             5 => match value.as_deref() {
-                Some(b"path") | Some(b"none") | None => {}
+                Some(b"path") | None => o.sorted = true,
+                Some(b"none") => o.sorted = false,
                 Some(v @ (b"modified" | b"accessed" | b"created")) => return Err(format!("flag: rg --sort {}", lossy(v))),
                 Some(v) => {
                     fatal.get_or_insert(format!("rg: error parsing flag --sort: choice '{}' is unrecognized", lossy(v)));
@@ -1218,7 +1230,8 @@ pub fn rg(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                             Errno::NotDir => 20,
                             _ => 5,
                         };
-                        io.err_line(format!("rg: {}: {} (os error {})", lossy(p), e.msg(), code));
+                        let op = if opts.serial() { format!("IO error for operation on {}: ", lossy(p)) } else { String::new() };
+                        io.err_line(format!("rg: {}: {}{} (os error {})", lossy(p), op, e.msg(), code));
                         errors = true;
                     }
                     Ok(id) if db.is_dir(id) => {

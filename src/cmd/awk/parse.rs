@@ -135,6 +135,12 @@ pub enum Stmt {
     For(Option<Expr>, Option<Expr>, Option<Expr>, Box<Stmt>, u32),
     ForIn(Lv, usize, Box<Stmt>),
     Block(Vec<Stmt>),
+    /// `do body while (cond)`
+    Do(Box<Stmt>, Expr, u32),
+    /// `delete a[k]`, or the whole array with no subscript.
+    Delete(usize, Option<Expr>, u32),
+    /// `exit [status]`
+    Exit(Option<Expr>, u32),
     Next,
     Break,
     Continue,
@@ -204,15 +210,12 @@ enum Tok {
     Eof,
 }
 
-const KEYWORDS: [&str; 12] = ["BEGIN", "END", "if", "else", "while", "for", "in", "next", "break", "continue", "print", "printf"];
-const REFUSED_WORDS: [(&str, &str); 13] = [
+const KEYWORDS: [&str; 15] = ["BEGIN", "END", "if", "else", "while", "for", "in", "next", "break", "continue", "print", "printf", "do", "delete", "exit"];
+const REFUSED_WORDS: [(&str, &str); 10] = [
     ("getline", "getline"),
     ("function", "user-defined functions"),
     ("func", "user-defined functions"),
     ("return", "user-defined functions"),
-    ("delete", "delete"),
-    ("exit", "exit"),
-    ("do", "do ... while"),
     ("nextfile", "nextfile"),
     ("switch", "switch"),
     ("case", "switch"),
@@ -800,7 +803,40 @@ impl<'a> Parser<'a> {
             self.loops -= 1;
             return Ok(Stmt::For(init, cond, step, Box::new(body?), at));
         }
-        let s = if self.is("next") {
+        if self.eat("do")? {
+            self.loops += 1;
+            let body = self.body();
+            self.loops -= 1;
+            let body = body?;
+            self.newlines()?;
+            self.expect("while")?;
+            self.expect("(")?;
+            let cond = self.grouped()?;
+            self.expect(")")?;
+            self.terminator()?;
+            return Ok(Stmt::Do(Box::new(body), cond, at));
+        }
+        let s = if self.eat("delete")? {
+            let n = match self.tok.clone() {
+                Tok::Name(n) => n,
+                _ => return self.syntax(),
+            };
+            self.advance()?;
+            let key = if self.eat("[")? {
+                let key = self.grouped()?;
+                if self.is(",") {
+                    return refuse("an array with more than one subscript");
+                }
+                self.expect("]")?;
+                Some(key)
+            } else {
+                None
+            };
+            Stmt::Delete(self.intern(&n, true), key, at)
+        } else if self.eat("exit")? {
+            let status = if self.ends_statement() { None } else { Some(self.expr()?) };
+            Stmt::Exit(status, at)
+        } else if self.is("next") {
             if let Some(which) = self.in_begin_end {
                 return self.error(&format!("`next' used in {} action", which), false);
             }

@@ -694,7 +694,11 @@ fn xargs(rng: &mut Rng, files: &[String], n: usize) -> Vec<String> {
     let mut out = Vec::new();
     for _ in 0..n {
         let names: Vec<&str> = (0..1 + rng.below(4)).map(|_| some(rng, files)).filter(|f| !f.contains(' ')).collect();
-        let source = match rng.below(6) {
+        let source = match rng.below(7) {
+            // Names of which some do not exist: the commands fail, and
+            // xargs's own errors that come after a failed command end
+            // with 123, not 1.
+            6 => format!("printf '%s\\n' {} nosuch{} {}", names.join(" "), rng.below(9), some(rng, files).replace(' ', "_")),
             0 => format!("printf '%s\\n' {}", names.join(" ")),
             1 => format!("echo {}", names.join(" ")),
             2 => "find . -name '*.txt' -type f | sort".to_string(),
@@ -728,8 +732,9 @@ fn xargs(rng: &mut Rng, files: &[String], n: usize) -> Vec<String> {
                 flags.push(x.into());
             }
         }
-        if rng.chance(10) && !replace {
-            flags.push(format!("-s {}", 60 + rng.below(100)));
+        let exit_if_long = flags.iter().any(|f| f == "-x");
+        if rng.chance(if exit_if_long { 3 } else { 10 }) && !replace {
+            flags.push(format!("-s {}", 40 + rng.below(120)));
         }
         let command = if replace {
             rng.pick(&["echo '<{}>'", "echo {} and {}", "printf '%s;' {}"]).to_string()
@@ -1306,8 +1311,18 @@ impl AwkGen<'_> {
             return self.print();
         }
         let d = d - 1;
-        match self.rng.below(30) {
+        match self.rng.below(34) {
             0..=5 => self.print(),
+            30 => format!("delete cnt[{}]; print length(cnt)", self.text(0)),
+            31 => format!("if ({}) delete seen; print length(seen)", self.cond(0)),
+            32 => {
+                self.in_loop += 1;
+                let body = self.stmt(d);
+                self.in_loop -= 1;
+                let j = format!("j{}", self.in_loop);
+                format!("{j} = 0; do {{ {j}++; {} }} while ({j} < {})", body, 1 + self.rng.below(3))
+            }
+            33 if self.in_loop == 0 => format!("if ({}) exit{}", self.cond(0), self.rng.pick(&["", " 3", " NR", " 0", " -1", " \"7\""])),
             6 => format!("{} = {}", self.rng.pick(&["x", "y", "n"]), self.num(1)),
             7 => format!("{} = {}", self.rng.pick(&["s", "t"]), self.text(1)),
             // Inside a loop over the fields nothing may add fields, or
@@ -1404,6 +1419,7 @@ impl AwkGen<'_> {
                 }
                 3 => "print NR, NF, $0, $1".to_string(),
                 4 => "print length(cnt), length(seen), FILENAME, FNR".to_string(),
+                5 if self.rng.chance(2) => format!("print NR; exit{}", self.rng.pick(&["", " 2", " NR % 4"])),
                 _ => self.stmt(2),
             };
             rules.push(format!("END {{ {} }}", end));

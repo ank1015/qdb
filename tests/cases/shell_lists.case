@@ -441,7 +441,7 @@ $ cat README.md \⏎  | head -n 1 \⏎  | wc -c
 $ echo a \⏎ > out.txt; cat out.txt
 
 # Still refused by name, inside a longer unit too: nothing runs.
-! echo one > made.txt; cd - ## cd -
+! echo one > made.txt; cd -P . ## flag: cd -P
 ! echo one > made.txt && perl 1 ## command: perl
 ! echo one > made.txt; ls --frobnicate ## flag: ls --frobnicate
 ! rm README.md; for f; do ls; done ## for loop without `in'

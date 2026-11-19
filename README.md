@@ -190,9 +190,9 @@ the long forms listed are accepted too.
 | `tail` | `-n N`, `-n +N`, `-c N`, `-c +N`, `-NUM`, `-q -v`, size suffixes |
 | `wc` | `-l -w -c -m` |
 | `grep` | `-r -R -i -n -l -L -v -c -o -q -s -w -x -h -H -I -a`, `-E -F -G`, `-e PATTERN` (several), `-A -B -C N`, `-NUM`, `-m N`, `--include --exclude --exclude-dir` |
-| `rg` | `-i -S -s -F -w -x -v -c -l -n -N -0`, `-A -B -C N`, `-m N`, `-g GLOB`, `-t TYPE`, `-T TYPE`, `-u -uu -uuu`, `--hidden --no-ignore --files --no-heading --sort path`, `-j N` (accepted; there is one thread) |
+| `rg` | `-i -S -s -F -w -x -v -c -l -n -N -0`, `-A -B -C N`, `-m N`, `-g GLOB`, `-t TYPE`, `-T TYPE`, `-u -uu -uuu`, `--hidden --no-ignore --files --no-heading --sort path`, `-j N` (the most threads the search may use) |
 | `sed` | `-n -E -r -i -i.SUFFIX -s -e`; addresses `N`, `$`, `/re/`, `\%re%`, `N,M`, `N,+M`, `first~step`, `0,/re/`, `!`; commands `s p d q Q = a i c y` and `{ }` blocks; `s` flags `g p N i I`; `&` and `\1`..`\9` |
-| `awk` | `-F SEP`, `-v VAR=VAL`; `BEGIN`, `END`, patterns, actions and ranges; `$N`, `$0`, `NF`, `NR`, `FNR`, `FILENAME`, `FS`, `OFS`, `ORS`, `RSTART`, `RLENGTH`; `print`, `printf`, `if`/`else`, `while`, `for (;;)`, `for (k in a)`, `next`, `break`, `continue`, every assignment; arrays of one subscript and `in`; `length substr index split sub gsub match tolower toupper sprintf` |
+| `awk` | `-F SEP`, `-v VAR=VAL`; `BEGIN`, `END`, patterns, actions and ranges; `$N`, `$0`, `NF`, `NR`, `FNR`, `FILENAME`, `FS`, `OFS`, `ORS`, `RSTART`, `RLENGTH`; `print`, `printf`, `if`/`else`, `while`, `do ... while`, `for (;;)`, `for (k in a)`, `next`, `break`, `continue`, `exit`, `delete`, every assignment; arrays of one subscript and `in`; `length substr index split sub gsub match tolower toupper sprintf` |
 | `diff` | `-u`, `-U N`, `--unified[=N]`, `-r`, `-N`, `-x PAT`, `-q`, `-s`, `-i -w -b -B`, `-a`, `--label NAME`; the default and the unified format; `-` for standard input |
 | `sort` | `-u -n -r -h -f -b -s -c -C`, `-t SEP`, `-k` with character positions and modifiers, `--parallel=N` (accepted) |
 | `uniq` | `-c -d -u -i`, `-f N`, `-s N`, `-w N` |
@@ -233,7 +233,7 @@ Shell syntax, as bash 5.2 reads it:
 | Arithmetic | `$((...))` with bash's operators on 64-bit integers, assignments and `++`/`--` included, and constants in base 8, 16 and `base#digits` |
 | Tilde | `~` and `~/path`, where a word or an assigned value begins |
 | Field splitting | unquoted `$NAME`, `$(...)` and `$((...))` are split at `IFS` and then matched as globs, as bash does |
-| Current directory | `cd`, `pwd`, `PWD` and `OLDPWD`; relative paths start there (`cd -` is refused: use `cd "$OLDPWD"`) |
+| Current directory | `cd`, `cd -`, `pwd`, `PWD` and `OLDPWD`; relative paths start there |
 | Loops and tests | `for NAME in WORDS; do ...; done`, `while`, `until`, `if`/`elif`/`else`/`fi`, `break [N]`, `continue [N]`, nested, in a pipeline, and with redirections on the whole construct |
 
 What the data model has no fact for prints a fixed value: `ls -l` shows
@@ -309,14 +309,17 @@ puts in arrays.
 
 - **Refused by name, before anything runs:** user-defined functions,
   `getline`, `system`, output redirection and pipes (`>`, `>>`, `|`),
-  `delete`, `exit`, `do`, `nextfile`, `switch`, arrays of more than one
+  `nextfile`, `switch`, arrays of more than one
   subscript, the other built-in functions (`int`, `sqrt`, `gensub`, ...)
   and the other special variables (`RS`, `OFMT`, `ENVIRON`, ...),
   `-f` and every option but `-F` and `-v`, and `NAME=value` among the
   file names.
-- **Input must be ASCII.** A line with any other byte stops the run with
-  status 2 and a message that names the file and the line; the lines
-  before it have been processed.
+- **Bytes, as in the C locale.** Any byte is a character of its own:
+  `length`, `substr`, `index`, `match` and `split` count bytes, and
+  `toupper` and `tolower` change only the ASCII letters. A program's
+  output may then hold bytes that are not UTF-8 (`printf "%c", 233`);
+  stored in a file, such output is refused as any write that is not
+  valid text is.
 - **`for (k in a)`** goes through the keys in the order they were first
   set. awk leaves the order open and gawk's is different, so sort the
   output of such a loop.
