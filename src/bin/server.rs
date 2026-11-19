@@ -26,6 +26,7 @@ dashes, with _ for -); a flag wins over the file:
 
   --listen ADDR              127.0.0.1:7878
   --sync always|batch        always
+  --group-commit on|off      on: under sync always, writers share syncs
   --workers N                units running at once: 2 per core
   --queue N                  units waiting for a worker: 256
   --max-connections N        1024
@@ -96,7 +97,7 @@ fn main() {
     let get = |name: &str| settings.iter().rev().find(|(n, _)| n == name).map(|(_, v)| v.clone());
     let num = |name: &str| -> Option<u64> { get(name).map(|v| v.parse::<u64>().ok().filter(|n| *n > 0).unwrap_or_else(|| die(&format!("{} must be a positive whole number", name)))) };
     const KNOWN: &[&str] = &[
-        "data", "listen", "admin_key", "admin_key_file", "sync", "workers", "queue", "max_connections", "max_request_bytes", "output_cap_bytes", "session_idle_secs", "max_open",
+        "data", "listen", "admin_key", "admin_key_file", "sync", "group_commit", "workers", "queue", "max_connections", "max_request_bytes", "output_cap_bytes", "session_idle_secs", "max_open",
         "max_open_bytes", "idle_close_secs", "text_bytes", "nodes", "disk_bytes", "filesystems", "time_ms", "commands", "scratch_bytes", "memory_bytes", "units_at_once",
     ];
     for (n, _) in &settings {
@@ -120,6 +121,11 @@ fn main() {
         None | Some("always") => cfg.host.db.sync = SyncMode::Always,
         Some("batch") => cfg.host.db.sync = SyncMode::Batch,
         Some(o) => die(&format!("--sync must be always or batch, not {}", o)),
+    }
+    match get("group_commit").as_deref() {
+        None | Some("on") | Some("true") => cfg.host.group_commit = true,
+        Some("off") | Some("false") => cfg.host.group_commit = false,
+        Some(o) => die(&format!("--group-commit must be on or off, not {}", o)),
     }
     if let Some(n) = num("workers") {
         cfg.workers = n as usize;

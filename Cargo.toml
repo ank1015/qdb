@@ -30,6 +30,10 @@ name = "qdb-server"
 path = "src/bin/server.rs"
 
 [[bin]]
+name = "qdb-load"
+path = "src/bin/load.rs"
+
+[[bin]]
 name = "qdb-replay"
 path = "src/bin/replay.rs"
 

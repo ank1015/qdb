@@ -616,6 +616,10 @@ pub struct Db {
     /// How much of the active data file is known to be on disk.
     synced: u64,
     unsynced_lines: u32,
+    /// Syncs shared with other units, if a host has set it up: see
+    /// `group`. Under `SyncMode::Always` a command line is then logged
+    /// and not synced; whoever runs the unit waits on this for the sync.
+    group: Option<std::sync::Arc<crate::group::GroupLog>>,
     /// Bytes logged since the tree was last saved.
     log_since: u64,
     /// The current checkpoint, the data file the log continues in from
@@ -895,6 +899,7 @@ impl Db {
             seq: 0,
             synced: SEG_HEADER,
             unsynced_lines: 0,
+            group: None,
             log_since: 0,
             ckp: 0,
             ckp_inline: false,
@@ -1456,6 +1461,7 @@ impl Db {
             active.sync()?;
             self.io.syncs += 1;
             self.synced = active.end;
+            self.note_synced();
             self.unsynced_lines = 0;
         }
         Ok(())
@@ -1482,6 +1488,7 @@ impl Db {
         self.synced = active.end;
         self.unsynced_lines = 0;
         let (log_off, log_ords) = (active.end, active.owners.len() as u32);
+        self.note_synced();
         let number = self.ckp + 1;
         let mut w = disk::CheckpointWriter::new(&self.vfs, number)?;
         let e = w.entry();
@@ -1572,6 +1579,7 @@ impl Db {
             active.sync()?;
             self.io.syncs += 1;
             self.synced = active.end;
+            self.note_synced();
             self.unsynced_lines = 0;
         }
         let number = job.w.number;
@@ -1918,6 +1926,35 @@ impl Db {
         self.seq
     }
 
+    /// Share syncs with other units (see `group`): from now on, under
+    /// `SyncMode::Always`, a command line is logged and not synced, and
+    /// is on disk once `GroupLog::wait` for its `commit_seq` returns.
+    pub fn group_log(&mut self) -> std::sync::Arc<crate::group::GroupLog> {
+        if self.group.is_none() {
+            // Everything logged so far is on disk once this sync is done.
+            self.sync_log_all();
+            self.group = Some(crate::group::GroupLog::new(self.seq));
+        }
+        self.group.clone().unwrap()
+    }
+
+    /// The shared syncs set up by `group_log`, if any.
+    pub fn group(&self) -> Option<std::sync::Arc<crate::group::GroupLog>> {
+        self.group.clone()
+    }
+
+    fn sync_log_all(&mut self) {
+        if let Err(e) = self.sync_log() {
+            self.fail(e);
+        }
+    }
+
+    fn note_synced(&self) {
+        if let Some(g) = &self.group {
+            g.synced_to(self.seq);
+        }
+    }
+
     // ------------------------------------------------------ writing content
 
     #[inline]
@@ -1959,6 +1996,7 @@ impl Db {
         self.segs.push(Some(Box::new(seg)));
         self.active = next;
         self.synced = SEG_HEADER;
+        self.note_synced();
         self.unsynced_lines = 0;
         if self.cfg.index {
             // The finished file's index file is written a step at a time
@@ -2573,6 +2611,16 @@ impl Db {
         self.io.log_bytes += payload + REC_HEADER;
         self.log_since += payload + REC_HEADER;
         self.unsynced_lines += 1;
+        if self.cfg.sync == SyncMode::Always {
+            if let Some(g) = &self.group {
+                // Synced by whoever waits on the group, after the
+                // database is let go.
+                g.logged(self.seq, seg.syncer()?);
+                self.ops = ops;
+                self.ops.clear();
+                return Ok(());
+            }
+        }
         let due = match self.cfg.sync {
             SyncMode::Always => true,
             SyncMode::Batch => self.unsynced_lines >= self.cfg.batch_lines || seg.end - self.synced >= self.cfg.batch_bytes,
@@ -2581,6 +2629,7 @@ impl Db {
             seg.sync()?;
             self.io.syncs += 1;
             self.synced = seg.end;
+            self.note_synced();
             self.unsynced_lines = 0;
         }
         self.ops = ops;
@@ -2599,6 +2648,7 @@ impl Db {
                 Ok(()) => {
                     self.io.syncs += 1;
                     self.synced = seg.end;
+                    self.note_synced();
                     self.unsynced_lines = 0;
                 }
                 Err(e) => self.fail(e),

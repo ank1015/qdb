@@ -270,6 +270,8 @@ pub struct Segment {
     pub indexed: u32,
     /// False for the one data file still being written.
     pub sealed: bool,
+    /// For syncs made from another thread, made when first needed.
+    syncer: Option<std::sync::Arc<dyn crate::vfs::Syncer>>,
 }
 
 impl Segment {
@@ -310,6 +312,7 @@ impl Segment {
             dynamic: None,
             indexed: 0,
             sealed: true,
+            syncer: None,
         }
     }
 
@@ -472,6 +475,14 @@ impl Segment {
 
     pub fn sync(&mut self) -> io::Result<()> {
         self.file.sync()
+    }
+
+    /// A handle that syncs this file from another thread.
+    pub fn syncer(&mut self) -> io::Result<std::sync::Arc<dyn crate::vfs::Syncer>> {
+        if self.syncer.is_none() {
+            self.syncer = Some(self.file.syncer()?);
+        }
+        Ok(self.syncer.clone().unwrap())
     }
 
     pub fn truncate(&mut self, len: u64) -> io::Result<()> {

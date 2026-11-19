@@ -18,6 +18,7 @@ pub mod disk;
 pub mod engine;
 pub mod gate;
 pub mod glob;
+pub mod group;
 pub mod host;
 pub mod index;
 pub mod mem;

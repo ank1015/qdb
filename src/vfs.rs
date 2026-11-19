@@ -37,9 +37,25 @@ pub trait VFile: Send + Sync {
     fn truncate(&mut self, len: u64) -> io::Result<()>;
     /// Returns once everything written so far is on the disk.
     fn sync(&mut self) -> io::Result<()>;
+    /// A handle that syncs this file from another thread, while the
+    /// file goes on being written: for syncs shared by several units
+    /// (`group::GroupLog`).
+    fn syncer(&self) -> io::Result<Arc<dyn Syncer>>;
     /// The start of a read-only view of the file. Bytes below `len()` can
     /// be read through it until the next call that changes the file.
     fn base(&self) -> *const u8;
+}
+
+/// Syncs one file; see `VFile::syncer`. Returns once everything written
+/// to the file before the call is on the disk.
+pub trait Syncer: Send + Sync {
+    fn sync(&self) -> io::Result<()>;
+}
+
+impl Syncer for std::fs::File {
+    fn sync(&self) -> io::Result<()> {
+        self.sync_data()
+    }
 }
 
 pub trait Vfs: Send + Sync {
@@ -148,6 +164,10 @@ impl VFile for RealFile {
         self.file.sync_data()
     }
 
+    fn syncer(&self) -> io::Result<Arc<dyn Syncer>> {
+        Ok(Arc::new(self.file.try_clone()?))
+    }
+
     fn base(&self) -> *const u8 {
         self.base as *const u8
     }
@@ -248,6 +268,8 @@ struct MemState {
     hook: Option<Hook>,
     /// The operation with this number fails, and every one after it.
     fail_from: Option<u64>,
+    /// How long a sync takes, as on a real disk.
+    sync_delay: std::time::Duration,
 }
 
 #[derive(Clone)]
@@ -277,6 +299,12 @@ impl MemFs {
     /// operations so far, and may call `crash` on it.
     pub fn set_hook(&self, hook: Option<Hook>) {
         lock(&self.state).hook = hook;
+    }
+
+    /// Make every sync take this long, as on a real disk, so that units
+    /// running at once can be seen to share syncs.
+    pub fn set_sync_delay(&self, d: std::time::Duration) {
+        lock(&self.state).sync_delay = d;
     }
 
     /// Make the operation numbered `n` (counting from 1) fail, and all
@@ -396,6 +424,39 @@ impl MemFs {
     }
 }
 
+fn mem_sync(fs: &MemFs, data: &Arc<Mutex<MemData>>) -> io::Result<()> {
+    if !fs.tracked {
+        return Ok(());
+    }
+    let delay = lock(&fs.state).sync_delay;
+    if !delay.is_zero() {
+        // What is written meanwhile may or may not be covered, as on a
+        // disk; this sync covers at least what was written before it.
+        std::thread::sleep(delay);
+    }
+    fs.begin(|c| c.syncs += 1)?;
+    {
+        let mut d = lock(data);
+        let d = &mut *d;
+        d.durable.resize(d.data.len(), 0);
+        for &(off, len) in &d.dirty {
+            let end = ((off + len) as usize).min(d.data.len());
+            if (off as usize) < end {
+                d.durable[off as usize..end].copy_from_slice(&d.data[off as usize..end]);
+            }
+        }
+        d.dirty.clear();
+    }
+    fs.done();
+    Ok(())
+}
+
+impl Syncer for MemFile {
+    fn sync(&self) -> io::Result<()> {
+        mem_sync(&self.fs, &self.data)
+    }
+}
+
 struct MemFile {
     data: Arc<Mutex<MemData>>,
     fs: MemFs,
@@ -442,24 +503,11 @@ impl VFile for MemFile {
     }
 
     fn sync(&mut self) -> io::Result<()> {
-        if !self.fs.tracked {
-            return Ok(());
-        }
-        self.fs.begin(|c| c.syncs += 1)?;
-        {
-            let mut d = lock(&self.data);
-            let d = &mut *d;
-            d.durable.resize(d.data.len(), 0);
-            for &(off, len) in &d.dirty {
-                let end = ((off + len) as usize).min(d.data.len());
-                if (off as usize) < end {
-                    d.durable[off as usize..end].copy_from_slice(&d.data[off as usize..end]);
-                }
-            }
-            d.dirty.clear();
-        }
-        self.fs.done();
-        Ok(())
+        mem_sync(&self.fs, &self.data)
+    }
+
+    fn syncer(&self) -> io::Result<Arc<dyn Syncer>> {
+        Ok(Arc::new(MemFile { data: self.data.clone(), fs: self.fs.clone() }))
     }
 
     fn base(&self) -> *const u8 {

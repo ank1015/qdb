@@ -50,6 +50,12 @@ With no case files, runs every tests/cases/*.case.
                     a simulated disk that loses what was not synced, and
                     require that every one recovers to the result of a
                     whole number of command lines
+  --crash-writers N instead of the cases: the crash test with several
+                    writers (--writers, default 8) on one database at
+                    once, sharing syncs as the server has them do. Cut
+                    the power at N points; every one must recover to the
+                    units in the order they were applied, up to some
+                    point, and hold every unit that had been answered
   --kill N          instead of the cases: the kill test. Feed a real qdb
                     process generated command lines and kill it with
                     SIGKILL, N times, each time opening and checking what
@@ -1261,6 +1267,133 @@ fn crash_point(image: MemFs, cfg: &Config, history: &History, rng: &mut Rng, cou
 /// and thresholds make merges, new data files and tree saves frequent.
 /// Every few hundred command lines the run itself goes on from a crash
 /// image, or from a disk that failed.
+/// The crash test with several writers sharing syncs (`qdb::group`),
+/// the way the host runs them: a writer applies its unit holding the
+/// database, lets it go, and waits for a sync that covers its unit before
+/// it counts as answered.
+fn crash_writers_run(points: usize, seed: u64, writers: usize) -> Result<bool, String> {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
+    use std::sync::{Arc, Mutex};
+    let cfg = Config { piece: 512, segment: 96 << 10, sync: SyncMode::Always, checkpoint: 12 << 10, spool: 300, ..Config::default() };
+    let fs = MemFs::tracked();
+    let mut db = Db::open(Box::new(fs.clone()), cfg.clone())?.0;
+    let group = db.group_log();
+    // Syncs take as long as on a fast disk, so that writers queue.
+    fs.set_sync_delay(std::time::Duration::from_micros(300));
+    let db = Mutex::new(db);
+    // Units in the order they were applied: (seq, command).
+    let applied: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
+    let answered = Arc::new(AtomicU64::new(0));
+    let images: Arc<Mutex<Vec<(MemFs, u64)>>> = Default::default();
+    let done = Arc::new(AtomicBool::new(false));
+    {
+        let (images, done, answered) = (images.clone(), done.clone(), answered.clone());
+        let mut rng = Rng(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
+        fs.set_hook(Some(Box::new(move |fs, _| {
+            if done.load(SeqCst) || rng.below(60) != 0 {
+                return;
+            }
+            // What had been answered is read first: all of it was on disk
+            // before the cut.
+            let upto = answered.load(SeqCst);
+            let image = fs.crash(rng.next());
+            let mut im = images.lock().unwrap();
+            if im.len() < points {
+                im.push((image, upto));
+            } else {
+                done.store(true, SeqCst);
+            }
+        })));
+    }
+    let start = std::time::Instant::now();
+    std::thread::scope(|s| {
+        for w in 0..writers {
+            let (db, applied, answered, group, done) = (&db, &applied, &*answered, &group, &done);
+            s.spawn(move || {
+                let mut rng = Rng((seed + 1).wrapping_mul(0xD1B54A32D192ED03).wrapping_add(w as u64) | 1);
+                let mut i = 0u64;
+                while !done.load(SeqCst) && start.elapsed() < std::time::Duration::from_secs(600) {
+                    i += 1;
+                    let line = match rng.below(10) {
+                        0 => format!("mkdir -p w{w}; seq 1 {} > w{w}/big{}.txt", 50 + rng.below(300), i % 4),
+                        1 => format!("rm -f w{w}/big{}.txt", i % 4),
+                        2 => format!("mkdir -p w{w}; sed -i 's/^1/one/' w{w}/log.txt 2>/dev/null; echo {w}-{i} >> w{w}/log.txt"),
+                        _ => format!("mkdir -p w{w}; echo {w}-{i} >> w{w}/log.txt"),
+                    };
+                    let seq = {
+                        let mut d = db.lock().unwrap();
+                        let before = d.commit_seq();
+                        let _ = execute(&mut d, line.as_bytes());
+                        let seq = d.commit_seq();
+                        if seq != before {
+                            applied.lock().unwrap().push((seq, line));
+                        }
+                        seq
+                    };
+                    if group.wait(seq).is_err() {
+                        done.store(true, SeqCst);
+                        return;
+                    }
+                    answered.fetch_max(seq, SeqCst);
+                }
+            });
+        }
+    });
+    fs.set_hook(None);
+    done.store(true, SeqCst);
+    let applied = applied.into_inner().unwrap();
+    let images = std::mem::take(&mut *images.lock().unwrap());
+    let (syncs, covered) = group.counts();
+    // Each cut: recovered, checked, and equal to the units applied up to
+    // the last one it holds.
+    let mut lost_total = 0u64;
+    for (n, (image, upto)) in images.into_iter().enumerate() {
+        let (got, _) = match Db::open(Box::new(image), cfg.clone()) {
+            Ok(r) => r,
+            Err(e) => {
+                fail_line!("FAIL  seed {} power cut {}: does not open: {}", seed, n + 1, e);
+                return Ok(false);
+            }
+        };
+        if let Err(e) = got.check() {
+            fail_line!("FAIL  seed {} power cut {}: check: {}", seed, n + 1, e);
+            return Ok(false);
+        }
+        let seq = got.commit_seq();
+        if seq < upto {
+            fail_line!("FAIL  seed {} power cut {}: recovered up to unit {}, but unit {} had been answered", seed, n + 1, seq, upto);
+            return Ok(false);
+        }
+        let mut want = Db::without_index();
+        let mut k = 0;
+        while k < applied.len() && applied[k].0 <= seq {
+            let _ = execute(&mut want, applied[k].1.as_bytes());
+            k += 1;
+        }
+        if k == 0 && seq > 0 || (k > 0 && applied[k - 1].0 != seq) {
+            fail_line!("FAIL  seed {} power cut {}: recovered up to unit {}, which is not one that was applied", seed, n + 1, seq);
+            return Ok(false);
+        }
+        if let Some(d) = tree_diff(&want.snapshot(), &got.snapshot()) {
+            fail_line!("FAIL  seed {} power cut {}: recovered up to unit {}, but the tree is not the one those units make:\n{}", seed, n + 1, seq, d);
+            return Ok(false);
+        }
+        lost_total += applied.iter().filter(|a| a.0 > seq && a.0 <= upto.max(seq)).count() as u64;
+    }
+    println!(
+        "crash test, {} writers at once sharing syncs, seed {}: {} power cuts, each recovered to the units in the order they were applied up to some point, with every answered unit and a passing check; {} units applied, {} syncs covering {} units ({:.1} a sync)",
+        writers,
+        seed,
+        points,
+        applied.len(),
+        syncs,
+        covered,
+        covered as f64 / syncs.max(1) as f64
+    );
+    let _ = lost_total;
+    Ok(true)
+}
+
 fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bool, index_later: bool) -> Result<bool, String> {
     use std::sync::{Arc, Mutex};
     let cfg = Config { piece: 512, segment: 96 << 10, sync, batch_lines: 8, batch_bytes: 24 << 10, index, checkpoint: 12 << 10, spool: 300, upkeep: true, compress, index_later, ..Config::default() };
@@ -1786,6 +1919,8 @@ fn run() -> Result<bool, String> {
     let mut diff = 0usize;
     let mut crash = 0usize;
     let mut kill = 0usize;
+    let mut crash_writers = 0usize;
+    let mut writers = 8usize;
     let mut setup = Setup { mode: Mode::Memory, cfg: Config::default() };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -1832,6 +1967,8 @@ fn run() -> Result<bool, String> {
             "--diff" => diff = value("--diff")?.parse().map_err(|_| "--diff needs a number")?,
             "--crash" => crash = value("--crash")?.parse().map_err(|_| "--crash needs a number")?,
             "--kill" => kill = value("--kill")?.parse().map_err(|_| "--kill needs a number")?,
+            "--crash-writers" => crash_writers = value("--crash-writers")?.parse().map_err(|_| "--crash-writers needs a number")?,
+            "--writers" => writers = value("--writers")?.parse().map_err(|_| "--writers needs a number")?,
             "-v" => verbose = true,
             "--failures" => *FAILURES.lock().unwrap() = Some(value("--failures")?),
             "-h" | "--help" => {
@@ -1845,6 +1982,9 @@ fn run() -> Result<bool, String> {
     setup.cfg.index = index;
     if crash > 0 {
         return crash_run(crash, seed, setup.cfg.sync, index, setup.cfg.compress, setup.cfg.index_later);
+    }
+    if crash_writers > 0 {
+        return crash_writers_run(crash_writers, seed, writers);
     }
     if kill > 0 {
         let mut scratch = Scratch::new();

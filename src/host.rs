@@ -47,11 +47,13 @@ pub struct HostConfig {
     pub max_open_bytes: u64,
     /// A filesystem no unit has used for this long is closed.
     pub idle_close: Duration,
+    /// Under sync always, let units share syncs (`group`).
+    pub group_commit: bool,
 }
 
 impl Default for HostConfig {
     fn default() -> HostConfig {
-        HostConfig { db: Config::default(), max_open: 1024, max_open_bytes: 2 << 30, idle_close: Duration::from_secs(60) }
+        HostConfig { db: Config::default(), max_open: 1024, max_open_bytes: 2 << 30, idle_close: Duration::from_secs(60), group_commit: true }
     }
 }
 
@@ -286,7 +288,8 @@ impl Host {
         let id = new_id();
         let path = self.path_of(&id);
         std::fs::create_dir_all(&path).map_err(|e| HostError::Failed(format!("{}: {}", path.display(), e)))?;
-        let (db, _) = Db::open_dir(&path, self.cfg.db.clone()).map_err(HostError::Failed)?;
+        let (mut db, _) = Db::open_dir(&path, self.cfg.db.clone()).map_err(HostError::Failed)?;
+        self.prepare(&mut db);
         // The new directory's name must survive a power cut too.
         sync_dir(path.parent().unwrap());
         let fs = Arc::new(Fs::new(path));
@@ -346,18 +349,21 @@ impl Host {
             return Err(HostError::NotFound);
         }
         self.ensure_open(fs)?;
-        let end = {
+        let (mut end, seq, group) = {
             let _in = unit::enter(&req.stop);
             match kind {
                 Kind::Reader => {
                     let g = fs.db.read().unwrap_or_else(|e| e.into_inner());
-                    run_unit_with(Access::Read(g.as_ref().unwrap()), sess, req.line, req.stdin, out, err)
+                    let db = g.as_ref().unwrap();
+                    let end = run_unit_with(Access::Read(db), sess, req.line, req.stdin, out, err);
+                    (end, db.commit_seq(), db.group())
                 }
                 Kind::Writer => {
                     let mut g = fs.db.write().unwrap_or_else(|e| e.into_inner());
                     let db = g.as_mut().unwrap();
                     db.set_quotas(req.quotas.text, req.quotas.nodes, req.quotas.disk);
-                    run_unit_with(Access::Write(db), sess, req.line, req.stdin, out, err)
+                    let end = run_unit_with(Access::Write(db), sess, req.line, req.stdin, out, err);
+                    (end, db.commit_seq(), db.group())
                 }
             }
         };
@@ -377,7 +383,27 @@ impl Host {
         let mem = fs.db.read().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |db| db.memory_estimate());
         fs.mem.store(mem, Relaxed);
         drop(pass);
+        // What the unit wrote, or saw, is on disk before it is answered;
+        // the next unit has the filesystem meanwhile.
+        if let Some(group) = group {
+            match group.wait(seq) {
+                Ok(w) => end.cost.syncs += w.synced,
+                Err(e) => {
+                    let _ = err.write(format!("qdb: storage failed: {}; the filesystem is opened again from disk, and what this unit did may or may not be kept\n", e).as_bytes());
+                    end.ending = Ending::Fault(e);
+                    end.code = 2;
+                    let _alone = fs.gate.write();
+                    *fs.db.write().unwrap_or_else(|e| e.into_inner()) = None;
+                }
+            }
+        }
         Ok(end)
+    }
+
+    fn prepare(&self, db: &mut Db) {
+        if self.cfg.group_commit && self.cfg.db.sync == crate::tree::SyncMode::Always {
+            db.group_log();
+        }
     }
 
     fn ensure_open(&self, fs: &Fs) -> Result<(), HostError> {
@@ -386,7 +412,8 @@ impl Host {
         }
         let mut g = fs.db.write().unwrap_or_else(|e| e.into_inner());
         if g.is_none() {
-            let (db, _) = Db::open_dir(&fs.path, self.cfg.db.clone()).map_err(|e| HostError::Failed(format!("the filesystem could not be opened: {}", e)))?;
+            let (mut db, _) = Db::open_dir(&fs.path, self.cfg.db.clone()).map_err(|e| HostError::Failed(format!("the filesystem could not be opened: {}", e)))?;
+            self.prepare(&mut db);
             fs.mem.store(db.memory_estimate(), Relaxed);
             *g = Some(db);
         }
