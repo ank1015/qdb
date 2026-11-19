@@ -35,7 +35,7 @@ pub struct Generated {
     pub commands: Vec<String>,
 }
 
-pub const FAMILIES: &[&str] = &["shell", "grep", "sed", "find", "rg", "text", "ls", "xargs", "scripts", "diff"];
+pub const FAMILIES: &[&str] = &["shell", "grep", "sed", "find", "rg", "text", "ls", "xargs", "scripts", "diff", "awk"];
 
 const WORDS: &[&str] = &[
     "alpha", "beta", "gamma", "delta", "Alpha", "BETA", "needle", "Needle", "hay", "stack", "foo", "bar", "baz", "x1", "y22", "z333", "the", "a", "of", "to", "naïve", "café", "πr", "日本", "Ünï", "end",
@@ -1122,6 +1122,336 @@ fn diff(rng: &mut Rng, files: &[String], n: usize) -> Vec<String> {
     out
 }
 
+// --------------------------------------------------------------------- awk
+
+/// Files for awk: ASCII only, with columns of numbers written in the
+/// ways awk has rules for, words, and several separators.
+fn awk_tree(rng: &mut Rng, out: &mut String) -> (Vec<String>, Vec<String>) {
+    let numbers = ["0", "1", "2", "7", "10", "42", "100", "3000", "-1", "-25", "3.14", "0.5", "1e3", "0x1A", "007", "+5", ".5", "5.", "-0", "12abc", "1e", " 9"];
+    let token = |rng: &mut Rng| -> String {
+        match rng.below(10) {
+            0..=3 => numbers[rng.below(numbers.len())].trim().to_string(),
+            4 => rng.below(100000).to_string(),
+            5 => format!("{}.{}", rng.below(50), rng.below(100)),
+            _ => ascii_word(rng).to_string(),
+        }
+    };
+    let mut files = Vec::new();
+    for (name, sep, lines) in [
+        ("n1.txt", " ", 9),
+        ("n2.txt", " ", 14),
+        ("c1.txt", ":", 8),
+        ("c2.csv", ",", 10),
+        ("t1.txt", "\t", 6),
+        ("m1.txt", "", 12),
+        ("m2.txt", "", 7),
+    ] {
+        let mut body = Vec::new();
+        for _ in 0..lines {
+            let n = if rng.chance(9) { 0 } else { 1 + rng.below(5) };
+            let mut l = String::new();
+            for i in 0..n {
+                if i > 0 {
+                    l.push_str(if sep.is_empty() { rng.pick(&[" ", "  ", ":", ",", "\t", " : "]) } else { sep });
+                }
+                l.push_str(&token(rng));
+            }
+            if rng.chance(12) {
+                l.insert(0, ' ');
+            }
+            body.push(l);
+        }
+        fixture_file(out, name, &body);
+        files.push(name.to_string());
+    }
+    out.push_str("F e.txt\n");
+    files.push("e.txt".into());
+    out.push_str("F nl.txt\n|1 one\n|2 two\n:3 three");
+    out.push('\n');
+    files.push("nl.txt".into());
+    (files, Vec::new())
+}
+
+struct AwkGen<'r> {
+    rng: &'r mut Rng,
+    /// The program walks an array in an order awk does not fix.
+    unordered: bool,
+    in_loop: u32,
+    main_rule: bool,
+}
+
+impl AwkGen<'_> {
+    fn regex(&mut self) -> &'static str {
+        self.rng.pick(&[
+            "a", "^a", "a$", "[0-9]+", "[a-z]+", "^[A-Z]", "o+", "a|b", "(ab)+", ".", "\\.", "x*", "[^a-z ]", "e{2}", "\\<the\\>", "[[:digit:]]", "ba[rz]", "^$", "ee*", "^ *[0-9]", "[,:]",
+            "t.e", "0x", "^-",
+        ])
+    }
+
+    fn field(&mut self) -> String {
+        self.rng.pick(&["$1", "$1", "$2", "$2", "$3", "$4", "$NF", "$0", "$(NF-1)", "$i"]).to_string()
+    }
+
+    fn literal(&mut self) -> String {
+        self.rng.pick(&["0", "1", "2", "3", "10", "100", "1.5", "0.1", "1e3", "007", "0x10", "-1", "2.50"]).to_string()
+    }
+
+    fn string(&mut self) -> String {
+        self.rng.pick(&["\"a\"", "\"foo\"", "\"x y\"", "\"\"", "\"10\"", "\"abc\"", "\"A-b\"", "\" 5 \"", "\"3x\"", "\"-\"", "\"1e2\"", "\"the\""]).to_string()
+    }
+
+    fn num(&mut self, d: u32) -> String {
+        if d == 0 {
+            return match self.rng.below(8) {
+                0..=2 => self.field(),
+                3 => self.rng.pick(&["NF", "NR", "FNR", "x", "y", "n"]).to_string(),
+                _ => self.literal(),
+            };
+        }
+        let d = d - 1;
+        match self.rng.below(22) {
+            0 | 1 => format!("{} + {}", self.num(d), self.num(d)),
+            2 => format!("{} - {}", self.num(d), self.num(d)),
+            3 => format!("{} * {}", self.num(d), self.num(d)),
+            4 => format!("({}) / {}", self.num(d), self.rng.pick(&["2", "3", "7", "0.5", "10"])),
+            5 => format!("({}) % {}", self.num(d), self.rng.pick(&["2", "3", "7", "2.5"])),
+            6 => format!("({}) ^ {}", self.num(d), self.rng.pick(&["2", "3", "0", "-1"])),
+            7 => format!("-({})", self.num(d)),
+            8 => format!("({})", self.num(d)),
+            9 => format!("length({})", self.text(d)),
+            10 => format!("index({}, {})", self.text(d), self.text(0)),
+            11 => format!("{}++", self.rng.pick(&["x", "y", "n"])),
+            12 => format!("(++{})", self.rng.pick(&["x", "y", "n"])),
+            13 => format!("({} {} {})", self.rng.pick(&["x", "y", "n"]), self.rng.pick(&["=", "+=", "-=", "*="]), self.num(d)),
+            14 => format!("({} ? {} : {})", self.cond(d), self.num(d), self.num(d)),
+            15 => format!("({})", self.cond(d)),
+            16 => format!("cnt[{}]", self.text(0)),
+            17 => "length".to_string(),
+            18 => format!("+{}", self.text(0)),
+            19 => format!("!{}", self.num(0)),
+            _ => self.num(0),
+        }
+    }
+
+    fn text(&mut self, d: u32) -> String {
+        if d == 0 {
+            return match self.rng.below(8) {
+                0..=3 => self.field(),
+                4 => self.rng.pick(&["s", "t", "FILENAME"]).to_string(),
+                _ => self.string(),
+            };
+        }
+        let d = d - 1;
+        match self.rng.below(14) {
+            0 | 1 => format!("{} {}", self.text(d), self.text(d)),
+            2 => format!("substr({}, {})", self.text(d), self.rng.pick(&["1", "2", "0", "3", "-1", "1.5", "NF"])),
+            3 => format!("substr({}, {}, {})", self.text(d), self.rng.pick(&["1", "2", "0", "3"]), self.rng.pick(&["1", "2", "0", "5", "2.7"])),
+            4 => format!("toupper({})", self.text(d)),
+            5 => format!("tolower({})", self.text(d)),
+            6 => format!("sprintf(\"%s-%d\", {}, {})", self.text(d), self.num(d)),
+            7 => format!("sprintf(\"%5.2f|%-4s|\", {}, {})", self.num(d), self.text(d)),
+            8 => format!("({})", self.num(d)),
+            9 => format!("({} \"\")", self.num(d)),
+            10 => format!("seen[{}]", self.text(0)),
+            11 => format!("({} ? {} : {})", self.cond(d), self.text(d), self.text(d)),
+            _ => self.text(0),
+        }
+    }
+
+    fn cond(&mut self, d: u32) -> String {
+        let op = self.rng.pick(&["==", "!=", "<", "<=", ">", ">="]);
+        if d == 0 {
+            return match self.rng.below(9) {
+                0 => format!("{} {} {}", self.field(), op, self.literal()),
+                1 => format!("{} {} {}", self.field(), op, self.string()),
+                2 => format!("{} {} {}", self.field(), op, self.field()),
+                3 => format!("/{}/", self.regex()),
+                4 => format!("{} ~ /{}/", self.field(), self.regex()),
+                5 => self.rng.pick(&["NF", "NR % 2", "NR == 2", "NF > 2", "FNR == 1", "NR > 3", "x", "s"]).to_string(),
+                6 => format!("{} !~ /{}/", self.field(), self.regex()),
+                7 => format!("({} in cnt)", self.text(0)),
+                _ => format!("{} ~ \"{}\"", self.text(0), self.regex().replace('\\', "\\\\")),
+            };
+        }
+        let d = d - 1;
+        match self.rng.below(8) {
+            0 => format!("{} {} {}", self.num(d), op, self.num(d)),
+            1 => format!("{} {} {}", self.text(d), op, self.text(d)),
+            2 => format!("{} {} {}", self.num(d), op, self.text(d)),
+            3 => format!("({}) && ({})", self.cond(d), self.cond(d)),
+            4 => format!("({}) || ({})", self.cond(d), self.cond(d)),
+            5 => format!("!({})", self.cond(d)),
+            _ => self.cond(0),
+        }
+    }
+
+    fn print(&mut self) -> String {
+        match self.rng.below(12) {
+            0 => "print".to_string(),
+            1 | 2 => format!("print {}", self.text(1)),
+            3 => format!("print {}, {}", self.text(1), self.num(1)),
+            4 => format!("print {}", self.num(2)),
+            5 => format!("print {}, {}, ({})", self.num(1), self.text(0), self.cond(1)),
+            6 => format!("printf \"%s %d\\n\", {}, {}", self.text(1), self.num(1)),
+            7 => format!("printf \"%5d|%-6s|%.2f\\n\", {}, {}, {}", self.num(1), self.text(0), self.num(1)),
+            8 => format!("printf \"%{}\\n\", {}", self.rng.pick(&["e", "g", "G", "f", "5.1f", "+d", "05d", "x", "o", "i", ".3s", "8s", "-8s|", "u", "10.4g"]), self.num(1)),
+            9 => format!("printf \"%s=%s;\", {}, {}", self.text(0), self.text(1)),
+            10 => format!("print NR \": \" {}", self.text(1)),
+            _ => format!("print ({}) ({})", self.text(0), self.num(0)),
+        }
+    }
+
+    fn stmt(&mut self, d: u32) -> String {
+        if d == 0 {
+            return self.print();
+        }
+        let d = d - 1;
+        match self.rng.below(30) {
+            0..=5 => self.print(),
+            6 => format!("{} = {}", self.rng.pick(&["x", "y", "n"]), self.num(1)),
+            7 => format!("{} = {}", self.rng.pick(&["s", "t"]), self.text(1)),
+            // Inside a loop over the fields nothing may add fields, or
+            // the loop would not end.
+            8 if self.in_loop == 0 => format!("{} = {}; print", self.rng.pick(&["$1", "$2", "$3", "$(NF+1)", "$5"]), self.text(1)),
+            9 if self.in_loop == 0 => format!("NF = {}; print; print NF", self.rng.pick(&["1", "2", "3", "NF + 1"])),
+            10 if self.in_loop == 0 => format!("$0 = {}; print NF, $1", self.text(1)),
+            11 => format!("cnt[{}]++", self.text(0)),
+            12 => format!("cnt[{}] += {}", self.text(0), self.num(0)),
+            13 => format!("seen[{}] = {}", self.text(0), self.text(1)),
+            14 => format!(
+                "m = split({}, parts{}); print m, parts[1], parts[m]",
+                self.text(1),
+                self.rng.pick(&["", ", \":\"", ", \",\"", ", \" \"", ", /[ :,]+/", ", \"\"", ", \"a\"", ", /[0-9]/"])
+            ),
+            15 => {
+                let f = self.rng.pick(&["sub", "gsub"]);
+                let with = self.rng.pick(&["\"X\"", "\"[&]\"", "\"\"", "\"\\\\&\"", "\"&&\"", "\"-\""]);
+                match self.rng.below(3) {
+                    0 if self.in_loop == 0 => format!("c = {}(/{}/, {}); print c, $0, NF", f, self.regex(), with),
+                    1 => format!("c = {}(/{}/, {}, {}); print c; print", f, self.regex(), with, self.rng.pick(&["$1", "$2", "$NF"])),
+                    _ => format!("s = {}; c = {}(/{}/, {}, s); print c, s", self.text(1), f, self.regex(), with),
+                }
+            }
+            16 => format!("print match({}, /{}/), RSTART, RLENGTH", self.text(1), self.regex()),
+            17 | 18 => format!("if ({}) {{ {} }}", self.cond(1), self.stmt(d)),
+            19 => format!("if ({}) {{ {} }} else {{ {} }}", self.cond(1), self.stmt(d), self.stmt(d)),
+            20 => format!("if ({}) {}; else {}", self.cond(1), self.print(), self.print()),
+            21 | 22 => {
+                self.in_loop += 1;
+                let body = self.stmt(d);
+                self.in_loop -= 1;
+                format!("for (i = 1; i <= NF; i++) {{ {} }}", body)
+            }
+            23 => {
+                self.in_loop += 1;
+                let body = self.stmt(d);
+                self.in_loop -= 1;
+                let j = format!("j{}", self.in_loop);
+                format!("{j} = 0; while ({j} < {}) {{ {j}++; {} }}", 1 + self.rng.below(3), body)
+            }
+            24 => {
+                self.unordered = true;
+                // The lines are sorted afterwards: none may be glued to
+                // what a printf left unfinished.
+                "printf \"\\n\"; for (k in cnt) print k, cnt[k]".to_string()
+            }
+            25 if self.in_loop > 0 => self.rng.pick(&["if (i == 2) break", "if (i == 1) continue", "break", "continue"]).to_string(),
+            26 if self.main_rule && self.in_loop == 0 => "next".to_string(),
+            27 => format!("{{ {}; {} }}", self.stmt(d), self.stmt(d)),
+            28 => format!("for (q = {}; q > 0; q--) printf \"%d,\", q; print \"\"", self.rng.pick(&["3", "NF", "2"])),
+            _ => self.print(),
+        }
+    }
+
+    fn action(&mut self) -> String {
+        let n = 1 + self.rng.below(3);
+        let mut parts = Vec::new();
+        for _ in 0..n {
+            let d = 1 + self.rng.below(2) as u32;
+            parts.push(self.stmt(d));
+        }
+        format!("{{ {} }}", parts.join("; "))
+    }
+
+    fn program(&mut self) -> String {
+        let mut rules = Vec::new();
+        if self.rng.chance(4) {
+            let set = self.rng.pick(&["x = 3", "OFS = \"-\"", "s = \"start\"", "FS = \":\"", "ORS = \"|\\n\"", "print \"begin\"", "n = 10; t = \"t\"", "FS = \",\"; OFS = \";\"", "printf \"%s\\n\", NR"]);
+            rules.push(format!("BEGIN {{ {} }}", set));
+        }
+        let n = 1 + self.rng.below(3);
+        for _ in 0..n {
+            self.main_rule = true;
+            let rule = match self.rng.below(10) {
+                0 | 1 => self.action(),
+                2 => self.cond(1),
+                3 => format!("{}, {}", self.cond(0), self.cond(0)),
+                4 => format!("{}, {} {}", self.cond(0), self.cond(0), self.action()),
+                5 => format!("/{}/ {}", self.regex(), self.action()),
+                6 => format!("!/{}/", self.regex()),
+                _ => format!("{} {}", self.cond(1), self.action()),
+            };
+            self.main_rule = false;
+            rules.push(rule);
+        }
+        if self.rng.chance(3) {
+            let end = match self.rng.below(6) {
+                0 => "print NR".to_string(),
+                1 => "print x, y, n, s, t".to_string(),
+                2 => {
+                    self.unordered = true;
+                    "printf \"\\n\"; for (k in cnt) print k, cnt[k]".to_string()
+                }
+                3 => "print NR, NF, $0, $1".to_string(),
+                4 => "print length(cnt), length(seen), FILENAME, FNR".to_string(),
+                _ => self.stmt(2),
+            };
+            rules.push(format!("END {{ {} }}", end));
+        }
+        let text = rules.join(self.rng.pick(&[" ; ", " ; ", "\n"]));
+        // A program that starts with a dash would be read as an option.
+        if text.starts_with('-') { format!(" {}", text) } else { text }
+    }
+}
+
+fn awk(rng: &mut Rng, files: &[String], n: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    while out.len() < n {
+        let mut g = AwkGen { rng: &mut *rng, unordered: false, in_loop: 0, main_rule: false };
+        let program = g.program();
+        let unordered = g.unordered;
+        let mut c = String::new();
+        let from_pipe = rng.chance(5);
+        if from_pipe {
+            c.push_str(&format!("cat {} | ", some(rng, files)));
+        }
+        c.push_str("awk ");
+        if rng.chance(3) {
+            c.push_str(rng.pick(&["-F: ", "-F, ", "-F '\\t' ", "-F ' ' ", "-F '[ ,:]+' ", "-Fa ", "-F '' ", "-F. ", "-F ': *' ", "-F 0 "]));
+        }
+        if rng.chance(5) {
+            c.push_str(rng.pick(&["-v x=5 ", "-v s=abc ", "-v OFS=: ", "-v n=010 -v t='a b' ", "-v 'x=1e2' ", "-v FS=, ", "-v y=-3 "]));
+        }
+        c.push_str(&q(&program));
+        if !from_pipe {
+            for _ in 0..1 + rng.below(2) {
+                c.push(' ');
+                c.push_str(some(rng, files));
+            }
+        }
+        if unordered {
+            c.push_str(" | sort");
+        } else if rng.chance(8) {
+            c.push_str(rng.pick(&[" | head -n 3", " | wc -l", " | tail -n 2", " | sort | uniq -c"]));
+        }
+        if rng.chance(12) {
+            c.push_str("; echo $?");
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// The tests of one family: `n` command lines over one tree.
 pub fn generate(family: &str, n: usize, seed: u64) -> Option<Generated> {
     let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03 ^ family.len() as u64);
@@ -1132,6 +1462,7 @@ pub fn generate(family: &str, n: usize, seed: u64) -> Option<Generated> {
     let (files, folders) = match family {
         "rg" => (rg_tree(&mut rng, &mut fixture), Vec::new()),
         "diff" => diff_tree(&mut rng, &mut fixture),
+        "awk" => awk_tree(&mut rng, &mut fixture),
         _ => tree(&mut rng, &mut fixture),
     };
     // Each path its own age, half a minute from any whole minute, so
@@ -1140,7 +1471,7 @@ pub fn generate(family: &str, n: usize, seed: u64) -> Option<Generated> {
     let mut ages = Vec::new();
     let mut all: Vec<String> = files.clone();
     all.extend(folders.iter().cloned());
-    if family != "diff" {
+    if family != "diff" && family != "awk" {
         all.push("empty".into());
     }
     all.push(".".into());
@@ -1163,6 +1494,7 @@ pub fn generate(family: &str, n: usize, seed: u64) -> Option<Generated> {
         "xargs" => xargs(&mut rng, &files, n),
         "scripts" => scripts(&mut rng, &files, &folders, n),
         "diff" => diff(&mut rng, &files, n),
+        "awk" => awk(&mut rng, &files, n),
         _ => return None,
     };
     Some(Generated { fixture, ages, commands })

@@ -51,7 +51,7 @@ cargo build --release
 ./target/release/qdb --db my.qdb --check --stats
 ./target/release/qdb --db my.qdb --compact
 
-# compare the engine with the real tools (5,452 cases): in memory, on
+# compare the engine with the real tools (5,706 cases): in memory, on
 # disk, and on disk closed and opened again after every step
 ./target/release/qdb-harness
 ./target/release/qdb-harness --no-index
@@ -114,6 +114,30 @@ let code = qdb::execute_to(&mut db, b"grep -rn hello .", &mut out, &mut err);
 `Db::open_dir(path, Config::default())` opens a database directory and
 returns the database with a report of what opening found and did.
 
+## What a command costs
+
+Every unit (one `-c`, or one line of a session) is counted as it runs:
+what it read (bytes of text and in how many pieces, bytes of index lists
+and for how many trigrams, files and folders reached), what it wrote
+(content, records of what changed, upkeep), how often it waited for the
+disk, bytes sent to scratch files, and how far its memory rose. These
+are counts, not measurements, so the same unit on the same database
+gives the same numbers every time. Processor time and elapsed time are
+reported beside them and do vary.
+
+```sh
+# one line of counters per unit, on standard error
+./target/release/qdb --db my.qdb --cost -c 'grep -rn needle .'
+
+# run a file of units against a database and print two tables: the
+# units grouped by their first command, and by what they did
+./target/release/qdb-replay --db copy-of-my.qdb units.txt
+```
+
+The counting writes nothing and waits for nothing. The harness holds
+every benchmark command to the counters stored in `tests/baseline/`:
+a change that makes one of them read, write or sync more fails the run.
+
 ## A database on disk
 
 `qdb --db PATH` keeps everything in the directory `PATH`. The layout is
@@ -154,7 +178,7 @@ line; an index file per data file; a checkpoint of the tree.
 
 ## What is supported
 
-Thirty-five commands. Short flags combine (`ls -ltR`, `grep -rin`), and
+Thirty-six commands. Short flags combine (`ls -ltR`, `grep -rin`), and
 the long forms listed are accepted too.
 
 | Command | Flags |
@@ -168,6 +192,7 @@ the long forms listed are accepted too.
 | `grep` | `-r -R -i -n -l -L -v -c -o -q -s -w -x -h -H -I -a`, `-E -F -G`, `-e PATTERN` (several), `-A -B -C N`, `-NUM`, `-m N`, `--include --exclude --exclude-dir` |
 | `rg` | `-i -S -s -F -w -x -v -c -l -n -N -0`, `-A -B -C N`, `-m N`, `-g GLOB`, `-t TYPE`, `-T TYPE`, `-u -uu -uuu`, `--hidden --no-ignore --files --no-heading --sort path`, `-j N` (accepted; there is one thread) |
 | `sed` | `-n -E -r -i -i.SUFFIX -s -e`; addresses `N`, `$`, `/re/`, `\%re%`, `N,M`, `N,+M`, `first~step`, `0,/re/`, `!`; commands `s p d q Q = a i c y` and `{ }` blocks; `s` flags `g p N i I`; `&` and `\1`..`\9` |
+| `awk` | `-F SEP`, `-v VAR=VAL`; `BEGIN`, `END`, patterns, actions and ranges; `$N`, `$0`, `NF`, `NR`, `FNR`, `FILENAME`, `FS`, `OFS`, `ORS`, `RSTART`, `RLENGTH`; `print`, `printf`, `if`/`else`, `while`, `for (;;)`, `for (k in a)`, `next`, `break`, `continue`, every assignment; arrays of one subscript and `in`; `length substr index split sub gsub match tolower toupper sprintf` |
 | `diff` | `-u`, `-U N`, `--unified[=N]`, `-r`, `-N`, `-x PAT`, `-q`, `-s`, `-i -w -b -B`, `-a`, `--label NAME`; the default and the unified format; `-` for standard input |
 | `sort` | `-u -n -r -h -f -b -s -c -C`, `-t SEP`, `-k` with character positions and modifiers, `--parallel=N` (accepted) |
 | `uniq` | `-c -d -u -i`, `-f N`, `-s N`, `-w N` |
@@ -208,7 +233,7 @@ Shell syntax, as bash 5.2 reads it:
 | Arithmetic | `$((...))` with bash's operators on 64-bit integers, assignments and `++`/`--` included, and constants in base 8, 16 and `base#digits` |
 | Tilde | `~` and `~/path`, where a word or an assigned value begins |
 | Field splitting | unquoted `$NAME`, `$(...)` and `$((...))` are split at `IFS` and then matched as globs, as bash does |
-| Current directory | `cd`, `cd -`, `pwd`, `PWD` and `OLDPWD`; relative paths start there |
+| Current directory | `cd`, `pwd`, `PWD` and `OLDPWD`; relative paths start there (`cd -` is refused: use `cd "$OLDPWD"`) |
 | Loops and tests | `for NAME in WORDS; do ...; done`, `while`, `until`, `if`/`elif`/`else`/`fi`, `break [N]`, `continue [N]`, nested, in a pipeline, and with redirections on the whole construct |
 
 What the data model has no fact for prints a fixed value: `ls -l` shows
@@ -273,6 +298,35 @@ says so, instead of using memory without limit. The times in a unified
 header are the files' modification times in UTC. `-c`, `-y`, `-e`, `-I`
 and the other output formats are refused by name.
 
+**awk.** `awk` runs the part of the language in the table as GNU awk
+5.2.1 does in the C locale: numbers are doubles, a whole number prints
+in full and any other through `%.6g`, and a field compares as a number
+when it looks like one. Regular expressions go to the engine's own
+matcher, with gawk's escapes (`\y`, `\<`, `\>`, `\s`, `\w`, octal and
+hexadecimal bytes, escapes inside brackets). It reads its input a piece
+at a time and keeps only the current record, apart from what the program
+puts in arrays.
+
+- **Refused by name, before anything runs:** user-defined functions,
+  `getline`, `system`, output redirection and pipes (`>`, `>>`, `|`),
+  `delete`, `exit`, `do`, `nextfile`, `switch`, arrays of more than one
+  subscript, the other built-in functions (`int`, `sqrt`, `gensub`, ...)
+  and the other special variables (`RS`, `OFMT`, `ENVIRON`, ...),
+  `-f` and every option but `-F` and `-v`, and `NAME=value` among the
+  file names.
+- **Input must be ASCII.** A line with any other byte stops the run with
+  status 2 and a message that names the file and the line; the lines
+  before it have been processed.
+- **`for (k in a)`** goes through the keys in the order they were first
+  set. awk leaves the order open and gawk's is different, so sort the
+  output of such a loop.
+- **Two limits of its own:** a run may take 1,000,000,000 turns of its
+  loops, and one string may be 256 MB long. Past either it stops with
+  status 2 and says which.
+- A program gawk cannot read gets gawk's two lines and status 1. For a
+  few mistakes gawk prints more than one complaint or puts its mark one
+  column away; there the text differs.
+
 **One difference from bash in constructs.** When the output of a whole
 loop or `if` is redirected to a file, the file receives it when the
 construct ends. A command inside the construct that reads that same
@@ -301,6 +355,7 @@ the construct's output so far.
 | `src/testing.rs` | Running a command line on the real tools in a scratch directory. |
 | `src/bin/harness.rs` | The test harness. See `tests/README.md`. |
 | `src/bin/bench.rs` | The benchmark. See `bench/README.md`. |
+| `src/bin/replay.rs` | Runs a file of units against a database and reports what they cost, by command and by kind of work. |
 | `src/bin/stress.rs` | One very large file, a long run of writes, the cost of a sync, and the comparison of the switches. See `bench/README.md`. |
 
 ## Where to read next

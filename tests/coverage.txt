@@ -443,3 +443,72 @@ diff	exit status	re:diff .*echo \$\?
 diff	a name that is not there	re:diff .*nowhere
 diff	headers with file times	re:touch -d .*diff -[ruN]*u [0-9a]
 diff	in a pipeline	re:diff .* \| 
+awk	-F SEP	re:awk -F
+awk	--field-separator	--field-separator
+awk	-v VAR=VAL	re:awk (-F\S+ )?-v
+awk	--assign	--assign
+awk	BEGIN	re:awk .*BEGIN \{
+awk	END	re:awk .*END \{
+awk	pattern alone	re:awk '(/[^/]+/|NF|[^{']+)'
+awk	action alone	re:awk '\{
+awk	pattern with action	re:awk '[^{' ]+[^{']* \{
+awk	range pattern	re:awk '[^{']+, ?[^{']+
+awk	/regex/ pattern	re:awk '!?/
+awk	expression pattern	re:awk '\$[0-9] [=<>!]
+awk	$N	re:awk .*\$[1-9]
+awk	$0	re:awk .*\$0
+awk	$(expression)	re:awk .*\$\(
+awk	assigning a field	re:awk .*\$[1-9] \+?=[^=]
+awk	assigning $0	re:awk .*\$0 = 
+awk	NF	re:awk .*NF
+awk	assigning NF	re:awk .*NF (=|\+\+|-=)
+awk	NR	re:awk .*NR
+awk	FNR	re:awk .*FNR
+awk	FILENAME	re:awk .*FILENAME
+awk	FS	re:awk .*FS
+awk	OFS	re:awk .*OFS
+awk	ORS	re:awk .*ORS
+awk	RSTART and RLENGTH	re:awk .*RSTART.*RLENGTH
+awk	print	re:awk .*print[ ;}]
+awk	print with a list in parentheses	re:awk .*print ?\([^()]+,
+awk	printf	re:awk .*printf
+awk	if	re:awk .*if \(
+awk	else	re:awk .*else
+awk	while	re:awk .*while \(
+awk	for (;;)	re:awk .*for \([^)]*;
+awk	for (k in a)	re:awk .*for \(\w+ in \w+\)
+awk	next	re:awk .*next
+awk	break	re:awk .*break
+awk	continue	re:awk .*continue
+awk	=	re:awk .* [a-z] = 
+awk	+= -= *= /= %= ^=	re:awk .*(\+=|-=|\*=|/=|%=|\^=)
+awk	++ and --	re:awk .*(\+\+|--)
+awk	arithmetic	re:awk .*[0-9a-z)] [-+*/%^] [0-9a-z($]
+awk	comparison	re:awk .*(==|!=|<=|>=| < | > )
+awk	~ and !~	re:awk .*!?~
+awk	&& || !	re:awk .*(&&|\|\|)
+awk	?:	re:awk .* \? .* : 
+awk	concatenation	re:awk .*\$[0-9] "
+awk	array element	re:awk .*[a-z]\[[^]]+]
+awk	in	re:awk .*\(?"?\w+"? in \w+\)
+awk	length	re:awk .*length
+awk	length of an array	re:awk .*length\([a-z]\)
+awk	substr	re:awk .*substr\(
+awk	index	re:awk .*index\(
+awk	split	re:awk .*split\(
+awk	sub	re:awk .*[^g]sub\(
+awk	gsub	re:awk .*gsub\(
+awk	match	re:awk .*match\(
+awk	tolower	re:awk .*tolower\(
+awk	toupper	re:awk .*toupper\(
+awk	sprintf	re:awk .*sprintf\(
+awk	a regex from a string	re:awk .*~ "
+awk	file operands	re:awk '[^']*' [a-z]
+awk	standard input	re:\| awk
+awk	- as a file	re:awk '[^']*' (\S+ )?-( |$|;)
+awk	a file that is missing	re:awk .* nofile
+awk	a folder as a file	re:awk '[^']*' d 
+awk	input that is not ASCII	re:\\303\\251.*awk
+awk	a division by zero	re:awk .*1/
+awk	a syntax error	re:awk 'BEGIN \{ print \( \}'
+awk	in a pipeline	re:awk .*\| *(head|sort|awk)

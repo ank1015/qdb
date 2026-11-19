@@ -1,0 +1,293 @@
+# Stage 5, part 6: awk, against GNU awk 5.2.1 in the C locale.
+@fixture empty
+
+# Program shape: BEGIN and END, patterns, actions, either alone, ranges.
+$ awk 'BEGIN { print "hello" }'
+$ printf 'a b\nc d\n' | awk '{ print $2 }'
+$ printf 'a b\nc d\n' | awk '/c/'
+$ printf 'a b\nc d\n' | awk 'END { print NR }'
+$ printf 'a b\nc d\n' | awk 'BEGIN { print "start" } { print NR ": " $0 } END { print "end", NR, $0, NF }'
+$ printf 'a b\n' | awk '$1 == "a" { print "m" } $2 ~ /b/ ; !/z/ ; /a/ && /b/ { print "both" } NF ; 0 ; "" ; "0" ; $3 ; "a"'
+$ printf '5 apples\n' | awk '$1 > 3 { print "big" } $1 { n++ } END { print n+0, NR }'
+$ printf 'a\n\nb\n' | awk 'NF { print NR ": " $0 } !NF { print "blank" }'
+$ printf '1\n2\n3\n4\n5\n' | awk 'NR==2,NR==4; /5/,/nomatch/ { print "r" $0 }; END { print NR, $0, NF }'
+$ printf '1\n2\n3\n' | awk 'NR==1,NR==1 { print "one" } NR==2,0 { print "tail" $0 }'
+$ printf '1\n2\n3\n4\n' | awk '/2/,/3/ { print "in " $0; next } { print "out " $0 }'
+$ awk 'BEGIN { print "second" } ; BEGIN { print "third" } END { print "never read" }'
+$ printf 'x\n' | awk 'END { print "e1" } END { print "e2" } BEGIN { print "b" }'
+$ printf 'a\nb' | awk '{ print NR ":" $0 }'
+$ printf 'a b\r\n' | awk '{ print $2 }' | cat -A
+$ awk 'BEGIN { print 1⏎print 2⏎if (1)⏎print "nl"⏎else⏎print "no"⏎x = 1 +\⏎2⏎print x # comment⏎}⏎# more⏎END { print "e" }'
+$ printf 'a b\n' | awk '{ print $1 } ; { print $2 }⏎{ print NF }'
+$ printf 'a\nb\n' | awk '{ print; next; print "no" } { print "never" }'
+
+# Files, FILENAME, NR and FNR.
+$ printf '1\n2\n' > f1; printf '3\n' > f2; awk '{ print FILENAME, NR, FNR } END { print FILENAME }' f1 f2
+$ printf '1\n2\n' > f1; awk 'BEGIN { print FILENAME "|" NR }' f1
+$ printf '1\n2' > f1; printf '3\n' > f2; awk '{ print FNR ":" $0 }' f1 f2
+$ printf 'x y\n' | awk '{ print FILENAME "|" }'
+$ printf 'x\n' > f1; printf 'in\n' | awk '{ print FILENAME ":" $0 }' f1 - f1
+$ printf 'x\n' > f1; awk '{ print }' f1 nofile; echo $?
+$ printf 'x\n' > f1; awk '{ print }' nofile f1; echo $?
+$ mkdir d; printf 'x\n' > f1; awk '{ print }' d f1; echo $?
+$ printf 'x\n' > f1; awk 'END { print NR }' f1 f1 f1
+$ printf '' > e; awk '{ print } END { print NR, FILENAME }' e
+
+# Options.
+$ printf 'a:b c:d\n' | awk -F: '{ print $2 }'
+$ printf 'a:b c:d\n' | awk -F : '{ print $2 }'
+$ printf 'a:b c:d\n' | awk --field-separator=: '{ print $2 }'
+$ printf 'a\tb c\n' | awk -F'\t' '{ print $2 }'
+$ printf 'atb\n' | awk -Ft '{ print $1 }'
+$ printf 'aXXbXc\n' | awk -FX '{ print NF, $2 "|" }'
+$ printf 'a.b|c\n' | awk -F. '{ print $2 }'
+$ printf 'a.b|c\n' | awk -F'|' '{ print $2 }'
+$ printf 'a  b\n' | awk -F' ' '{ print $2 }'
+$ printf 'a  b\n' | awk -F'[ ]' '{ print NF }'
+$ printf 'abc\n' | awk -F '' '{ print NF, $2 }'
+$ printf 'a\\b\n' | awk -F'\\' '{ print $2 }'
+$ printf 'a+b\n' | awk -F+ '{ print $2 }'
+$ printf 'a^b\n' | awk -F^ '{ print $2 }'
+$ printf 'aAb\n' | awk -Fa '{ print NF }'
+$ printf 'a1b22c\n' | awk -F'[0-9]+' '{ print $3, NF }'
+$ printf 'a, b,c\n' | awk -F', *' '{ print $2 "|" $3 }'
+$ printf ':a:b:\n' | awk -F: '{ print NF; print $1 "|" $2 "|" $4 "|" }'
+$ printf 'x\n' | awk -v 'a=1\t2' -v n=010 -v s=abc '{ print a; print n+0, n==10, n==8, s; print (n < 9) }'
+$ awk -v x=3 -v y=4 'BEGIN { print x * y }'
+$ awk -vx=3 'BEGIN { print x + 1 }'
+$ awk --assign=x=5 'BEGIN { print x }'
+$ printf 'a b\n' | awk -v OFS=- '{ $1 = $1; print }'
+$ printf 'a:b\n' | awk -v FS=: '{ print $2 }'
+$ printf 'a\nb\n' | awk -v ORS=';' '{ print }'
+$ awk -v 1x=3 'BEGIN { }'; echo $?
+$ awk -v x 'BEGIN { }'; echo $?
+$ awk; echo $?
+$ awk -F; echo $?
+$ awk -v; echo $?
+$ awk -- 'BEGIN { print "dashes" }'
+
+# Fields: NF, $0, assignment to each, fields past the end.
+$ printf 'a b c\n' | awk '{ $2 = ""; print; print NF }'
+$ printf 'a b c\n' | awk '{ $5 = "e"; print; print NF }'
+$ printf 'a b c\n' | awk '{ NF = 2; print; print NF }'
+$ printf 'a b c\n' | awk '{ NF = 5; print; $0 = "p q"; print $2, NF }'
+$ printf '  x   y  \n' | awk '{ print $1; $1 = $1; print; print $(NF) $NF-1, $NF++, NF }'
+$ printf 'x y\n' | awk '{ print -$1; print $(1+1); print $NF; i = 1; print $i++, i; print $++i }'
+$ awk 'BEGIN { $3 = "c"; print; print NF; $0 = "a b"; print $2 }'
+$ printf 'a b\n' | awk '{ $0 = "x y z"; print NF, $3; $3 = ""; print NF; print }'
+$ printf ' 10 0x1A 1e2 abc +5 .\n' | awk '{ print ($1==10), ($2==26), ($3==100), ($4=="abc"), ($5==5), ($6==0), NF }'
+$ printf 'a b c\n' | awk '{ print $4 "|" length($4) "|" ($4 == 0) ($4 == "") }'
+$ printf 'x y\n' | awk 'END { print $(-1) }'; echo $?
+$ printf 'x y\n' | awk '{ NF = -1 }'; echo $?
+$ printf 'a b\nc d\n' | awk '{ FS = ":" } { print $1 }'
+$ printf 'a:b c:d\n' | awk -F: '{ print $2; FS = " "; print $2; $0 = $0; print $2 }'
+$ printf 'a b c d\n' | awk '{ $2 = "X"; $3 = 05; print; print ($3 == 5), ($2 == "X") }'
+$ printf '05 5\n' | awk '{ print ($1 == $2); $1 = "05"; print ($1 == $2), ($1 == 5) }'
+$ printf 'a b c\n' | awk -v OFS=: '{ print $1, $2; $1 = $1; print; print $0 }'
+$ printf 'a b c\n' | awk '{ $(NF + 2) = "z"; print NF; print }'
+$ printf '1 2 3\n' | awk '{ $2 += 10; $3++; print; print $2 * 2 }'
+$ printf 'k v\n' | awk '{ NF++; print NF "[" $0 "]"; NF -= 2; print NF "[" $0 "]" }'
+
+# Numbers and strings.
+$ awk 'BEGIN { print -0; x = 0; print -x; print 1e30; print 0x11, 011, 019; print 1/3; print 100000*100000; print 2^53+1 }'
+$ awk 'BEGIN { print 1e6, 1e16, 1e17, 1e18, 1e19, 123456789012345678, 0.1+0.2, 1e-5, 100/3, 3.0, "3.0"+0, 017+1, 1e3 }'
+$ awk 'BEGIN { print 0.1*3, 1e21, 1e-7 "", 123456.7, 1234567.8, 12345678.9 "", 2^31, 2^63, 2^64, -2^63, 1e18, 999999999999999999 }'
+$ awk 'BEGIN { print 1==1.0, "a"<"b", "10"<"9", 10<9, x==0, x=="", "abc" ~ "b", 1 " " 2, 1 - -1, 2^3^2, -2^2, !x, 1+"3x", "0x1A"+0, ".5"+0, "+inf"+0, "1e3"+0 }'
+$ awk 'BEGIN { print length(12.50), 1e3 "", 0.1 + 0.2 == 0.3, 1e-300 * 1e-300, "a" < 1, 2 < 10, "2" < "10", -3 % 2 }'
+$ awk 'BEGIN { print 2**3, 7%3, -7%3, 7.5%2, 2^-1, 2**-2, 2^0.5, 10 % 3.5, 1e300 * 1e300, -1e300 * 1e300 }'
+$ awk 'BEGIN { x = "A"; print x++ + ++x; print x^2, x**2; x ^= 2; print x; x **= 2; print x; x /= 4; x %= 3; x -= 0.5; x *= 3; print x }'
+$ awk 'BEGIN { x = y = 3; print x y; x += y -= 1; print x, y; print x++ y, x-- - 1; print (x=5) x }'
+$ awk 'BEGIN { a = "3" + 0; b = "3"; print (a == 3.0), (b == 3.0), (b "" == "3"); print 1e6 == "1000000", 1e6 "" == "1000000" }'
+$ awk 'BEGIN { print 5 % 3 * 2, 2 * 3 % 4, - 2 ^ 2, !0 + 1, ! 1 + 1, 1 < 2 ? "y" : "n"; print 1 " " 2 == "1 2", "a" "b" ~ "ab", 3 - 1 " " 1, !x ~ "0" }'
+$ awk 'BEGIN { x = 0; print 1 !x; print 1 " " -1; print 2 " " +1; y = 5; print 1 ++y; print y; print -12 " " -24 }'
+$ awk 'BEGIN { print 1 2, 1 -1, 3 4 5 * 2, "a" 1 + 1 "b", 1 == 1 "", (1 == 1) "" }'
+$ awk 'BEGIN { print 1 ? 2 ? "a" : "b" : "c"; print 0 ? "a" : 0 ? "b" : "c"; x = 1 ? y = 2 : 3; print x, y }'
+$ awk 'BEGIN { print 1 && 0, 1 || 0, 0 || 0, !1, !"", !"a", "a" && "0", 0 && x++, x + 0, 1 || x++, x + 0 }'
+$ awk 'BEGIN { print "\x41\101\t|\"|\\|\a\b\f\v\r|" }' | cat -A
+$ awk 'BEGIN { print "a\qb", "c\/d" }'
+$ awk 'BEGIN { print 1/0 }'; echo $?
+$ awk 'BEGIN { print 1%0 }'; echo $?
+$ printf 'x y\n' | awk '{ print 1/($1+0) }'; echo $?
+$ printf 'x y\n' | awk '{ print 1%($1+0) }'; echo $?
+$ awk 'BEGIN { x = 0; y = 5; y /= x }'; echo $?
+$ awk 'BEGIN { print length "x"; print length; print length() }'
+$ printf 'hello\n' | awk '{ print length, length(), length($0), length($1 $1) }'
+$ awk 'BEGIN { print 1,⏎2; x = 1 &&⏎0; print x; y = 0 ||⏎1; print y }'
+$ awk 'BEGIN { print (1)(2); print (1,2); print(1,2); print (1)" "(2) }'
+$ awk 'BEGIN { print (1 > 2) ? 3 : 4; print (2 > 1), (1 >= 1), (1 != 1) }'
+
+# Comparison of fields: numbers when both look like numbers.
+$ printf '10 9\n' | awk '{ print ($1 < $2), ($1 > $2), ($1 "" < $2 ""), ($1 == 10.0), ($1 < "9") }'
+$ printf 'abc 10\n' | awk '{ print ($1 < $2), ($1 > 5), ($2 > 5), ($2 == "10"), ($2 == "10.0"), ($2 == 10.0) }'
+$ printf '1e2 100 0100 +100 100.0\n' | awk '{ print ($1 == $2), ($2 == $3), ($3 == $4), ($4 == $5), ($1 == "100") }'
+$ printf ' 5 \n' | awk -F: '{ print ($1 == 5), ($1 == " 5 "), length($1) }'
+$ printf '3\n10\n9\n' | awk '$1 > m { m = $1 } END { print m }'
+$ printf 'b\na\nc\n' | awk 'NR == 1 || $1 < m { m = $1 } END { print m }'
+
+# Statements.
+$ awk 'BEGIN { i = 5; while (i-- > 0) { if (i == 3) continue; if (i == 1) break; print i }; for (i = 0; i < 3; i++) ; print i; for (;;) { if (++j > 2) break }; print j }'
+$ awk 'BEGIN { for (i = 0; i < 3; i++) for (j = 0; j < 3; j++) { if (j == 1) continue; if (i == 2) break; print i, j } }'
+$ awk 'BEGIN { if (0) print "a"; else if (0) print "b"; else print "c"; if (1) { print "d" } else { print "e" } if (1) print "f"⏎else print "g" }'
+$ awk 'BEGIN { if (1)⏎⏎print "x";⏎else⏎print "y"; while (k < 2)⏎k++; print k }'
+$ awk 'BEGIN { i = 0; while (i < 3) { i++; if (i == 2) continue; print i } }'
+$ awk 'BEGIN { for (i = 3; i; i--) printf "%d ", i; print "" }'
+$ awk 'BEGIN { next }'; echo $?
+$ printf 'x\n' | awk 'END { next }'; echo $?
+$ awk 'BEGIN { break }'; echo $?
+$ awk 'BEGIN { continue }'; echo $?
+$ awk 'BEGIN { ; ; print 1;; print 2 ; }'
+$ awk 'BEGIN { { print 1; { print 2 } } }'
+
+# Arrays.
+$ awk 'BEGIN { if (!("a" in x)) print "no"; x["a"] = 1; x[1] = 2; x["1"] = 3; x[01] = 4; x[1.0] = 5; x[0.1+0.2] = 6; for (k in x) print k, x[k] }' | sort
+$ awk 'BEGIN { a["x"]; print length(a); if ("y" in a) print "yes"; else print "no"; print ("x" in a), length(a) }'
+$ printf 'a\nb\na\nc\na\n' | awk '{ n[$1]++ } END { for (k in n) print k, n[k] }' | sort
+$ printf 'a 1\nb 2\na 3\n' | awk '{ s[$1] += $2 } END { for (k in s) print k, s[k] }' | sort
+$ printf 'x\ny\nx\n' | awk '!seen[$0]++'
+$ awk 'BEGIN { a[1] = 1; a[2] = 2; for (k in a) { a[k + 10] = 1; n++ }; print n, length(a) }'
+$ awk 'BEGIN { a["k"] = "v"; print a["k"] a["nope"] "|" length(a); print ("nope" in a) }'
+$ awk 'BEGIN { a[1]; a[2]; a[3]; for (k in a) { if (k == 2) continue; s += k }; print s; for (k in a) break; print (k in a) }'
+$ awk 'BEGIN { n = split("c a b", w); for (i = n; i >= 1; i--) printf "%s ", w[i]; print ""; print (1 in w), (0 in w), (4 in w), ("1" in w) }'
+$ awk 'BEGIN { a[1] = 1; print a }'; echo $?
+$ awk 'BEGIN { x = 1; x[1] = 2 }'; echo $?
+$ awk 'BEGIN { i = 1; a[i++] = i; a[i] = "z"; for (k in a) print k "=" a[k] }' | sort
+$ awk 'BEGIN { a[""] = 1; a[" "] = 2; a[-1] = 3; a[1e6] = 4; a[0.5] = 5; for (k in a) print "[" k "]" }' | sort
+
+# The string functions.
+$ awk 'BEGIN { print substr("hello",0,2); print substr("hello",-1); print substr("hello",1.5,2.3); print substr("hello",1.5), substr("hello", 2.5, 1.5), substr("hello",0), substr("hello", 5, 1), substr("hello",6) "|", substr("hello", 1, 0) "|", substr(12345, 2, 2) }'
+$ awk 'BEGIN { for (m = -2; m <= 7; m += 0.5) { printf "%s:", m; for (n = -1; n <= 3; n += 0.5) printf " %s", "[" substr("hello", m, n) "]"; print "" } }'
+$ awk 'BEGIN { print substr("hello", 2, 1e30), substr("hello", "x"), index("", ""), index("abc", ""), index("abc", "c"), index("abc", "cd"), index("abcabc", "ca"), tolower(5) + 1 }'
+$ awk 'BEGIN { print toupper("abC1-z"), tolower("ABc1-Z"), toupper(substr("abc", 2)), length(toupper("")) }'
+$ awk 'BEGIN { n = split("a:b:c", arr, ":"); print n, arr[1], arr[3]; n = split("  a  b ", q); print n, q[1]; n = split("abc", r, ""); print n, r[2]; n = split("a1b22c", t, /[0-9]+/); print n, t[3] }'
+$ awk 'BEGIN { n = split("", e); print n, length(e); n = split("a.b", d, "."); print n; n = split("a b", sp, " "); print n; n = split("a|b", pp, "|"); print n; n = split("a b  c", re, / /); print n }'
+$ awk 'BEGIN { a[9] = "old"; n = split("x y", a); print n, length(a), (9 in a); n = split("10 9", v); print (v[1] > v[2]), (v[1] "" > v[2] "") }'
+$ printf 'a:b c:d\n' | awk -F: '{ n = split($0, p); print n, p[2]; m = split($0, s, " "); print m, s[2] }'
+$ awk 'BEGIN { print match("foobar", /o+/), RSTART, RLENGTH; print match("x", /y/), RSTART, RLENGTH; print match("abc", ""), RSTART, RLENGTH; print match("aXb", "X"), RSTART, RLENGTH; print RSTART + RLENGTH }'
+$ awk 'BEGIN { s = "aaa"; n = gsub(/x*/, "-", s); print n, s; s = "hello"; gsub(/l/, "[&]", s); print s; s = "hello"; gsub(/l/, "\\&", s); print s; s = "a.b"; sub(/\./, "\\\\&", s); print s; s = "abc"; gsub(//, "-", s); print s; s = "abc"; gsub(/b*/, "X", s); print s }'
+$ awk 'BEGIN { s = "abc"; gsub(/b/, "\\\\\\&", s); print s; s = "abc"; gsub(/b/, "x\\y", s); print s; s = "abc"; gsub(/b/, "\\\\", s); print s; s = "abc"; gsub("b", "&&", s); print s }'
+$ awk 'BEGIN { s = "foo bar foo"; print sub(/foo/, "X", s), s; print gsub(/o/, "0", s), s; print sub(/zzz/, "X", s), s; print gsub(/^/, ">", s), s; print gsub(/$/, "<", s), s }'
+$ printf 'a b a\n' | awk '{ n = gsub(/a/, "X"); print n, $0, NF, $3; sub(/X/, "Y Z"); print $0, NF, $2 }'
+$ printf 'a b a\n' | awk '{ gsub(/a/, "X", $3); print; print NF; sub(/b/, "p q", $2); print; print NF }'
+$ awk 'BEGIN { a["k"] = "xyx"; gsub(/x/, "-", a["k"]); print a["k"]; t = 12321; gsub(2, "", t); print t, t + 1 }'
+$ awk 'BEGIN { s = "aXbXc"; r = "X"; gsub(r, "-", s); print s; s = "a.b.c"; gsub(".", "-", s); print s; s = "a.b.c"; gsub("\\.", "-", s); print s }'
+$ awk 'BEGIN { s = "hello world"; gsub(/o/, "&&&", s); print s; gsub(/[aeiou]+/, "<&>", s); print s; print gsub(/l+/, "", s), s }'
+$ awk 'BEGIN { x = sprintf("%d-%s-%5.2f|%c", 42.9, "s", 3.14159, 65); print x; print length(sprintf("%10s", "a")); print sprintf("plain"), sprintf("%%") }'
+$ awk 'BEGIN { print length(x y), substr("abc", 2) substr("abc", 1, 1), index(substr("hello", 2), "l") }'
+
+# printf.
+$ awk 'BEGIN { printf "%x %o %u %d %c%c %5.2s| %i %e %G\n", -1, -1, -1, 3.9, 65, "hello", "abc", "12abc", 1234.5, 0.00001 }'
+$ awk 'BEGIN { printf "%c|%c|%c\n", 256+65, "", 65.7; printf "%5c|%-5c|\n", "x", "y"; printf "%.3d|%+d|% d|%05d|%-5d|%5s|%.2f|%10.3e|%#o|%#x\n", 5, 5, 5, 5, 5, "ab", 3.14159, 1234.5, 8, 255 }'
+$ awk 'BEGIN { printf "%5s|%05d|%05s|%+.3d|%x|%X|%#X|%e\n", "abcdefg", -42, "ab", 7, 255, 255, 255, 0; printf "%d %d\n", "1e3", " 12 " }'
+$ awk 'BEGIN { printf "%d %d %d %s %d\n", "0x1A", 1e19, -1e19, 1e19, "abc"; printf "%5.1f|%g|%g|%g|%G\n", 2.25, 1e10, 123456789, 0.0001, 1e-10 }'
+$ awk 'BEGIN { printf "%s %s\n", 1==1, 0.1+0.2; printf "%.2s|%10s|%-10s|\n", "abc", "r", "l"; printf "%z\n" }'
+$ awk 'BEGIN { printf "%*d|%-*d|%.*f\n", 5, 42, 4, 7, 2, 3.14159; printf("%s-%s\n", "a", "b"); printf "%s\n" , "z"; printf "no newline" }'
+$ awk 'BEGIN { printf "%i|%5i|%-5i|%05.1f|%+.2e|% g|%G\n", 3.99, -3.99, 7, 2.55, 12345.678, 0.5, 1e-20 }'
+$ awk 'BEGIN { printf "%d %d\n", 1 }'; echo $?
+$ printf 'x y\n' | awk '{ printf "%d\n" }'; echo $?
+$ awk 'BEGIN { printf "%s\n" }'; echo $?
+$ awk 'BEGIN { x = sprintf("%s %s", "a") }'; echo $?
+$ printf 'a b\n' | awk '{ printf "%s:%s\n", $2, $1; printf "%s\n", $0; printf "%d%%\n", 50 }'
+$ awk 'BEGIN { printf "%c%c%c\n", "ABC", 66, "" ; printf "[%3d][%-3d][%03d]\n", 1, 2, 3; printf "%.0f %.0f %.0f %.1f\n", 0.5, 1.5, 2.5, 0.25 }'
+$ awk 'BEGIN { OFS = "-"; ORS = "!\n"; print 1, 2; printf "%s %s\n", 3, 4; print }'
+$ awk 'BEGIN { printf "a\tb\n"; printf "%s", "no newline" }'
+
+# Regular expressions.
+$ awk 'BEGIN { print "a]b" ~ /a[\]]b/, "a-b" ~ /a[a\-z]b/, "a^b" ~ /a[\^]b/, "a/b" ~ /a[/]b/, "a\\b" ~ /a[\\]b/, "ab" ~ /a{1}b/, "a{b" ~ /a{b/, "x" ~ //, "a\nb" ~ /a.b/, "a\nb" ~ /^b/, "ab" ~ /\<ab\>/, "ab" ~ /a\yb/, "a b" ~ /a\sb/, "\b" ~ /\b/ }'
+$ awk 'BEGIN { print "a.b" ~ /a\.b/, "axb" ~ /a\.b/, "a/b" ~ /a\/b/, "a\tb" ~ /a\tb/, "aAb" ~ /a\101b/, "aAb" ~ /a\x41b/, "a+b" ~ /a\+b/, "aab" ~ /a+b/, "ab" ~ /a?b|c/, "abab" ~ /^(ab)+$/, "ab" ~ /^(ab){2}$/ }'
+$ awk 'BEGIN { print "x1" ~ /[[:digit:]]/, "x" ~ /[[:digit:]]/, "a b" ~ /[[:space:]]/, "AB" ~ /^[[:upper:]]+$/, "ab_1" ~ /^\w+$/, "a b" ~ /\W/, "a" ~ /[^a]/, "b" ~ /[^a]/, "-" ~ /[a-]/, "]" ~ /[]a]/, "x" ~ /[^]a]/ }'
+$ awk 'BEGIN { r = "^a.c$"; print "abc" ~ r, "abcd" ~ r, "abc" !~ r; r2 = "\\."; print "a.b" ~ r2, "ab" ~ r2; print "ab" ~ "a" "b", ("ab" ~ "a") "b" }'
+$ awk 'BEGIN { print "a\qb" ~ /a\qb/; print "a.b" ~ "a\.b" }'
+$ awk 'BEGIN { print "a" ~ /(/ }'; echo $?
+$ awk 'BEGIN { r = "("; print "a" ~ r }'; echo $?
+$ printf 'x\n' | awk '{ r = "["; if ($0 ~ r) print }'; echo $?
+$ printf 'foo\nbar\nfoobar\n' | awk '/foo/ && !/bar/ { print "1:" $0 } /^bar|bar$/ { print "2:" $0 } $0 ~ "o{2}" { print "3:" $0 } $1 !~ /^f/ { print "4:" $0 }'
+$ printf 'a/b\n' | awk '/\// { print "slash" } $0 ~ "/" { print "again" } { n = split($0, p, "/"); print n }'
+$ printf 'abc\n' | awk '{ print /b/ ? "y" : "n", /z/ + 0, !/z/, (/a/ && /c/), x = /b/ }'
+$ printf 'AbC\n' | awk 'tolower($0) ~ /abc/ { print "ci" } /abc/ { print "cs" }'
+$ awk 'BEGIN { print "ab" ~ /a|*b/ }' 2>&1 | head -n 3
+$ awk 'BEGIN { print match("aaa", /a*?/), "a{,2}" ~ /a{,2}/, "aa" ~ /^a{,2}$/, "a|b" ~ /a\|b/, "ab" ~ /a()b/ }'
+$ printf 'a.b\n' | awk -F. '{ print $1 } END { print "x.y" ~ FS }'
+
+# What is said about the program text.
+$ awk 'BEGIN { print ( }'; echo $?
+$ awk 'BEGIN { print 1 +* 2 }'; echo $?
+$ awk 'BEGIN { print 1; x = = 2 }'; echo $?
+$ awk 'BEGIN { print 1 == 1 == 1 }'; echo $?
+$ awk 'BEGIN { print "abc }'; echo $?
+$ awk 'BEGIN { print /abc }'; echo $?
+$ awk 'BEGIN'; echo $?
+$ awk '{ print $1 '; echo $?
+$ awk 'BEGIN { 1 + 2 = 3 }'; echo $?
+$ awk 'BEGIN { substr("a") }'; echo $?
+$ awk 'BEGIN { printf }'; echo $?
+$ awk '}'; echo $?
+
+# Not ASCII: refused when the line is reached.
+= printf 'plain\ncaf\303\251\nafter\n' | awk '{ print NR ": " $0 }'; echo $?
+> 1: plain
+2> awk: -: line 2: input that is not ASCII; this awk reads ASCII text only
+> 2
+= printf 'plain\n' > a; printf 'x\n\303\251\n' > b; awk 'END { print NR }' a b; echo $?
+2> awk: b: line 3: input that is not ASCII; this awk reads ASCII text only
+> 2
+$ printf 'plain\ncaf\303\251\n' | awk 'BEGIN { print "only BEGIN reads nothing" }'
+
+# Refused by name, before anything runs.
+! awk 'function f(x) { return x } BEGIN { print f(1) }' ## awk feature: user-defined functions
+! awk 'func f(x) { return x }' ## awk feature: user-defined functions
+! awk 'BEGIN { print f(1) }' ## awk feature: a call of f (user-defined functions)
+! awk 'BEGIN { getline x }' ## awk feature: getline
+! awk '{ while ((getline line < "f") > 0) n++ }' ## awk feature: getline
+! awk 'BEGIN { "date" | getline d }' ## awk feature: a pipe (|)
+! awk 'BEGIN { system("ls") }' ## awk function: system
+! awk '{ print > "out" }' ## awk feature: output redirection (>)
+! awk 'BEGIN { print 1 > 2 ? 3 : 4 }' ## awk feature: output redirection (>)
+! awk '{ print $1 > "out" }' ## awk feature: output redirection (>)
+! awk '{ print $1, $2 >> "out" }' ## awk feature: output redirection (>>)
+! awk '{ printf("%s\n", $1) > "out" }' ## awk feature: output redirection (>)
+! awk '{ print | "sort" }' ## awk feature: a pipe (|)
+! awk '{ print $1 | "sort" }' ## awk feature: a pipe (|)
+! awk 'BEGIN { exit 3 }' ## awk feature: exit
+! awk 'BEGIN { delete a[1] }' ## awk feature: delete
+! awk 'BEGIN { do x++; while (x < 3) }' ## awk feature: do ... while
+! awk '{ nextfile }' ## awk feature: nextfile
+! awk 'BEGIN { a[1,2] = 3 }' ## awk feature: an array with more than one subscript
+! awk 'BEGIN { if ((1,2) in a) print }' ## awk feature: (i, j) in array
+! awk 'BEGIN { print int(3.5) }' ## awk function: int
+! awk 'BEGIN { print sqrt(2), sin(1) }' ## awk function: sqrt
+! awk 'BEGIN { print gensub(/a/, "b", "g", "aa") }' ## awk function: gensub
+! awk 'BEGIN { print strftime() }' ## awk function: strftime
+! awk 'BEGIN { RS = ";" }' ## awk variable: RS
+! awk 'BEGIN { print ENVIRON["HOME"] }' ## awk variable: ENVIRON
+! awk 'BEGIN { print ARGC }' ## awk variable: ARGC
+! awk 'BEGIN { OFMT = "%.2f" }' ## awk variable: OFMT
+! awk 'BEGIN { IGNORECASE = 1 }' ## awk variable: IGNORECASE
+! awk -v RS=x '{ print }' ## awk variable: RS
+! awk 'BEGIN { match("a", /a/, m) }' ## awk feature: match with an array
+! awk 'BEGIN { split("a", a, "", seps) }' ## awk feature: split with an array for the separators
+! awk 'BEGIN { sub(/a/, "b", "abc") }' ## awk feature: sub or gsub on a value
+! awk 'BEGINFILE { print }' ## awk feature: BEGINFILE
+! awk '@include "x"' ## awk feature: @ directives
+! awk 'BEGIN { switch (x) { case 1: break } }' ## awk feature: switch
+! awk -f prog.awk ## flag: awk -f
+! awk --posix 1 ## flag: awk --posix
+! awk -e 'BEGIN { }' ## flag: awk -e
+! awk '{ print }' x=1 f ## awk feature: an assignment among the file names (x=1)
+! printf 'x\n' > made.txt; awk 'BEGIN { getline }' ## awk feature: getline
+
+# What a field or the record is after it was given a value.
+$ printf '2\n 3 \n4 5\n' | awk '{ NF = NF + 1; print ($0 == $1), ($0 == 2), ($0 < 10) }'
+$ printf '2\n 3 \n4 5\n' | awk '{ $1 = $1 + 0; print ($0 == $1), ($0 == 2.0), ($0 < 10), ($1 == 3.0), ($1 < 10) }'
+$ printf 'a b c\n3 4 5\n' | awk '{ $2 = u[1]; print ($2 < 0), ($2 == 0), ($2 == ""), ($2 >= 0); x = $2; print (x == 0) }'
+$ printf 'a b c\n3 4 5\n' | awk '{ $0 = u; print ($0 < 0), ($0 == 0), ($0 == ""), NF }'
+$ awk 'BEGIN { x = 2^1024; y = x - x; printf "%G %E %F %X %d %g %5.1G| %x %e %12G|\n", x, x, x, x, x, x, -x, x, x, y }'
+
+# In pipelines and loops; stopping early.
+$ seq 1 100000 | awk '{ print $1 * 2 }' | head -n 3
+$ seq 1 10 | awk '$1 % 2' | awk '{ s += $1 } END { print s }'
+$ seq 1 5 > n; for f in n n; do awk 'END { print NR }' $f; done; awk '{ s += $1 } END { print s }' < n
+$ seq 1 3 | awk '{ print $1 + 1 }' > out; cat out; awk '{ print $1 * 2 }' out >> out; cat out
+$ X=7; awk -v x=$X 'BEGIN { print x * 6 }'; echo "$(printf 'a b\n' | awk '{ print $2 }')"
+$ awk 'BEGIN { while (1) print "y" }' | head -n 2
+$ printf 'a b\n' | awk '{ print $2 }' - ; printf 'c d\n' | awk '{ print $1 }' /dev/null -
+$ awk 'BEGIN { print "to stderr" }' 2>&1 >/dev/null; awk 'BEGIN { print 1/x }' 2>/dev/null; echo $?

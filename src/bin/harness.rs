@@ -22,7 +22,7 @@ With no case files, runs every tests/cases/*.case.
   --seed N          seed for --fuzz (default 1)
   --gen FAMILY      instead of the cases: generated tests against the real
                     tools for one family of commands (shell, grep, sed,
-                    find, rg, text, ls, xargs, scripts, diff, or all), with --count cases
+                    find, rg, text, ls, xargs, scripts, diff, awk, or all), with --count cases
                     (default 10000) and --seed
   --coverage        print the coverage table without running the cases
   --list-failures   print one line per failure instead of full details

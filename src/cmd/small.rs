@@ -94,7 +94,7 @@ fn parse_float(a: &[u8]) -> (f64, bool) {
 }
 
 /// The digits of a float in one of C's styles, without sign.
-fn float_digits(v: f64, conv: u8, prec: Option<usize>, alt: bool) -> String {
+pub(super) fn float_digits(v: f64, conv: u8, prec: Option<usize>, alt: bool) -> String {
     let upper = conv.is_ascii_uppercase();
     if v.is_nan() || v.is_infinite() {
         let s = if v.is_nan() { "nan" } else { "inf" };
@@ -209,7 +209,7 @@ fn unescape(s: &[u8], in_arg: bool, out: &mut Vec<u8>) -> bool {
     true
 }
 
-fn pad(out: &mut Vec<u8>, prefix: &str, body: &[u8], width: usize, left: bool, zero: bool) {
+pub(super) fn pad(out: &mut Vec<u8>, prefix: &str, body: &[u8], width: usize, left: bool, zero: bool) {
     let len = prefix.len() + body.len();
     let fill = width.saturating_sub(len);
     if left {

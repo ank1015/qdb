@@ -310,7 +310,7 @@ $ mkdir $(echo n1 n2); ls -d n1 n2
 $ rm $(echo README.md notes.txt); ls
 $ echo $(echo $x)
 $ echo $(cd src)
-! echo "$(awk 1)" ## command: awk
+! echo "$(perl 1)" ## command: perl
 $ echo `cd x`
 ! ls; echo $(ls --frobnicate) ## flag: ls --frobnicate
 $ echo $((1+2))
@@ -442,16 +442,16 @@ $ echo a \⏎ > out.txt; cat out.txt
 
 # Still refused by name, inside a longer unit too: nothing runs.
 ! echo one > made.txt; cd - ## cd -
-! echo one > made.txt && awk 1 ## command: awk
+! echo one > made.txt && perl 1 ## command: perl
 ! echo one > made.txt; ls --frobnicate ## flag: ls --frobnicate
 ! rm README.md; for f; do ls; done ## for loop without `in'
 ! rm README.md⏎if ls; then ls --frobnicate; fi ## flag: ls --frobnicate
 ! rm README.md; x+=1 ## variable assignment
 ! rm README.md; echo ${x^^} ## parameter expansion
-! rm README.md; while false; do awk 1; done ## command: awk
+! rm README.md; while false; do perl 1; done ## command: perl
 ! rm README.md; for f in $(ls --frobnicate); do ls; done ## flag: ls --frobnicate
-! rm README.md; echo ${x:-$(awk 1)} ## command: awk
-! rm README.md; echo $(( $(awk 1) + 1 )) ## command: awk
+! rm README.md; echo ${x:-$(perl 1)} ## command: perl
+! rm README.md; echo $(( $(perl 1) + 1 )) ## command: perl
 ! rm README.md; ( ls ) ## subshell
 ! rm README.md; { ls; } ## group command
 $ rm README.md; ! ls; echo $?

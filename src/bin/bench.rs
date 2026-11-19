@@ -39,6 +39,8 @@ Times a list of commands on the real GNU tools and on the engine.
   --paired          instead of the usual run: time each read-only command on
                     the engine alone, with searches using the index and
                     ignoring it by turns in one process
+  --paired-counting the same, with the counting of costs on and off by
+                    turns; stored as LABEL-counting
   --commands FILE   the command list (default bench/commands.txt)
   --reps N          timed runs per read-only command (default 5; fewer
                     for commands that take longer than 0.3 s)
@@ -698,6 +700,8 @@ struct Options {
     label: String,
     index: bool,
     paired: bool,
+    /// With `paired`: what is switched is the counting of costs.
+    counting: bool,
     filter: Option<String>,
     db: Option<PathBuf>,
     sync: SyncMode,
@@ -1112,7 +1116,8 @@ fn bench(name: &str, source: &str, opts: &Options) -> Result<bool, String> {
 /// memory happens to land, mostly), so a difference that small can only be
 /// seen this way.
 fn paired(name: &str, db: &mut Db, terms: &Terms, templates: &[(String, bool)], opts: &Options) -> Result<bool, String> {
-    let mut csv = String::from("command,ignored_ms,used_ms,ratio\n");
+    let mut csv = String::from(if opts.counting { "command,off_ms,on_ms,ratio\n" } else { "command,ignored_ms,used_ms,ratio\n" });
+    let switch = |db: &mut Db, on: bool| if opts.counting { qdb::tree::set_counting(on) } else { db.set_index_consulted(on) };
     for (template, mutating) in templates {
         let command = match terms.fill(template) {
             Some(c) if !mutating => c,
@@ -1133,19 +1138,19 @@ fn paired(name: &str, db: &mut Db, terms: &Terms, templates: &[(String, bool)], 
         for i in 0..pairs * 2 {
             // Alternate which goes first.
             let consult = (i % 2 == 0) == (i % 4 < 2);
-            db.set_index_consulted(consult);
+            switch(db, consult);
             let t = engine_run(db, &command, false).time;
             if consult { used.push(t) } else { ignored.push(t) }
         }
-        db.set_index_consulted(true);
+        switch(db, true);
         let (u, i) = (millis(median(used)), millis(median(ignored)));
-        eprintln!("  {:>10} ignored {:>10} used  {:>5.2}  {}", ms(i), ms(u), u / i.max(1e-9), command);
+        eprintln!("  {:>10} {} {:>10} {}  {:>5.2}  {}", ms(i), if opts.counting { "off" } else { "ignored" }, ms(u), if opts.counting { "on" } else { "used" }, u / i.max(1e-9), command);
         let _ = writeln!(csv, "{},{:.5},{:.5},{:.3}", csv_field(&command), i, u, u / i.max(1e-9));
     }
     if opts.filter.is_none() {
         let dir = opts.out.join(name);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        std::fs::write(dir.join(format!("{}.csv", opts.label)), csv).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join(format!("{}{}.csv", opts.label, if opts.counting { "-counting" } else { "" })), csv).map_err(|e| e.to_string())?;
     }
     Ok(true)
 }
@@ -1366,6 +1371,7 @@ fn run() -> Result<bool, String> {
         label: "dev".into(),
         index: true,
         paired: false,
+        counting: false,
         filter: None,
         db: None,
         sync: SyncMode::Always,
@@ -1390,6 +1396,10 @@ fn run() -> Result<bool, String> {
             "--export" => export = Some(value("--export")?.into()),
             "--report" => report_only = true,
             "--paired" => opts.paired = true,
+            "--paired-counting" => {
+                opts.paired = true;
+                opts.counting = true;
+            }
             "--db" => opts.db = Some(value("--db")?.into()),
             "--sync" => {
                 opts.sync = match value("--sync")?.as_str() {

@@ -142,7 +142,7 @@ $ find . -exec echo {}
 $ find . -exec echo {} x +
 $ find . -exec \;
 $ find . -name '*.c' -exec echo {} \; -o -name '*.h' -exec echo header {} \;
-! find . -exec awk 1 {} \; ## command: awk
+! find . -exec perl 1 {} \; ## command: perl
 ! find . -exec cd {} \; ## command: cd
 ! find . -exec ls --color {} \; ## long options
 ! find . -delete ## flag: find -delete

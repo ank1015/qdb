@@ -150,6 +150,32 @@ cat <<EOF⏎one $(echo two)⏎three⏎EOF
 wc -l <<'EOF'⏎a⏎b⏎EOF
 echo one \⏎two
 grep -c kadifo src/main.c⏎wc -l src/main.c
+for i in $(seq 100000); do :; done
+i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done; echo $i
+i=10; until [ $i -eq 0 ]; do i=$((i-1)); done; echo $i
+for f in src/*.c; do echo "$f"; done | wc -l
+for f in src/*.c; do grep -c kadifo "$f"; done | sort -n | tail -n 3
+n=0; for f in src/*.c; do if grep -q zealto "$f"; then n=$((n+1)); fi; done; echo $n
+for f in src/*.c; do if [ -s "$f" ]; then continue; fi; echo "$f"; done
+H=$PWD; for d in src/mod_01 docs/mod_01/mod_02 src; do cd "$d"; ls | wc -l; cd "$H"; done
+X=kadifo; N=$(grep -c "$X" src/main.c); echo "$X: $((N * 2)) ${#X} ${N:-none}"
+find docs/mod_01/mod_02 -name '*.c' | while read -r f; do wc -l < "$f"; done | sort -n | tail -n 1
+for f in src/*.c; do head -n 1 "$f"; done > /dev/null
+for i in 1 2 3; do for j in a b; do if [ $i -eq 2 ]; then break; fi; echo $i$j; done; done
+awk '{ print $2 }' src/main.c
+awk '{ print $2 }' src/*.c | wc -l
+awk '/kadifo/ { n++ } END { print n }' src/*.c
+awk '{ s += NF } END { print s, NR }' src/*.c
+awk -F: '{ s += $3 } END { print s }' src/*.c
+awk 'FNR == 1 { print FILENAME }' src/*.c | wc -l
+awk 'length($0) > 100 { n++ } END { print n + 0 }' src/*.c
+awk '{ c[$1]++ } END { for (k in c) n++; print n }' src/*.c
+awk '{ for (i = 1; i <= NF; i++) if ($i == "kadifo") n++ } END { print n }' src/*.c
+awk '{ gsub(/[0-9]+/, "N"); print }' src/main.c | wc -c
+awk -v OFS=- '{ $1 = NR; print }' src/main.c | tail -n 1
+awk 'BEGIN { for (i = 0; i < 100000; i++) s += i * i; printf "%d\n", s }'
+grep -rn cojokane . | awk -F: '{ print $1 }' | uniq -c | sort -rn | head -n 5
+cat src/*.c | awk 'NF > 3 { print $1, $NF }' | sort | uniq -c | sort -rn | head -n 5
 mkdir -p bench_out/a/b
 touch bench_out/empty.txt
 echo 'hello world' > bench_out/hello.txt
@@ -178,6 +204,22 @@ cp bench_out/joined.txt bench_out/joined2.txt
 sed -i '1d' bench_out/joined2.txt
 wc -c bench_out/joined.txt bench_out/joined2.txt bench_out/tee.txt bench_out/sorted.txt
 cat bench_out/both.txt
+cp src/main.c bench_out/v2.txt
+sed -i -e '10s/$/ changed/' -e '40,45d' -e '100i an added line' bench_out/v2.txt
+diff -u --label old --label new src/main.c bench_out/v2.txt
+diff src/main.c bench_out/v2.txt | wc -l
+diff -q src/main.c bench_out/same.txt
+diff -u src/main.c bench_out/copy.txt | wc -l
+diff -rq src/mod_01 bench_out/dir_copy
+sed -i '1s/^/one edit /' $(find bench_out/dir_copy -type f | sort | head -n 1)
+diff -rq src/mod_01 bench_out/dir_copy
+diff -r src bench_out/work | wc -l
+diff -ru src bench_out/work | grep -c '^@@'
+for i in $(seq 10000); do echo "line $i" >> bench_out/loop.txt; done
+wc -l bench_out/loop.txt
+for f in bench_out/work/*.c; do echo done >> "$f"; done
+awk '{ print NR ": " $0 }' src/main.c > bench_out/numbered.txt
+awk 'END { print NR }' bench_out/numbered.txt
 mv bench_out/dir_copy bench_out/dir_moved
 mv bench_out/hello.txt bench_out/a/b
 ls -R bench_out/a

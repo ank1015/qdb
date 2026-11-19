@@ -31,6 +31,9 @@ const STEP_LIMIT: usize = 20_000_000;
 pub enum Flavor {
     Grep,
     Sed,
+    /// GNU awk: grep's reading, and a newline is a character like any
+    /// other for `.` and for a negated set.
+    Awk,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -299,7 +302,7 @@ impl<'a> Parser<'a> {
 
     fn parse_branch(&mut self, depth: usize) -> PResult<Node> {
         let ere = self.ere();
-        let grep = self.syn.flavor == Flavor::Grep;
+        let grep = self.syn.flavor != Flavor::Sed;
         let mut items: Vec<Node> = Vec::new();
         // `fresh`: nothing but anchors so far in this branch.
         // `after_anchor`: the previous item was an anchor.
@@ -500,7 +503,7 @@ impl<'a> Parser<'a> {
     /// means the brace is not an interval and GNU grep -E takes it as a
     /// literal character.
     fn parse_interval(&mut self) -> PResult<Option<(u32, Option<u32>)>> {
-        let literal_ok = self.ere() && self.syn.flavor == Flavor::Grep;
+        let literal_ok = self.ere() && self.syn.flavor != Flavor::Sed;
         let bad_content = || "Invalid content of \\{\\}".to_string();
         let (mut start, mut stop) = self.interval_number();
         if start == -1 {
@@ -573,7 +576,8 @@ impl<'a> Parser<'a> {
             }
             b'.' => {
                 self.i += 1;
-                Ok((Node::Set(set_of(|b| b != b'\n')), false))
+                let awk = self.syn.flavor == Flavor::Awk;
+                Ok((Node::Set(set_of(|b| awk || b != b'\n')), false))
             }
             b'[' => {
                 self.i += 1;
@@ -703,11 +707,12 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        let set_had_newline = set[b'\n' as usize];
         if negate {
             for b in set.iter_mut() {
                 *b = !*b;
             }
-            set[b'\n' as usize] = false;
+            set[b'\n' as usize] = self.syn.flavor == Flavor::Awk && !set_had_newline;
         }
         Ok(set)
     }

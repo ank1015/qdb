@@ -55,7 +55,7 @@ $ for f in a b; do if [ $f = a ]; then echo first; else echo other; fi; done
 ! for f; do echo x; done ## for loop without `in'
 ! for f do echo x; done ## for loop without `in'
 ! for ((i=0;i<2;i++)); do echo; done ## arithmetic for loop
-! for f in a; do awk 1; done ## command: awk
+! for f in a; do perl 1; done ## command: perl
 ! for f in a; do ls --frobnicate; done ## flag: ls --frobnicate
 ! for f in a; echo; done ## syntax error
 ! for f in a; do done ## syntax error
@@ -104,9 +104,9 @@ $ if echo cond; then echo body; fi
 ! fi ## syntax error
 ! then echo; fi ## syntax error
 ! else echo; fi ## syntax error
-! if true; then awk 1; fi ## command: awk
-! if awk 1; then echo; fi ## command: awk
-! if true; then echo; elif awk; then echo; fi ## command: awk
+! if true; then perl 1; fi ## command: perl
+! if perl 1; then echo; fi ## command: perl
+! if true; then echo; elif perl; then echo; fi ## command: perl
 ! if true; then echo; else ls --frobnicate; fi ## flag: ls --frobnicate
 
 # while and until
@@ -130,7 +130,7 @@ $ i=0; until [ -f made.txt ]; do i=$((i+1)); if [ $i -eq 3 ]; then touch made.tx
 ! while true; echo; done ## syntax error
 ! while; do echo; done ## syntax error
 ! until true; do done ## syntax error
-! while awk 1; do echo; done ## command: awk
+! while perl 1; do echo; done ## command: perl
 
 # break and continue
 $ for i in 1 2 3 4; do if [ $i = 3 ]; then break; fi; echo $i; done; echo after $i
@@ -260,18 +260,18 @@ $ echo x | while read L; do false; done; echo $?
 
 # What the text shows is checked before anything runs; what only an
 # expansion shows is refused when it is reached, and what ran stays.
-! rm README.md; for f in a; do awk 1; done ## command: awk
+! rm README.md; for f in a; do perl 1; done ## command: perl
 ! rm README.md; if false; then ls --frobnicate; fi ## flag: ls --frobnicate
-= echo kept > made.txt; X=awk; $X 1; echo not reached
-2> qdb: unsupported command: awk
+= echo kept > made.txt; X=perl; $X 1; echo not reached
+2> qdb: unsupported command: perl
 ? 2
 + cat made.txt
 = echo kept > made.txt; X=--frobnicate; ls $X; echo not reached
 2> qdb: unsupported flag: ls --frobnicate (long options other than the ones listed in the README are not supported)
 ? 2
 + cat made.txt
-= for f in a b c; do echo $f > $f.txt; X=${X}x; if [ $X = xx ]; then $(echo awk) 1; fi; done
-2> qdb: unsupported command: awk
+= for f in a b c; do echo $f > $f.txt; X=${X}x; if [ $X = xx ]; then $(echo perl) 1; fi; done
+2> qdb: unsupported command: perl
 ? 2
 + ls *.txt
 = X=-; cd $X

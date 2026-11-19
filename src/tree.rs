@@ -414,9 +414,22 @@ struct UnitStart {
     at: std::time::Instant,
 }
 
+/// Whether costs are counted. Always on, except while the cost of
+/// counting itself is being measured: see `set_counting`.
+static COUNTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 #[inline]
 fn bump(c: &Cell<u64>, by: u64) {
-    c.set(c.get() + by);
+    if COUNTING.load(std::sync::atomic::Ordering::Relaxed) {
+        c.set(c.get() + by);
+    }
+}
+
+/// Turn the counting of costs off or on again, for measuring what the
+/// counting itself costs, both ways in one process. While it is off,
+/// units report nothing: no counters, no clocks read, no memory mark.
+pub fn set_counting(on: bool) {
+    COUNTING.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// What opening a database found and did.
@@ -1690,6 +1703,10 @@ impl Db {
     /// more is written, and what commands report is not to be relied on.
     /// Where output bound for a file may wait: see `engine::Spool`.
     pub fn begin_unit(&mut self) {
+        if !COUNTING.load(std::sync::atomic::Ordering::Relaxed) {
+            self.unit = None;
+            return;
+        }
         self.unit = Some(UnitStart { reads: self.reads(), io: self.io, live: crate::mem::mark(), cpu: crate::mem::cpu_ns(), at: std::time::Instant::now() });
     }
 

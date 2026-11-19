@@ -167,6 +167,11 @@ pub fn check_safe(command: &str, root: &Path) -> Result<(), String> {
         // An rg glob is not a path either.
         let is_rg = c.words.first().is_some_and(|w| w.text() == b"rg");
         let mut glob_next = false;
+        // An awk program is not a path; the cases keep its text free of
+        // anything that writes or runs commands.
+        let is_awk = c.words.first().is_some_and(|w| w.text() == b"awk");
+        let mut seen_program = false;
+        let mut value_next = false;
         // The value of a variable may be used as a path later.
         let values = c.assigns.iter().filter(|a| a.name != b"IFS").map(|a| &a.value);
         // `~` is the root, and a word that begins with a variable is
@@ -195,6 +200,17 @@ pub fn check_safe(command: &str, root: &Path) -> Result<(), String> {
                 if (w.starts_with(b"-g") && !w.starts_with(b"--")) || w.starts_with(b"--glob=") {
                     continue;
                 }
+            }
+            if is_awk && !seen_program {
+                // Options and their values, then the program: none is a path.
+                if value_next {
+                    value_next = false;
+                } else if w == b"-F" || w == b"-v" {
+                    value_next = true;
+                } else if !w.starts_with(b"-") || w == b"-" {
+                    seen_program = true;
+                }
+                continue;
             }
             if is_sed {
                 let is_script = if script_next {
@@ -277,6 +293,20 @@ fn mask_owner(out: &[u8]) -> Vec<u8> {
     masked
 }
 
+/// PATH and LD_LIBRARY_PATH for the real tools. The reference awk is GNU
+/// awk, which Ubuntu does not install: `bench/fetch.sh` unpacks its
+/// package under `../qdb-data/gawk` (or the folder `QDB_GAWK` names), and
+/// that folder's `bin/awk` goes first when it is there.
+pub fn real_path() -> (String, String) {
+    let dir = std::env::var("QDB_GAWK").unwrap_or_else(|_| "../qdb-data/gawk".to_string());
+    match std::fs::canonicalize(&dir) {
+        Ok(d) if d.join("bin/awk").exists() => {
+            (format!("{}/bin:/usr/bin:/bin", d.display()), format!("{}/root/usr/lib/x86_64-linux-gnu", d.display()))
+        }
+        _ => ("/usr/bin:/bin".to_string(), String::new()),
+    }
+}
+
 /// Run a command line with the real tools: bash, in the C locale, with
 /// `root` as the working directory and no standard input. The root's path
 /// is removed from the output, and bash's own error prefix is replaced by
@@ -288,7 +318,8 @@ pub fn run_real(root: &Path, command: &str) -> Outcome {
         .args(["-k", "2", "60", "bash", "--noprofile", "--norc", "-c", command])
         .current_dir(root)
         .env_clear()
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", real_path().0)
+        .env("LD_LIBRARY_PATH", real_path().1)
         .env("LC_ALL", "C")
         .env("TZ", "UTC")
         .env("HOME", root)
@@ -393,7 +424,8 @@ pub fn helper() {
             .args(["--noprofile", "--norc", "-c", &command])
             .current_dir(&root)
             .env_clear()
-            .env("PATH", "/usr/bin:/bin")
+            .env("PATH", real_path().0)
+            .env("LD_LIBRARY_PATH", real_path().1)
             .env("LC_ALL", "C")
             .stdin(Stdio::null())
             .stdout(stdout)

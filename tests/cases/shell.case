@@ -162,7 +162,7 @@ $ # only a comment
 
 # Unknown commands, flags and syntax are rejected by name, and nothing
 # on the line runs.
-! awk '{print $1}' README.md ## command: awk
+! perl '{print $1}' README.md ## command: perl
 $ sort README.md
 $ uniq README.md
 $ cut -c1 README.md
@@ -190,7 +190,7 @@ $ du -sh .
 ! "" ## command: 
 $ cat README.md | sort
 $ mkdir shouldnotexist | sort
-! rm README.md | awk x ## command: awk
+! rm README.md | perl x ## command: perl
 ! echo hi > x.txt | nosuch ## command: nosuch
 $ echo $HOME
 $ echo "$HOME"

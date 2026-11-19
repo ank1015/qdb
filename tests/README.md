@@ -85,7 +85,7 @@ environment, `LC_ALL=C` and no standard input. The harness refuses any
 command whose paths could leave the scratch directory.
 
 The expected results were produced with bash 5.2.21, grep 3.11, sed 4.9,
-coreutils 9.4 and findutils 4.9.0. Other versions word some messages
+coreutils 9.4, findutils 4.9.0, diffutils 3.10 and GNU awk 5.2.1. Ubuntu's own awk is mawk, so `bench/fetch.sh` unpacks the gawk package beside the datasets (`../qdb-data/gawk`, or the folder `QDB_GAWK` names) and the harness puts it first on the real side's PATH; without it the awk cases compare against mawk and many fail. Other versions word some messages
 differently, so a handful of error cases can fail on them.
 
 ## Index on against index off (`--diff`)
@@ -166,6 +166,7 @@ F path/to/file          a file; its lines follow
 | `small.case` | `printf`, `test` and `[`, `seq`, `basename`, `dirname`, `true`, `false`, `:`, `sleep` |
 | `session.case` | variables, the parameter forms, arithmetic, tilde, field splitting, `cd` and `pwd`, `export`, `unset` |
 | `control.case` | `for`, `if`, `while`, `until`, `break`, `continue`, `read`, constructs in pipelines and under redirections, the command limit, and what `xargs` and `find -exec` refuse to run |
+| `awk.case` | `awk` against GNU awk 5.2.1: program shapes, fields, numbers and strings, the functions, printf, regular expressions, what is refused |
 | `diff.case` | `diff`: both formats, folders, the ignore flags, labels, standard input, and every message |
 | `p5_text.case`, `p5_sort.case`, `p5_sys.case` | `cut`, `tr`, `uniq`, `nl`, `tee`; `sort`; `du`, `date`, `xargs` |
 
@@ -195,12 +196,14 @@ row, and fails if a row has none. `--coverage` prints the table alone.
 ## Generated tests against the real tools (`--gen FAMILY`)
 
 `src/testgen.rs` writes random command lines over a small generated tree
-for ten families: `shell`, `grep`, `sed`, `find`, `rg`, `text` (sort,
+for eleven families: `shell`, `grep`, `sed`, `find`, `rg`, `text` (sort,
 uniq, cut, tr, nl, seq, printf), `ls` (ls and du), `xargs`, `scripts`
 (variables, arithmetic, `for`, `while`, `until`, `if`, `read` loops,
 nested, piped and redirected) and `diff` (versions of one file changed
 in a few places, folders with files on one side only, a file against a
-folder, every flag). Each line
+folder, every flag) and `awk` (programs built from the whole supported
+language over files of numbers written every way awk has a rule for;
+programs that walk an array are piped through `sort`). Each line
 runs on the real tool and on the engine and everything is compared, as
 for a hand-written case.
 

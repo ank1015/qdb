@@ -321,6 +321,12 @@ fn bigfile(opts: &Options) -> Result<bool, String> {
         (format!("cat big.txt | rg -j 1 -n {}", RARE), false),
         ("grep -c ing - < big.txt".into(), false),
         ("cat big.txt | sort --parallel=1 - | tail -n 1".into(), false),
+        // awk over the whole file, against GNU awk.
+        ("awk '{print $2}' big.txt | tail -n 2".into(), false),
+        ("awk -F: '{s+=$3} END {print s}' big.txt".into(), false),
+        ("awk '{s+=$1} END {print s}' big.txt".into(), false),
+        ("awk '/[a-z]+ing / {n++} END {print n}' big.txt".into(), false),
+        ("awk '{n[length($2)]++} END {for (k in n) print k, n[k]}' big.txt | sort -n | tail -n 3".into(), false),
         ("echo 'one more line at the end' >> big.txt".into(), true),
         ("echo 'and a second one' >> big.txt".into(), true),
         ("echo 'and a third' >> big.txt".into(), true),
@@ -332,6 +338,12 @@ fn bigfile(opts: &Options) -> Result<bool, String> {
         ("cat big.txt > cat.txt".into(), true),
         ("grep -c e cat.txt".into(), false),
         ("tail -n 1 copy.txt".into(), false),
+        // diff of the file with a copy that differs in one line.
+        ("diff big.txt copy.txt".into(), false),
+        ("sed -i '100000s/$/ and one changed line/' copy.txt".into(), true),
+        ("diff big.txt copy.txt".into(), false),
+        ("diff -u big.txt copy.txt | wc -l".into(), false),
+        ("diff -q big.txt copy.txt".into(), false),
         ("rm copy.txt cat.txt".into(), true),
     ];
     let mut rows = String::from("command,kind,gnu_ms,engine_ms,engine_peak_bytes,disk_bytes_written,syncs,agree\n");
