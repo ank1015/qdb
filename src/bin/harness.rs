@@ -1957,10 +1957,13 @@ fn counters(update: bool) -> Result<bool, String> {
         if first[i] != second[i] && reads_ahead(unit) {
             continue;
         }
-        if first[i] != second[i] {
+        // With several threads, memory is what the unit's own thread held,
+        // which depends on how the work fell between threads.
+        let cols = if THREADED.load(std::sync::atomic::Ordering::Relaxed) { 10 } else { 11 };
+        if first[i][..cols] != second[i][..cols] {
             differing += 1;
             ok = false;
-            for k in 0..11 {
+            for k in 0..cols {
                 if first[i][k] != second[i][k] {
                     fail_line!("FAIL  counters: {} was {} in one run and {} in the next: {}", names[k], first[i][k], second[i][k], unit);
                 }
