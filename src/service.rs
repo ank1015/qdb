@@ -756,7 +756,13 @@ pub fn serve(svc: Arc<Service>, listener: TcpListener) {
                     svc.connections.fetch_sub(1, Relaxed);
                 }
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(2)),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                // Until a connection comes, or a while to look at stopping.
+                use std::os::unix::io::AsRawFd;
+                let mut p = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+                // SAFETY: poll on the listening socket, which lives through the call.
+                unsafe { libc::poll(&mut p, 1, 50) };
+            }
             Err(e) => {
                 log(&format!("accept failed: {}", e));
                 std::thread::sleep(Duration::from_millis(50));
