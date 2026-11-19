@@ -177,7 +177,7 @@ $ test -f README.md
 $ [ -f README.md ]
 $ true
 $ printf hi
-! diff a b ## command: diff
+! patch a b ## command: patch
 ! less README.md ## command: less
 ! chmod +x README.md ## command: chmod
 ! ln -s a b ## command: ln
@@ -262,7 +262,7 @@ $ if ls; then ls; fi
 ! for ((i=0; i<3; i++)); do echo x; done ## arithmetic for loop
 ! ((1 + 2)) ## arithmetic command
 ! { ls; } ## group command
-! ! ls ## pipeline negation
+$ ! ls src; echo $?
 ! f() { ls; } ## function definition
 ! case x in x) ls;; esac ## case statement
 ! select x in a b; do ls; done ## select statement
@@ -273,7 +273,7 @@ $ if ls; then ls; fi
 ! (ls) ## subshell
 ! (( 1 + 2 )) ## arithmetic command
 ! [[ -f README.md ]] ## [[ conditional ]]
-! ! ls ## pipeline negation
+$ ! ls nowhere; echo $?
 ! time ls ## time keyword
 ! coproc ls ## coprocess
 $ echo {a,b}

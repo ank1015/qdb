@@ -166,6 +166,7 @@ F path/to/file          a file; its lines follow
 | `small.case` | `printf`, `test` and `[`, `seq`, `basename`, `dirname`, `true`, `false`, `:`, `sleep` |
 | `session.case` | variables, the parameter forms, arithmetic, tilde, field splitting, `cd` and `pwd`, `export`, `unset` |
 | `control.case` | `for`, `if`, `while`, `until`, `break`, `continue`, `read`, constructs in pipelines and under redirections, the command limit, and what `xargs` and `find -exec` refuse to run |
+| `diff.case` | `diff`: both formats, folders, the ignore flags, labels, standard input, and every message |
 | `p5_text.case`, `p5_sort.case`, `p5_sys.case` | `cut`, `tr`, `uniq`, `nl`, `tee`; `sort`; `du`, `date`, `xargs` |
 
 ## Clock and file times
@@ -194,8 +195,12 @@ row, and fails if a row has none. `--coverage` prints the table alone.
 ## Generated tests against the real tools (`--gen FAMILY`)
 
 `src/testgen.rs` writes random command lines over a small generated tree
-for eight families: `shell`, `grep`, `sed`, `find`, `rg`, `text` (sort,
-uniq, cut, tr, nl, seq, printf), `ls` (ls and du) and `xargs`. Each line
+for ten families: `shell`, `grep`, `sed`, `find`, `rg`, `text` (sort,
+uniq, cut, tr, nl, seq, printf), `ls` (ls and du), `xargs`, `scripts`
+(variables, arithmetic, `for`, `while`, `until`, `if`, `read` loops,
+nested, piped and redirected) and `diff` (versions of one file changed
+in a few places, folders with files on one side only, a file against a
+folder, every flag). Each line
 runs on the real tool and on the engine and everything is compared, as
 for a hand-written case.
 
@@ -218,4 +223,9 @@ deterministic on the real side: only the last command of a pipeline
 writes a file or standard error, and `find -size` is asked only of
 files. Where the real tool prints in directory order (`find`, `grep -r`,
 `du`, `rg` without `--sort path`) the lines are compared as a sorted set.
+
+A generated loop steps its counter first, so it ends in bash too, and
+the real side runs under `timeout`. Loops are not piped into `head`
+(bash may or may not have run one more turn when the pipe closes), and
+a nested construct never redirects to the file an outer one writes.
 

@@ -454,7 +454,7 @@ $ echo a \⏎ > out.txt; cat out.txt
 ! rm README.md; echo $(( $(awk 1) + 1 )) ## command: awk
 ! rm README.md; ( ls ) ## subshell
 ! rm README.md; { ls; } ## group command
-! rm README.md; ! ls ## pipeline negation
+$ rm README.md; ! ls; echo $?
 ! rm README.md; ls ~root ## tilde expansion
 ! rm README.md; [[ -f x ]] ## [[ conditional ]]
 ! rm README.md; ls & ## background jobs

@@ -315,3 +315,47 @@ $ ls src | while read f; do echo $f; done | xargs echo
 = until false; do true; done | cat
 2> qdb: the unit was stopped after 1000000 commands, the most one unit may run; what it changed before that stays
 ? 3
+
+# `!` before a pipeline turns its status round.
+$ ! true; echo $?
+$ ! false; echo $?
+$ ! ! false; echo $?
+$ ! cat README.md | grep -q nothing-like-this; echo $?
+$ ! grep -q fn src/main.rs && echo absent || echo present
+$ if ! grep -q zzzz README.md; then echo no; else echo yes; fi
+$ if ! test -f README.md; then echo no; else echo yes; fi
+$ while ! false; do echo once; break; done
+$ until ! false; do echo never; done; echo $?
+$ for f in README.md nowhere; do ! test -f $f; echo $?; done
+$ X=0; while ! [ $X -ge 3 ]; do X=$((X+1)); done; echo $X
+$ ! cat nowhere; echo $?
+$ true && ! false && echo both
+$ echo ! a !
+! ! ## with no command after it
+! ! ; ls ## with no command after it
+! ls && ! ## with no command after it
+
+# A loop that is a stage of a pipeline counts loops from itself; one in
+# `$(...)` or under a redirection counts the loops around it too.
+$ for i in 1; do printf 'a\nb x\nc\nd\n' | while read a b; do if [ -n "$b" ]; then continue 2; fi; echo "got $a"; done; echo after; done
+$ for i in 1 2; do printf 'a\nb x\nc\n' | while read a b; do if [ -n "$b" ]; then break 2; fi; echo "got $a"; done; echo after; done
+$ for i in 1 2; do for j in 1 2 3; do if [ $j = 2 ]; then continue 2; fi; echo $i$j; done | cat; echo after; done
+$ for i in 1 2; do echo $(for j in 1 2 3; do if [ $j = 2 ]; then continue 2; fi; echo $i$j; done); echo after; done
+$ for i in 1 2; do for j in 1 2 3; do if [ $j = 2 ]; then continue 2; fi; echo $i$j; done > o.txt; echo after; done; cat o.txt
+$ for i in 1 2; do for j in 1 2 3; do if [ $j = 2 ]; then break 2; fi; echo $i$j; done >> o.txt; echo after; done; cat o.txt
+
+# `$?` is a substitution's status as soon as it has run.
+$ false; echo $(true) $?
+$ true; echo $(false) $?; echo $?
+$ false; for i in $(echo 1); do echo $?; done
+$ true; echo $(false)$? $(true)$?
+$ false; echo "$(true)" $?
+
+# Errors and output of the commands in a construct keep their order
+# when both go one way.
+$ for f in README.md nowhere src; do grep -c fn $f; done 2>&1 | cat
+$ for f in nowhere README.md; do cat $f | head -n 1; echo next; done > both.txt 2>&1; cat both.txt
+$ if true; then ls nowhere; echo after; ls src | head -n 1; fi 2>&1 | cat
+
+# Only what the shell itself writes ends a loop whose reader has gone.
+$ for f in a b c d e; do echo $f >> seen.txt; cat README.md; done | head -n 1; cat seen.txt

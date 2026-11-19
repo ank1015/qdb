@@ -76,7 +76,7 @@ fn strip_root(hay: &[u8], root: &[u8]) -> Vec<u8> {
 }
 
 /// bash's own messages begin `bash: line N: `; the engine's begin `qdb: `.
-fn bash_prefix(hay: &[u8]) -> Vec<u8> {
+pub fn bash_prefix(hay: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(hay.len());
     let mut i = 0;
     while i < hay.len() {
@@ -282,8 +282,10 @@ fn mask_owner(out: &[u8]) -> Vec<u8> {
 /// is removed from the output, and bash's own error prefix is replaced by
 /// the engine's, so the result can be compared with the engine's.
 pub fn run_real(root: &Path, command: &str) -> Outcome {
-    let out = Command::new("bash")
-        .args(["--noprofile", "--norc", "-c", command])
+    // Under `timeout`, so that a case whose loop never ends shows as a
+    // difference (status 124) and does not hold the run for ever.
+    let out = Command::new("timeout")
+        .args(["-k", "2", "60", "bash", "--noprofile", "--norc", "-c", command])
         .current_dir(root)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -294,7 +296,8 @@ pub fn run_real(root: &Path, command: &str) -> Outcome {
         .output()
         .expect("cannot run bash");
     let root_bytes = root.to_string_lossy().into_owned().into_bytes();
-    let stdout = strip_root(&out.stdout, &root_bytes);
+    // bash's messages reach standard output too, after `2>&1`.
+    let stdout = bash_prefix(&strip_root(&out.stdout, &root_bytes));
     let stderr = strip_root(&out.stderr, &root_bytes);
     let stderr = bash_prefix(&stderr);
     // What the data model has no fact for is fixed on the engine's side;

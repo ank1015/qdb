@@ -178,6 +178,8 @@ impl Command {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Pipeline {
     pub commands: Vec<Command>,
+    /// `!` stood before it: its status is turned round.
+    pub negated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,7 +322,7 @@ const RESERVED: &[(&str, &str)] = &[
     ("coproc", "coprocess"),
     ("{", "group command { ...; }"),
     ("}", "group command { ...; }"),
-    ("!", "pipeline negation (!)"),
+    ("!", "`!' with no command after it"),
     ("[[", "[[ conditional ]]"),
 ];
 
@@ -553,6 +555,19 @@ impl<'a> Parser<'a> {
 
     // pipeline := ['!'] command ( '|' command )*
     fn parse_pipeline(&mut self) -> Result<Pipeline, ParseError> {
+        let mut negated = false;
+        loop {
+            self.skip_blanks();
+            if self.peek() == Some(b'!') && matches!(self.peek_at(1), Some(b' ' | b'\t')) {
+                negated = !negated;
+                self.i += 1;
+            } else {
+                break;
+            }
+        }
+        if negated && matches!(self.peek(), None | Some(b'\n' | b';' | b'&' | b'|' | b')')) {
+            return unsupported("`!' with no command after it");
+        }
         let mut commands = vec![self.parse_command()?];
         loop {
             self.skip_blanks();
@@ -566,7 +581,7 @@ impl<'a> Parser<'a> {
             self.skip_blanks_and_newlines();
             commands.push(self.parse_command()?);
         }
-        Ok(Pipeline { commands })
+        Ok(Pipeline { commands, negated })
     }
 
     /// The keyword at this place, if the token here is one: unquoted and

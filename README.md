@@ -51,7 +51,7 @@ cargo build --release
 ./target/release/qdb --db my.qdb --check --stats
 ./target/release/qdb --db my.qdb --compact
 
-# compare the engine with the real tools (5,281 cases): in memory, on
+# compare the engine with the real tools (5,452 cases): in memory, on
 # disk, and on disk closed and opened again after every step
 ./target/release/qdb-harness
 ./target/release/qdb-harness --no-index
@@ -154,7 +154,7 @@ line; an index file per data file; a checkpoint of the tree.
 
 ## What is supported
 
-Thirty-four commands. Short flags combine (`ls -ltR`, `grep -rin`), and
+Thirty-five commands. Short flags combine (`ls -ltR`, `grep -rin`), and
 the long forms listed are accepted too.
 
 | Command | Flags |
@@ -168,6 +168,7 @@ the long forms listed are accepted too.
 | `grep` | `-r -R -i -n -l -L -v -c -o -q -s -w -x -h -H -I -a`, `-E -F -G`, `-e PATTERN` (several), `-A -B -C N`, `-NUM`, `-m N`, `--include --exclude --exclude-dir` |
 | `rg` | `-i -S -s -F -w -x -v -c -l -n -N -0`, `-A -B -C N`, `-m N`, `-g GLOB`, `-t TYPE`, `-T TYPE`, `-u -uu -uuu`, `--hidden --no-ignore --files --no-heading --sort path`, `-j N` (accepted; there is one thread) |
 | `sed` | `-n -E -r -i -i.SUFFIX -s -e`; addresses `N`, `$`, `/re/`, `\%re%`, `N,M`, `N,+M`, `first~step`, `0,/re/`, `!`; commands `s p d q Q = a i c y` and `{ }` blocks; `s` flags `g p N i I`; `&` and `\1`..`\9` |
+| `diff` | `-u`, `-U N`, `--unified[=N]`, `-r`, `-N`, `-x PAT`, `-q`, `-s`, `-i -w -b -B`, `-a`, `--label NAME`; the default and the unified format; `-` for standard input |
 | `sort` | `-u -n -r -h -f -b -s -c -C`, `-t SEP`, `-k` with character positions and modifiers, `--parallel=N` (accepted) |
 | `uniq` | `-c -d -u -i`, `-f N`, `-s N`, `-w N` |
 | `cut` | `-b -c -f`, `-d`, `-s`, `--complement`, `--output-delimiter` |
@@ -196,7 +197,7 @@ Shell syntax, as bash 5.2 reads it:
 | Kind | What |
 |---|---|
 | Lists | `;`, newline, `&&`, `||` |
-| Pipes | `a \| b \| c`, with the exit status of the last stage |
+| Pipes | `a \| b \| c`, with the exit status of the last stage; `! pipeline` turns the status round |
 | Redirections | `>`, `>>`, `<`, `2>`, `2>>`, `2>&1`, `>&2`, `&>`, `&>>`, and `/dev/null` as a source or a target |
 | Here-documents | `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`, several on one line |
 | Substitution | `$(...)` and backticks, nested, in or out of double quotes |
@@ -226,7 +227,6 @@ $ qdb -c 'case $X in a) ls;; esac'
 $ qdb -c 'f() { ls; }'    qdb: unsupported syntax: function definition
 $ qdb -c 'ls --color'     qdb: unsupported flag: ls --color (long options other than the ones listed in the README are not supported)
 $ qdb -c 'sort -g a'      qdb: unsupported flag: sort -g
-$ qdb -c 'awk 1'          qdb: unsupported command: awk
 $ qdb -c 'ln -s a b'      qdb: unsupported command: ln (the database has no links, hard or symbolic)
 ```
 
@@ -261,6 +261,23 @@ before.
 `find -exec` and `xargs` run the engine's commands, but not the ones
 that only make sense inside a session: `cd`, `export`, `unset`, `read`,
 `break`, `continue` and `:` are refused there.
+
+**diff.** `diff` gives the lines GNU diff 3.10 gives, in the default and
+the unified format, with the same exit status (0 the same, 1 different,
+2 trouble). It uses what the storage knows: two files that share their
+pieces are the same without a byte being read, the equal start and end
+of two files are skipped piece by piece, and only the part between is
+compared line by line. That part is held in memory; if it is larger than
+256 MB (two unrelated huge files), `diff` refuses with exit status 2 and
+says so, instead of using memory without limit. The times in a unified
+header are the files' modification times in UTC. `-c`, `-y`, `-e`, `-I`
+and the other output formats are refused by name.
+
+**One difference from bash in constructs.** When the output of a whole
+loop or `if` is redirected to a file, the file receives it when the
+construct ends. A command inside the construct that reads that same
+file, or appends to it under its own redirection, sees the file without
+the construct's output so far.
 
 ## How it is put together
 

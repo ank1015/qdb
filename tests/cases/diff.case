@@ -1,0 +1,142 @@
+# Stage 5, part 4: diff, against GNU diffutils 3.10.
+@fixture empty
+
+# The default format: a, d and c, ranges, and the line that has no
+# newline.
+$ printf 'a\nb\nc\n' > 1; printf 'a\nB\nc\n' > 2; diff 1 2; echo $?
+$ printf 'a\nb\nc\n' > 1; printf 'a\nc\n' > 2; diff 1 2; echo $?
+$ printf 'a\nc\n' > 1; printf 'a\nb\nc\n' > 2; diff 1 2; echo $?
+$ printf 'a\nb\nc\nd\ne\n' > 1; printf 'a\nX\nY\nZ\ne\n' > 2; diff 1 2
+$ printf 'a\nb\nc\nd\ne\n' > 1; printf 'a\ne\n' > 2; diff 1 2
+$ printf 'a\ne\n' > 1; printf 'a\nb\nc\nd\ne\n' > 2; diff 1 2
+$ printf 'a\nb\n' > 1; printf 'x\na\nb\ny\n' > 2; diff 1 2
+$ printf 'a\nb\n' > 1; cp 1 2; diff 1 2; echo $?
+$ printf 'a\nb\n' > 1; diff 1 1; echo $?
+$ printf 'a' > 1; printf 'a\n' > 2; diff 1 2; diff 2 1
+$ printf 'a\nb' > 1; printf 'a\nb' > 2; diff 1 2; echo $?
+$ printf 'a\nb' > 1; printf 'a\nc' > 2; diff 1 2
+$ printf 'a\nb' > 1; printf 'b\na' > 2; diff 1 2
+$ printf '' > 1; printf 'a\nb\n' > 2; diff 1 2; diff 2 1
+$ printf '' > 1; printf '' > 2; diff 1 2; echo $?
+$ printf '' > 1; printf 'a' > 2; diff 1 2; diff 2 1
+$ printf 'x\nx\n' > 1; printf 'x\nx\nx\n' > 2; diff 1 2; diff 2 1
+$ printf 'a\nb\na\nb\na\n' > 1; printf 'b\na\nb\na\nb\n' > 2; diff 1 2
+$ printf '{\n}\n\n{\n}\n' > 1; printf '{\n}\n\n{\nx\n}\n\n{\n}\n' > 2; diff 1 2
+$ seq 1 30 > 1; seq 1 30 | sed -e '3d' -e '10s/$/x/' -e '20a new' -e '29,30d' > 2; diff 1 2; echo $?
+$ seq 1 200 > 1; seq 1 200 | sed -e '50,60d' -e '150s/^/y/' > 2; diff 1 2 | head -n 5
+$ printf 'a b\n' > 'x y'; printf 'a c\n' > z; diff 'x y' z
+
+# Unified.
+$ printf 'a\nb\nc\n' > 1; printf 'a\nB\nc\n' > 2; touch -d '2024-03-01 10:20:30' 1; touch -d '2023-12-31 23:59:59' 2; diff -u 1 2; echo $?
+$ printf 'a\nb\nc\n' > 1; printf 'a\nB\nc\n' > 2; touch -d '2024-03-01 10:20:30.123456789' 1 2; diff -u 1 2
+$ printf 'a\n' > 'x y'; printf 'b\n' > 'q"r'; touch -d '2024-03-01 10:20:30' 'x y' 'q"r'; diff -u 'x y' 'q"r'
+$ seq 1 30 > 1; seq 1 30 | sed -e '3d' -e '10s/$/x/' -e '20a new' -e '29,30d' > 2; diff -u --label one --label two 1 2
+$ seq 1 30 > 1; seq 1 30 | sed -e '3d' -e '10s/$/x/' -e '20a new' -e '29,30d' > 2; diff -U 0 --label one --label two 1 2
+$ seq 1 30 > 1; seq 1 30 | sed -e '3d' -e '10s/$/x/' -e '20a new' -e '29,30d' > 2; diff -U 1 -L one -L two 1 2
+$ seq 1 30 > 1; seq 1 30 | sed -e '3d' -e '10s/$/x/' -e '20a new' -e '29,30d' > 2; diff -U1 -L one -L two 1 2
+$ seq 1 30 > 1; seq 1 30 | sed -e '3d' -e '10s/$/x/' -e '20a new' -e '29,30d' > 2; diff --unified=2 --label=one --label=two 1 2
+$ seq 1 30 > 1; seq 1 30 | sed -e '3d' -e '10s/$/x/' -e '20a new' -e '29,30d' > 2; diff --unified --label one --label two 1 2
+$ seq 1 30 > 1; seq 1 30 | sed -e '3d' -e '10s/$/x/' -e '20a new' -e '29,30d' > 2; diff -U 100 -L one -L two 1 2
+$ seq 1 30 > 1; seq 1 30 | sed '15s/$/x/' > 2; diff -u -U 1 -L one -L two 1 2
+$ seq 1 30 > 1; seq 1 30 | sed '15s/$/x/' > 2; diff -U 5 -U 2 -L one -L two 1 2
+$ seq 1 30 > 1; seq 1 30 | sed -e '8s/$/x/' -e '15s/$/x/' > 2; diff -u -L one -L two 1 2
+$ seq 1 30 > 1; seq 1 30 | sed -e '8s/$/x/' -e '16s/$/x/' > 2; diff -u -L one -L two 1 2
+$ printf 'a' > 1; printf 'a\n' > 2; diff -u -L one -L two 1 2; diff -u -L one -L two 2 1
+$ printf 'a\nb' > 1; printf 'a\nb\nc' > 2; diff -u -L one -L two 1 2
+$ printf '' > 1; printf 'a\nb\n' > 2; diff -u -L one -L two 1 2; diff -u -L one -L two 2 1
+$ printf 'x\nx\n' > 1; printf 'x\nx\nx\n' > 2; diff -u -L one -L two 1 2; diff -U 0 -L one -L two 1 2
+$ printf 'k6\n\n' > 1; printf 'k4\nk6\n\nk0\nk4\n\n' > 2; diff -U 1 -L one -L two 1 2; diff 1 2
+$ printf 'a\nb\nc\n' > 1; printf 'a\nB\nc\n' > 2; diff -a -u -L one -L two 1 2; diff --text 1 2
+$ printf 'a\nb\n' > 1; printf 'a\nc\n' > 2; diff -u --label one 1 2 | head -n 1
+! diff -u3 1 2 ## flag: diff -3
+! diff -c 1 2 ## flag: diff -c
+! diff -y 1 2 ## flag: diff -y
+! diff --side-by-side 1 2 ## flag: diff --side-by-side
+! diff -e 1 2 ## flag: diff -e
+! diff -I x 1 2 ## flag: diff -I
+! diff -Z 1 2 ## flag: diff -Z
+! diff --color 1 2 ## flag: diff --color
+
+# What counts as equal.
+$ printf 'Abc\nx\n' > 1; printf 'aBC\ny\n' > 2; diff -i 1 2; diff --ignore-case 1 2; echo $?
+$ printf 'a  b\n c\nd \n' > 1; printf 'a b\nc\nd\n' > 2; diff -b 1 2; diff --ignore-space-change 1 2; echo $?
+$ printf 'a  b\n c\nd \n' > 1; printf 'ab\nc\nd\n' > 2; diff -w 1 2; echo $?; diff --ignore-all-space 1 2; diff -b 1 2
+$ printf 'a\tb\n' > 1; printf 'a  b \n' > 2; diff -b 1 2; echo $?; diff 1 2
+$ printf 'a' > 1; printf 'a\n' > 2; diff -b 1 2; echo $?; diff -w 1 2; echo $?; diff -i 1 2; echo $?
+$ printf 'a\n\nb\n' > 1; printf 'a\nb\n\n\n' > 2; diff -B 1 2; echo $?; diff --ignore-blank-lines 1 2; echo $?; diff 1 2
+$ printf 'a\n\nb\n' > 1; printf 'a\nb\nc\n' > 2; diff -B 1 2; echo $?
+$ printf 'a\n \nb\n' > 1; printf 'a\nb\n' > 2; diff -B 1 2; echo $?; diff -B -b 1 2; echo $?; diff -Bw 1 2; echo $?
+$ printf 'a\nb\nc\nd\ne\nf\ng\nh\n' > 1; printf 'a\n\nb\nc\nd\ne\nf\nX\nh\n' > 2; diff -B -u -L one -L two 1 2; diff -B 1 2
+$ printf 'a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n' > 1; printf 'a\n\nb\nc\nd\ne\nf\ng\nh\ni\nj\nX\nl\n' > 2; diff -B -u -L one -L two 1 2
+$ printf 'A b\n' > 1; printf 'a  B\n' > 2; diff -ib 1 2; echo $?; diff -iw 1 2; echo $?; diff -i 1 2; echo $?
+$ printf 'x\nA\ny\n' > 1; printf 'x\na\nz\n' > 2; diff -i -u -L one -L two 1 2
+
+# -q and -s.
+$ printf 'a\n' > 1; printf 'b\n' > 2; diff -q 1 2; echo $?; diff --brief 1 2
+$ printf 'a\n' > 1; cp 1 2; diff -q 1 2; echo $?; diff -s 1 2; echo $?; diff --report-identical-files 1 2; diff -qs 1 2
+$ printf 'a\n' > 1; printf 'a\n' > 2; diff -s 1 2; diff -s 1 1
+$ printf 'A\n' > 1; printf 'a\n' > 2; diff -q 1 2; diff -qi 1 2; echo $?; diff -si 1 2
+$ printf 'a\n\n' > 1; printf 'a\n' > 2; diff -qB 1 2; echo $?; diff -sB 1 2
+$ printf 'a\n' > 1; printf 'b\n' > 2; diff -q -L one -L two 1 2; diff -s --label one --label two 1 1
+$ printf 'a\n' > 1; printf 'b\n' > 2; diff -q -u 1 2
+
+# Standard input.
+$ printf 'a\nb\n' > 1; printf 'a\nc\n' | diff - 1; echo $?
+$ printf 'a\nb\n' > 1; printf 'a\nc\n' | diff 1 -; echo $?
+$ printf 'a\nb\n' > 1; cat 1 | diff - 1; echo $?; cat 1 | diff -s 1 -
+$ printf 'a\nb\n' > 1; printf 'a\nc\n' | diff -u -L one -L two - 1
+$ printf 'a\nb\n' > 1; diff - 1 < 1; echo $?; printf 'x\n' | diff -q - 1
+$ seq 1 2000 > 1; seq 1 2000 | sed '1500d' | diff - 1; seq 1 2000 | sed '1500d' | diff -u -L one -L two 1 - | head -n 12
+
+# Files and folders that are not there, and the wrong number of names.
+$ printf 'a\n' > 1; diff 1 nowhere; echo $?
+$ printf 'a\n' > 1; diff nowhere 1; echo $?; diff nowhere elsewhere; echo $?
+$ printf 'a\n' > 1; diff -N 1 nowhere; echo $?; diff -N nowhere 1; echo $?; diff --new-file -u -L one -L two nowhere 1
+$ printf 'a\n' > 1; touch -d '2024-03-01 10:20:30' 1; diff -N -u nowhere 1; diff -Nu 1 nowhere
+$ printf 'a\n' > 1; diff -N nowhere elsewhere; echo $?
+$ printf 'a\n' > 1; diff -q 1 nowhere; echo $?; diff -s nowhere 1; echo $?
+$ printf 'a\n' > 1; diff 1 1/x; echo $?
+$ diff; echo $?
+$ diff -u; echo $?
+$ printf 'a\n' > 1; diff 1; echo $?
+$ printf 'a\n' > 1; diff 1 1 1; echo $?
+$ printf 'a\n' > 1; diff -U x 1 1; echo $?
+$ printf 'a\n' > 1; diff -U 1x 1 1; echo $?
+$ printf 'a\n' > 1; diff -L a -L b -L c 1 1; echo $?
+
+# A file against a folder: the file of that name in the folder.
+$ mkdir d; printf 'a\n' > 1; printf 'b\n' > d/1; diff 1 d; echo $?; diff d 1; diff -u -L one -L two d 1
+$ mkdir d; printf 'a\n' > 1; diff 1 d; echo $?; diff d 1; echo $?
+$ mkdir d; printf 'a\n' > 1; diff -N 1 d; echo $?; diff -N d 1; echo $?
+$ mkdir -p d e/f; printf 'a\n' > e/f/1; printf 'b\n' > d/1; diff e/f/1 d; diff d e/f/1
+
+# Two folders.
+$ mkdir a b; printf 'x\n' > a/1; printf 'y\n' > b/1; printf 'same\n' > a/2; cp a/2 b/2; printf 'only\n' > a/3; printf 'only\n' > b/4; diff a b; echo $?
+$ mkdir a b; printf 'x\n' > a/1; printf 'y\n' > b/1; printf 'only\n' > a/3; printf 'only\n' > b/4; diff -q a b; echo $?; diff -s a b; diff -u -L one -L two a b
+$ mkdir a b; printf 'x\n' > a/1; cp a/1 b/1; diff a b; echo $?; diff -s a b; diff -r a b; echo $?; diff -rs a b
+$ mkdir -p a/s b/s; printf 'x\n' > a/s/1; printf 'y\n' > b/s/1; diff a b; echo $?; diff -r a b; echo $?; diff --recursive -q a b
+$ mkdir -p a/s/t b/s/t a/z b/y; printf 'x\n' > a/s/t/1; printf 'y\n' > b/s/t/1; printf 'q\n' > a/z/2; printf 'q\n' > b/y/2; diff -r a b; echo $?
+$ mkdir -p a/s/t b/s/t a/z b/y; printf 'x\n' > a/s/t/1; printf 'y\n' > b/s/t/1; printf 'q\n' > a/z/2; printf 'q\n' > b/y/2; diff -rN a b; echo $?
+$ mkdir -p a/s/t b/s/t a/z b/y; printf 'x\n' > a/s/t/1; printf 'y\n' > b/s/t/1; printf 'q\n' > a/z/2; printf 'q\n' > b/y/2; diff -N a b; echo $?
+$ mkdir -p a/s/t b/s/t a/z b/y; printf 'x\n' > a/s/t/1; printf 'y\n' > b/s/t/1; printf 'q\n' > a/z/2; printf 'q\n' > b/y/2; diff -rNq a b; diff -rNs a b
+$ mkdir -p a/s b; printf 'x\n' > a/s/1; printf 'x\n' > b/s; diff -r a b; echo $?; diff -rN a b; echo $?; diff -r b a
+$ mkdir -p a/s b; printf '' > b/s; diff -r a b; echo $?
+$ mkdir -p a b; printf 'x\n' > a/1; printf 'y\n' > b/1; touch -d '2024-03-01 10:20:30' a/1; touch -d '2024-03-02 10:20:30' b/1; diff -ru a b; diff -r -u a b; diff -r -U 0 a b; diff --recursive --unified=1 a b
+$ mkdir -p a b; printf 'x\n' > a/1; printf 'x\n' > b/1; printf 'new\n' > b/2; touch -d '2024-03-01 10:20:30' a/1 b/1 b/2; diff -ruN a b; diff -ruN b a
+$ mkdir -p 'a b' c; printf 'x\n' > 'a b/f g'; printf 'y\n' > 'c/f g'; diff -r 'a b' c; diff -rq 'a b' c; diff -ru -L one -L two 'a b' c
+$ mkdir -p a b; for n in B a C b _ 1 Z z; do printf "$n\n" > a/$n; printf "x$n\n" > b/$n; done; diff -rq a b
+$ mkdir -p a b; printf 'x\n' > a/1.o; printf 'y\n' > b/1.o; printf 'x\n' > a/1.c; printf 'y\n' > b/1.c; printf 'k\n' > a/keep; diff -r -x '*.o' a b; diff -rq --exclude '*.c' a b; diff -rq --exclude='*.c' -x keep a b; diff -rq -x'1*' a b
+$ mkdir -p a/skip b/skip a/s b/s; printf 'x\n' > a/skip/1; printf 'y\n' > b/skip/1; printf 'x\n' > a/s/1; printf 'y\n' > b/s/1; diff -r -x skip a b; diff -rq -x 's*' a b; echo $?
+$ mkdir -p a b; printf 'x\n' > a/1; printf 'y\n' > b/1; diff -r -x '*.o' -x "it's" -x 'p$' -x 'a=b' -x '~x' -x 'x#' -x '{}' -x '{' a b
+$ mkdir -p a b; printf 'x\n' > a/1; printf 'y\n' > b/1; diff -r -i -w -b -B -a -N a b; diff -riwbBaN a b; diff -r --ignore-case --text a b
+$ mkdir -p a/d b/d; printf 'x\n' > a/d/1; printf 'x\n' > b/d/1; diff -r a/ b/; echo $?; printf 'y\n' > b/d/1; diff -r a/ b/; diff -r a/d/ b/d
+$ mkdir -p a b; printf 'x\n' > a/1; diff -r a a; echo $?; diff -rs a a
+$ mkdir -p a; diff -r a nowhere; echo $?; diff -rN a nowhere; echo $?
+
+# In a pipeline, in a loop, from another folder.
+$ printf 'a\nb\nc\n' > 1; printf 'a\nB\nc\n' > 2; diff 1 2 | grep -c '^[<>]'
+$ seq 1 3000 > 1; seq 1 3000 | sed 's/5$/x/' > 2; diff 1 2 | head -n 3; echo $?
+$ mkdir -p a b; for n in 1 2 3; do printf "$n\n" > a/$n; printf "$n\n" > b/$n; done; printf 'z\n' >> b/2; for n in 1 2 3; do diff -q a/$n b/$n; echo $?; done
+$ mkdir -p a b; printf 'x\n' > a/1; printf 'y\n' > b/1; cd a; diff 1 ../b/1; diff . ../b; cd ..; diff a/1 b/1 > out; cat out
+$ printf 'a\nb\n' > 1; printf 'a\nc\n' > 2; if diff -q 1 2 > /dev/null; then echo same; else echo different; fi
+$ printf 'a\nb\n' > 1; cp 1 2; echo c >> 2; diff 1 2; sed -i 's/a/A/' 1; diff 1 2; cp 2 1; diff 1 2; echo $?

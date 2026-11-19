@@ -22,7 +22,7 @@ With no case files, runs every tests/cases/*.case.
   --seed N          seed for --fuzz (default 1)
   --gen FAMILY      instead of the cases: generated tests against the real
                     tools for one family of commands (shell, grep, sed,
-                    find, rg, text, ls, xargs, or all), with --count cases
+                    find, rg, text, ls, xargs, scripts, diff, or all), with --count cases
                     (default 10000) and --seed
   --coverage        print the coverage table without running the cases
   --list-failures   print one line per failure instead of full details
@@ -455,7 +455,11 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> 
                         }
                         tree.into_iter().map(|(p, c)| (p, c.map(|c| sorted_lines(&c).concat()))).collect()
                     };
-                    let real_tree = normalise(store::snapshot_dir(root).map_err(|e| e.to_string())?);
+                    // bash's own messages, sent to a file, begin as they do
+                    // on the screen.
+                    let real_tree: Vec<(Vec<u8>, Option<Vec<u8>>)> =
+                        store::snapshot_dir(root).map_err(|e| e.to_string())?.into_iter().map(|(p, c)| (p, c.map(|c| qdb::testing::bash_prefix(&c)))).collect();
+                    let real_tree = normalise(real_tree);
                     if let Some(d) = tree_diff(&real_tree, &normalise(db.db().snapshot())) {
                         what.push_str(&format!("    tree after the command:\n{}", d));
                     }

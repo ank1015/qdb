@@ -479,6 +479,9 @@ struct Run<'r, 's> {
     stdin: &'r mut Option<&'s [u8]>,
     /// Set when the reader of `out` wants no more.
     gone: &'r Cell<bool>,
+    /// `err` goes where `out` goes (`2>&1` on the construct the list is
+    /// in), so what the commands write to the two keeps its order.
+    merged: bool,
 }
 
 /// The commands that act on the session, and so are not among the
@@ -733,7 +736,7 @@ impl Ex<'_> {
         let mut copy = self.sess.clone();
         let mut none = None;
         let gone = Cell::new(false);
-        let result = run_list(self.db, &mut copy, &script.items, &mut Run { ctx: self.ctx, out: &mut text, err: &mut *self.err, stdin: &mut none, gone: &gone });
+        let result = run_list(self.db, &mut copy, &script.items, &mut Run { ctx: self.ctx, out: &mut text, err: &mut *self.err, stdin: &mut none, gone: &gone, merged: false });
         self.db.set_cwd(self.sess.cwd());
         let code = match result {
             Ok(code) => code,
@@ -741,6 +744,9 @@ impl Ex<'_> {
             Err(other) => other.code(),
         };
         self.ctx.subst.set(Some(code));
+        // `$?` is the substitution's status from here on, in the same
+        // command too.
+        self.sess.status = code;
         while text.last() == Some(&b'\n') {
             text.pop();
         }
@@ -894,7 +900,7 @@ fn run_line(db: &mut Db, sess: &mut Session, line: &[u8], out: &mut dyn Sink, er
     let ctx = Ctx::new(db.config().command_limit);
     let mut none = None;
     let gone = Cell::new(false);
-    let mut r = Run { ctx: &ctx, out, err, stdin: &mut none, gone: &gone };
+    let mut r = Run { ctx: &ctx, out, err, stdin: &mut none, gone: &gone, merged: false };
     // An expansion that fails gives up the rest of its line; the unit
     // goes on with the next line.
     let mut code = 0;
@@ -1067,6 +1073,11 @@ struct Work<'a> {
 type Before = (Vec<u8>, Option<Vec<u8>>);
 
 fn run_pipeline(db: &mut Db, sess: &mut Session, pipeline: &Pipeline, r: &mut Run, ready: Option<Vec<Option<Prepared>>>) -> Result<i32, Flow> {
+    let code = run_pipeline_plain(db, sess, pipeline, r, ready)?;
+    Ok(if pipeline.negated { (code == 0) as i32 } else { code })
+}
+
+fn run_pipeline_plain(db: &mut Db, sess: &mut Session, pipeline: &Pipeline, r: &mut Run, ready: Option<Vec<Option<Prepared>>>) -> Result<i32, Flow> {
     db.set_cwd(sess.cwd());
     let n = pipeline.commands.len();
     // A loop or an `if` that stands alone, with no redirection, runs
@@ -1097,11 +1108,25 @@ fn run_pipeline(db: &mut Db, sess: &mut Session, pipeline: &Pipeline, r: &mut Ru
                         redirs.push(ex.redirect(redirect)?);
                     }
                     let kind = &c.kind;
-                    let run: Box<dyn FnOnce(&mut Db, &mut Io) -> i32 + '_> = Box::new(move |db, io| compound_in_io(db, s, ctx, kind, io));
+                    // As a stage of a pipeline of several it is a shell of
+                    // its own in bash, which counts loops from none:
+                    // `continue 2` in its one loop is `continue`.
+                    let own_shell = n > 1;
+                    let run: Box<dyn FnOnce(&mut Db, &mut Io) -> i32 + '_> = Box::new(move |db, io| {
+                        let around = ctx.loops.get();
+                        if own_shell {
+                            ctx.loops.set(0);
+                        }
+                        let code = compound_in_io(db, s, ctx, kind, io);
+                        ctx.loops.set(around);
+                        code
+                    });
                     (Work { run, input: Input::Whole }, redirs)
                 }
             };
-            stages.push(Stage::new(work, redirs, db.scratch(), i > 0));
+            let mut stage = Stage::new(work, redirs, db.scratch(), i > 0);
+            stage.merge_down = r.merged && i == n - 1;
+            stages.push(stage);
         }
 
         // The first command drives the pipeline: what it writes is pushed
@@ -1136,6 +1161,18 @@ fn run_pipeline(db: &mut Db, sess: &mut Session, pipeline: &Pipeline, r: &mut Ru
         }
     }
     db.set_cwd(sess.cwd());
+    // A reader that wants no more ends the loop when the shell itself
+    // was writing: a builtin of bash's, or a construct. A program bash
+    // would start is ended alone, and the loop goes on to its next
+    // command, as it does in bash.
+    if r.gone.get() {
+        if let Some(Command::Simple(c)) = pipeline.commands.last() {
+            let name = c.words.first().map(|w| w.text()).unwrap_or_default();
+            if !matches!(&name[..], b"echo" | b"printf" | b"pwd") {
+                r.gone.set(false);
+            }
+        }
+    }
     match flow {
         Some(flow) => {
             sess.status = code;
@@ -1228,7 +1265,10 @@ struct IoOut<'x, 'y, 'z> {
 impl Sink for IoOut<'_, '_, '_> {
     fn write(&mut self, data: &[u8]) -> bool {
         let mut io = self.io.borrow_mut();
+        // Handed on at once, as bash writes: a reader that has had
+        // enough is noticed at the next write.
         io.put(data);
+        io.flush();
         if io.stopped() {
             self.gone.set(true);
         }
@@ -1253,11 +1293,12 @@ impl Sink for IoErr<'_, '_, '_> {
 fn compound_in_io(db: &mut Db, sess: &mut Session, ctx: &Ctx, kind: &CompoundKind, io: &mut Io) -> i32 {
     let mut stdin = if io.has_stdin() { Some(io.take_stdin()) } else { None };
     let gone = Cell::new(false);
+    let merged = io.merged;
     let cell = RefCell::new(io);
     let result = {
         let mut out = IoOut { io: &cell, gone: &gone };
         let mut err = IoErr { io: &cell };
-        run_compound(db, sess, kind, &mut Run { ctx, out: &mut out, err: &mut err, stdin: &mut stdin, gone: &gone })
+        run_compound(db, sess, kind, &mut Run { ctx, out: &mut out, err: &mut err, stdin: &mut stdin, gone: &gone, merged })
     };
     cell.into_inner().stdin = stdin.unwrap_or(&[]);
     match result {
@@ -1591,6 +1632,9 @@ struct Stage<'a> {
     /// The same, when that input was the enclosing loop's: what the
     /// loop's next command starts from.
     inherited_left: Option<usize>,
+    /// The stage is the last of its pipeline, in a construct whose
+    /// errors go where its output goes.
+    merge_down: bool,
 }
 
 enum State {
@@ -1624,13 +1668,13 @@ impl<'a> Stage<'a> {
             Input::Unused => State::Closed(None),
         };
         let spools = redirs.iter().map(|_| Spool::new(scratch.clone())).collect();
-        Stage { run: Some(prepared.run), state, stream, redirs, plan, spools, buf: Vec::new(), err: Vec::new(), to_err: Vec::new(), stdin_size: None, piped: false, scratch, left: 0, inherited_left: None }
+        Stage { run: Some(prepared.run), state, stream, redirs, plan, spools, buf: Vec::new(), err: Vec::new(), to_err: Vec::new(), stdin_size: None, piped: false, scratch, left: 0, inherited_left: None, merge_down: false }
     }
 
     /// Give `f` the streams of this command. Returns what `f` returned and
     /// whether the reader of the output wants no more.
     fn with_io<R>(&mut self, stdin: &[u8], down: &mut dyn Sink, out_file: Option<NodeId>, f: impl FnOnce(&mut Io) -> R) -> (R, bool) {
-        let Stage { plan, spools, buf, err, to_err, stdin_size, piped, scratch, left, .. } = self;
+        let Stage { plan, spools, buf, err, to_err, stdin_size, piped, scratch, left, merge_down, .. } = self;
         let mut nowhere = Nowhere;
         let out: &mut dyn Sink = match plan.d1 {
             Dest::Down => down,
@@ -1638,7 +1682,7 @@ impl<'a> Stage<'a> {
             Dest::File(i) => &mut spools[i],
             Dest::Null => &mut nowhere,
         };
-        let mut io = Io { stdin, out, buf, stopped: false, err, out_file, merged: plan.d1 == plan.d2, exact: true, stdin_size: *stdin_size, piped: *piped, scratch: scratch.clone() };
+        let mut io = Io { stdin, out, buf, stopped: false, err, out_file, merged: plan.d1 == plan.d2 || (*merge_down && plan.d1 == Dest::Down && plan.d2 == Dest::Err), exact: true, stdin_size: *stdin_size, piped: *piped, scratch: scratch.clone() };
         let r = f(&mut io);
         io.flush();
         *left = io.stdin.len();

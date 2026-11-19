@@ -127,7 +127,7 @@ fn evaluate(expr: &[u8], sess: &mut Session, depth: u32) -> Result<i64, String> 
     if depth > 1024 {
         return Err(format!("{}: expression recursion level exceeded (error token is \"{}\")", show(expr), show(expr)));
     }
-    let mut p = Arith { s: expr, i: 0, last: 0, tok: Tok::End, was_name: false, sess, noeval: 0, depth };
+    let mut p = Arith { s: expr, i: 0, last: 0, tok: Tok::End, was_name: false, sess, name_val: 0, noeval: 0, depth };
     p.next()?;
     if p.tok == Tok::End {
         return Ok(0);
@@ -169,6 +169,10 @@ struct Arith<'a> {
     /// The token before this one was a name.
     was_name: bool,
     sess: &'a mut Session,
+    /// The value of the name that is the token. bash finds it when it
+    /// reads the name, before it knows whether the expression is well
+    /// formed, so that is when a value that is no expression is reported.
+    name_val: i64,
     noeval: u32,
     depth: u32,
 }
@@ -201,7 +205,22 @@ impl Arith<'_> {
             while self.i < self.s.len() && (self.s[self.i].is_ascii_alphanumeric() || self.s[self.i] == b'_') {
                 self.i += 1;
             }
-            self.tok = Tok::Name(self.s[start..self.i].to_vec());
+            let name = self.s[start..self.i].to_vec();
+            let stepped = matches!(self.tok, Tok::Op("++") | Tok::Op("--"));
+            self.tok = Tok::Name(name.clone());
+            // bash looks at the token after the name before it finds
+            // the name's value: what is wrong with that token is
+            // reported first, and a name that `=` follows is not
+            // evaluated, unless `++` or `--` stands before it.
+            let (i, last) = (self.i, self.last);
+            self.noeval += 1;
+            let peeked = self.next();
+            self.noeval -= 1;
+            peeked?;
+            let assigned = self.is("=");
+            (self.i, self.last, self.was_name) = (i, last, false);
+            self.tok = Tok::Name(name.clone());
+            self.name_val = if assigned && !stepped { 0 } else { self.value(&name)? };
             return Ok(());
         }
         if c.is_ascii_digit() {
@@ -238,9 +257,12 @@ impl Arith<'_> {
                 Ok(())
             }
             None => {
+                // After an operand bash calls it an operator it does not
+                // know; anywhere else, a missing operand.
+                let after_operand = matches!(self.tok, Tok::Num(_) | Tok::Name(_) | Tok::Op("post++") | Tok::Op("post--"));
                 self.i += 1;
                 self.tok = Tok::Op("?bad");
-                Err(self.error("syntax error: operand expected"))
+                Err(self.error(if after_operand { "syntax error: invalid arithmetic operator" } else { "syntax error: operand expected" }))
             }
         }
     }
@@ -282,24 +304,20 @@ impl Arith<'_> {
         if !self.is("?") {
             return Ok(c);
         }
-        self.next()?;
-        if self.tok == Tok::End || self.is(":") {
-            return Err(self.error("expression expected"));
-        }
+        // The side that is not taken is read with nothing evaluated,
+        // its first token included.
         let skip = c.v == 0;
         self.noeval += skip as u32;
-        let a = self.comma()?;
+        let a = self.next().and_then(|_| if self.tok == Tok::End || self.is(":") { Err(self.error("expression expected")) } else { self.comma() });
         self.noeval -= skip as u32;
+        let a = a?;
         if !self.is(":") {
             return Err(self.error("`:' expected for conditional expression"));
         }
-        self.next()?;
-        if self.tok == Tok::End {
-            return Err(self.error("expression expected"));
-        }
         self.noeval += !skip as u32;
-        let b = self.cond()?;
+        let b = self.next().and_then(|_| if self.tok == Tok::End { Err(self.error("expression expected")) } else { self.cond() });
         self.noeval -= !skip as u32;
+        let b = b?;
         Ok(Val { v: if skip { b.v } else { a.v }, name: None })
     }
 
@@ -315,13 +333,16 @@ impl Arith<'_> {
                 Tok::Op(o) if LEVELS[n].contains(o) => *o,
                 _ => return Ok(left),
             };
-            self.next()?;
-            let at = self.last;
             // `||` and `&&` do not evaluate a right side that cannot matter.
             let skip = (op == "||" && left.v != 0) || (op == "&&" && left.v == 0);
             self.noeval += skip as u32;
-            let right = self.level(n + 1)?;
+            let mut at = 0;
+            let right = self.next().and_then(|_| {
+                at = self.last;
+                self.level(n + 1)
+            });
             self.noeval -= skip as u32;
+            let right = right?;
             let v = match op {
                 "||" => (left.v != 0 || right.v != 0) as i64,
                 "&&" => (left.v != 0 && right.v != 0) as i64,
@@ -380,7 +401,7 @@ impl Arith<'_> {
                 Ok(Val { v, name: None })
             }
             Tok::Name(name) => {
-                let v = self.value(&name)?;
+                let v = self.name_val;
                 self.next()?;
                 if self.is("post++") || self.is("post--") {
                     let d = if self.is("post++") { 1 } else { -1 };
@@ -398,7 +419,7 @@ impl Arith<'_> {
                 let Tok::Name(name) = self.tok.clone() else {
                     return Err(self.error("identifier expected after pre-increment or pre-decrement"));
                 };
-                let v = self.value(&name)?.wrapping_add(d);
+                let v = self.name_val.wrapping_add(d);
                 if self.noeval == 0 {
                     self.sess.set(&name, v.to_string().into_bytes());
                 }

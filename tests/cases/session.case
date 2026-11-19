@@ -333,3 +333,24 @@ $ X=1; echo $(X=2; echo $X) $X
 $ echo a | read L; echo "[$L]"
 $ X=out; echo hi | while read L; do X=$L; done; echo $X
 $ cd src | ls; pwd
+
+# A name's value is found when the name is read: after the token that
+# follows it has been looked at, and not at all when that token is `=`.
+$ Y=docs/x.md; echo $((Y = 0)) $Y
+$ Y=docs/x.md; echo $((Y += 1))
+$ Y=docs/x.md; echo $((++Y = 3))
+$ a='1 +'; echo $((x a))
+$ a='1 +'; echo $(( (1) a))
+$ a='1 +'; echo $((1 ? 2 : a)) $((0 ? a : 2)) $((1 || a)) $((0 && a))
+$ a='1 +'; echo $((0 ? 1 : 2 a))
+$ a='1 +'; echo $((1 ? 2 : 3 a))
+$ a='1 +'; echo $((a 09))
+$ a=a; X=a.md; echo $((X + 1))
+$ X='long name.md'; echo $((X+1))
+$ echo $((1 . 2))
+$ echo $((. 2))
+$ echo $((1 + 2 .))
+$ echo $(( (1). ))
+$ a=1; echo $((a @ 2))
+$ a=1; echo $((a++ .))
+$ echo $((1 ; 2))

@@ -407,3 +407,39 @@ false	false	re:(^|[;&| ])false
 :	:	re:(^|[;&|] ?): |^:$
 sleep	sleep	re:sleep 
 ln	refused	re:(^|[;&| ])ln 
+shell	negation with !	re:(^|; |if |while |until )! [a-z\[]
+diff	default format	re:diff [0-9a-z]+ [0-9a-z]+(;|$)
+diff	-u	re:diff (-[a-zA-Z]* )*-[a-zA-Z]*u
+diff	-U N	-U
+diff	--unified	re:--unified( |$)
+diff	--unified=N	re:--unified=
+diff	-r	re:diff (-[a-zA-Z]* )*-[a-zA-Z]*r
+diff	--recursive	--recursive
+diff	-N	re:diff (-[a-zA-Z]* )*-[a-zA-Z]*N
+diff	--new-file	--new-file
+diff	-x	-x
+diff	--exclude	--exclude
+diff	-q	re:diff (-[a-zA-Z]* )*-[a-zA-Z]*q
+diff	--brief	--brief
+diff	-s	re:diff (-[a-zA-Z]* )*-[a-zA-Z]*s
+diff	--report-identical-files	--report-identical-files
+diff	-i	re:diff (-[a-zA-Z]* )*-[a-zA-Z]*i
+diff	--ignore-case	--ignore-case
+diff	-w	re:diff (-[a-zA-Z]* )*-[a-zA-Z]*w
+diff	--ignore-all-space	--ignore-all-space
+diff	-b	re:diff (-[a-zA-Z]* )*-[a-zA-Z]*b
+diff	--ignore-space-change	--ignore-space-change
+diff	-B	re:diff (-[a-zA-Z]* )*-[a-zA-Z]*B
+diff	--ignore-blank-lines	--ignore-blank-lines
+diff	-a	re:diff (-[a-zA-Z]* )*-[a-zA-Z]*a
+diff	--text	--text
+diff	--label	--label
+diff	-L	-L
+diff	standard input as a file	re:diff .*( - | -$| -;)
+diff	a file with no newline at its end	re:printf 'a' > 1.*diff
+diff	a file against a folder	re:diff 1 d
+diff	two folders	re:diff (-[a-zA-Z]+ )*a b
+diff	exit status	re:diff .*echo \$\?
+diff	a name that is not there	re:diff .*nowhere
+diff	headers with file times	re:touch -d .*diff -[ruN]*u [0-9a]
+diff	in a pipeline	re:diff .* \| 

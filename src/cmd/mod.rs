@@ -7,6 +7,7 @@
 use crate::engine::{Io, Prepared, Runner};
 use crate::util::{getopt_long, lossy, LongOpt, OptError, Parsed};
 
+mod diff;
 mod files;
 mod find;
 mod grep;
@@ -60,6 +61,7 @@ pub fn prepare(name: &[u8], args: &[Vec<u8>]) -> Result<Prepared, String> {
         b"uniq" => return text::uniq(args),
         b"nl" => return text::nl(args),
         b"tee" => return text::tee(args),
+        b"diff" => return diff::diff(args),
         _ => Err(format!("command: {}", lossy(name))),
     };
     plain.map(Prepared::from)
@@ -74,7 +76,7 @@ pub fn known(name: &[u8]) -> bool {
 /// command before it runs.
 pub const NAMES: &[&str] = &[
     "echo", "cat", "head", "tail", "wc", "ls", "find", "grep", "sed", "mkdir", "touch", "cp", "mv", "rm", "rmdir", "printf", "test", "[", "true", ":", "false",
-    "sleep", "ln", "basename", "dirname", "seq", "rg", "du", "date", "xargs", "sort", "cut", "tr", "uniq", "nl", "tee", "pwd",
+    "sleep", "ln", "basename", "dirname", "seq", "rg", "du", "date", "xargs", "sort", "cut", "tr", "uniq", "nl", "tee", "pwd", "diff",
 ];
 
 /// Gathers input into whole lines for a command that reads its standard
