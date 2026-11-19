@@ -397,18 +397,28 @@ fn append_line(f: &Mutex<std::fs::File>, j: &Json, sync: bool) -> io::Result<()>
 }
 
 fn read_lines(path: &Path) -> Vec<Json> {
-    let Ok(text) = std::fs::read(path) else { return Vec::new() };
+    read_log(path).unwrap_or_default()
+}
+
+/// The lines of a log. A file that is not there has none; one that
+/// cannot be read, or has a bad line before its last, is an error. The
+/// last line, if a crash cut it short, is dropped.
+fn read_log(path: &Path) -> Result<Vec<Json>, String> {
+    let text = match std::fs::read(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{}: {}", path.display(), e)),
+    };
+    let lines: Vec<&[u8]> = text.split(|c| *c == b'\n').filter(|l| !l.is_empty()).collect();
     let mut out = Vec::new();
-    for line in text.split(|c| *c == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-        // A line cut short by a crash is the last one, and is dropped.
-        if let Ok(j) = Json::parse(line) {
-            out.push(j);
+    for (i, line) in lines.iter().enumerate() {
+        match Json::parse(line) {
+            Ok(j) => out.push(j),
+            Err(_) if i + 1 == lines.len() && !text.ends_with(b"\n") => {}
+            Err(e) => return Err(format!("{}: line {} is damaged ({}); the server will not start with it, since it would not know who owns what", path.display(), i + 1, e)),
         }
     }
-    out
+    Ok(out)
 }
 
 /// Write a file whole: under a temporary name, synced, then renamed.
@@ -450,7 +460,14 @@ impl Service {
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
         let reg_path = dir.join("registry.log");
         let mut st = State::default();
-        for j in read_lines(&reg_path) {
+        let registry = read_log(&reg_path)?;
+        if registry.is_empty() {
+            let n = host.list().len();
+            if n > 0 {
+                return Err(format!("{} is missing or empty, but the data directory holds {} filesystems; restore it from a copy (see docs/OPERATIONS.md), since without it no one owns them", reg_path.display(), n));
+            }
+        }
+        for j in registry {
             let id = j.get("id").and_then(Json::as_str).unwrap_or("").to_string();
             match j.get("op").and_then(Json::as_str) {
                 Some("account") => {

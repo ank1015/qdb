@@ -365,6 +365,43 @@ fn accounts_and_usage_outlive_a_restart() {
 }
 
 #[test]
+fn a_damaged_or_missing_registry_is_refused() {
+    let dir = Dir::new("registry");
+    let srv = Server::start(&dir, |_| {});
+    let mut c = srv.client();
+    let (_, key) = account(&mut c, "");
+    let fs = new_fs(&mut c, &key);
+    cmd(&mut c, &key, &fs, "echo kept > a.txt");
+    srv.stop();
+    let reg = dir.0.join("server").join("registry.log");
+    let good = std::fs::read(&reg).unwrap();
+    // A last line cut short by a crash is dropped.
+    let mut cut = good.clone();
+    cut.extend_from_slice(b"{\"op\":\"fs\",\"id\":\"0123");
+    std::fs::write(&reg, &cut).unwrap();
+    let srv = Server::start(&dir, |_| {});
+    let mut c = srv.client();
+    assert_eq!(out(&cmd(&mut c, &key, &fs, "cat a.txt")), "kept\n");
+    srv.stop();
+    // A bad line before the last: the server will not start, and
+    // removes nothing.
+    let mut bad = b"{not json\n".to_vec();
+    bad.extend_from_slice(&std::fs::read(&reg).unwrap());
+    std::fs::write(&reg, &bad).unwrap();
+    let e = Service::open(ServiceConfig::new(&dir.0, ADMIN)).err().unwrap();
+    assert!(e.contains("line 1 is damaged"), "{}", e);
+    // Missing, with filesystems there.
+    std::fs::remove_file(&reg).unwrap();
+    let e = Service::open(ServiceConfig::new(&dir.0, ADMIN)).err().unwrap();
+    assert!(e.contains("is missing or empty"), "{}", e);
+    std::fs::write(&reg, &good).unwrap();
+    let srv = Server::start(&dir, |_| {});
+    let mut c = srv.client();
+    assert_eq!(out(&cmd(&mut c, &key, &fs, "cat a.txt")), "kept\n");
+    srv.stop();
+}
+
+#[test]
 fn one_account_never_sees_another() {
     let dir = Dir::new("isolation");
     let srv = Server::start(&dir, |_| {});
