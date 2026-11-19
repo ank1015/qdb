@@ -1197,7 +1197,9 @@ fn long_run(addr: &str, o: &Opts, pid: u32) -> i32 {
         println!("FAIL  long run after {:.0} s: {}", t0.elapsed().as_secs_f64(), f);
         return 1;
     }
-    // No filesystem left locked: each takes a write at once.
+    // No filesystem left locked: each takes a write at once. On a new
+    // connection: the first has been idle longer than the server keeps one.
+    let mut c = Client::new(addr);
     let left = pool.into_inner().unwrap();
     let mut slowest = 0u64;
     for f in &left {
