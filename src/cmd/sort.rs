@@ -376,9 +376,16 @@ fn by_bytes(ents: &mut [Ent], buf: &[u8], whole: bool, tie: &dyn Fn(&Ent, &Ent) 
     };
     // (start, end, bytes already known to be equal within the group)
     let mut todo: Vec<(usize, usize, usize)> = vec![(0, ents.len(), 0)];
+    let mut pops = 0u32;
     while let Some((start, end, depth)) = todo.pop() {
         let part = &mut ents[start..end];
         let n = part.len();
+        // A long sort looks now and then for a request to stop: before
+        // every large group, and every so many small ones.
+        pops = pops.wrapping_add(1);
+        if n > 4096 || pops & 255 == 0 {
+            crate::unit::poll();
+        }
         if n <= 32 {
             let mut n = 0u32;
             part.sort_unstable_by(|a, b| {

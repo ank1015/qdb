@@ -1363,6 +1363,9 @@ fn deadline_run(addr: &str, o: &Opts) {
         "while true; do sort -r n.txt > s.txt; done",
         "while true; do cat d/* | sort | uniq -c > /dev/null; done",
         "while true; do awk '{s+=$1} END {print s}' n.txt; done",
+        "cat d/* | sort | uniq -c > /dev/null",
+        "sort -r d/* > /dev/null",
+        "cat d/* d/* d/* | sort -n | tail -n 1",
     ];
     let mut late = Vec::new();
     let mut worst = (0u64, "");
