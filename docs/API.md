@@ -358,8 +358,10 @@ Standard error is gathered (up to the output cap) and sent as one
 has `"done":true` and the fields of an answer that is not streamed,
 without the output.
 
-Streamed standard output has no cap. A client that stops reading holds
-the unit up; one that closes the connection stops it (`caller_gone`).
+Streamed standard output has no cap. A client that reads slowly slows
+the unit down. One that closes the connection, or takes nothing for 10
+seconds, stops it (`caller_gone`), and its stream is cut off. The
+unit's time limit holds while it waits for a slow client.
 
 Because the status is sent before the line runs, a unit that cannot run
 at all (its filesystem deleted meanwhile, the server shutting down) is
@@ -394,6 +396,7 @@ the last second of it; the units themselves are not lost.
 | Units waiting for a worker             | 256        | `--queue`               |
 | Session idle time                      | 15 minutes | `--session-idle-secs`   |
 | A connection idle between requests     | 5 minutes  | (fixed)                 |
+| A client taking no output              | 10 seconds | (fixed)                 |
 
 ## An example with curl
 
