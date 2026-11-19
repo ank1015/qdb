@@ -113,9 +113,10 @@ $ printf 'x\n' > a.txt; printf '%s\n' a.txt 'long name.txt' a.txt a.txt a.txt a.
 $ printf 'x\n' > a.txt; printf '%s\n' nosuch a.txt aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | xargs -n 1 -s 30 cat; echo $?
 $ printf '%s\n' nosuch a b c | xargs -n 2 -x -s 25 cat; echo $?
 # Real xargs and the cat it started both write to standard error, in an
-# order that differs from run to run: the status and the messages apart.
+# order that differs from run to run, and even in the middle of each
+# other's lines: the status, and xargs's own message, apart.
 $ printf '%s\n' a 'b"' | xargs cat 2>/dev/null; echo $?
-$ printf '%s\n' a 'b"' | xargs cat 2>&1 | sort
+$ printf '%s\n' a 'b"' | xargs cat 2>&1 | grep -o 'xargs: unmatched double quote'
 $ printf 'a b\nc d\n' | xargs -L 1
 $ printf 'a b \nc d\ne\n' | xargs -L 1
 $ printf 'a b\nc d\n' | xargs -l
