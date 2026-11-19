@@ -550,7 +550,7 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             1
         }
     });
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes: false })
 }
 
 struct Run {

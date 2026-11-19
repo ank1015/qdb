@@ -270,7 +270,7 @@ pub fn diff(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         d.top(&operands[0], &operands[1]);
         d.status
     });
-    Ok(Prepared { run, input: if stdin { Input::Whole } else { Input::Unused } })
+    Ok(Prepared { run, input: if stdin { Input::Whole } else { Input::Unused }, writes: false })
 }
 
 /// One side of a comparison.
@@ -1180,6 +1180,7 @@ fn compare_sequences(kept: &[Vec<u32>; 2], real: &[Vec<u32>; 2], changed: &mut [
 /// makes, giving up at the same cost for the same answer.
 #[allow(clippy::too_many_arguments)]
 fn middle(xv: &[u32], yv: &[u32], xoff: isize, xlim: isize, yoff: isize, ylim: isize, find_minimal: bool, fd: &mut [isize], bd: &mut [isize], base: isize, too_expensive: isize) -> (isize, isize, bool, bool) {
+    crate::unit::poll();
     let at = |d: isize| (d + base) as usize;
     let dmin = xoff - ylim;
     let dmax = xlim - yoff;

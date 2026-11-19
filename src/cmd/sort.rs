@@ -380,7 +380,14 @@ fn by_bytes(ents: &mut [Ent], buf: &[u8], whole: bool, tie: &dyn Fn(&Ent, &Ent) 
         let part = &mut ents[start..end];
         let n = part.len();
         if n <= 32 {
-            part.sort_unstable_by(|a, b| full(a, b, depth));
+            let mut n = 0u32;
+            part.sort_unstable_by(|a, b| {
+                n = n.wrapping_add(1);
+                if n & 0xffff == 0 {
+                    crate::unit::poll();
+                }
+                full(a, b, depth)
+            });
             continue;
         }
         let pivot = {
@@ -507,7 +514,15 @@ impl Sorter {
             };
             by_bytes(&mut self.ents, buf, false, &tie);
         } else {
-            self.ents.sort_by(|a, b| o.compare_headed(text(a), (a.prefix, a.koff, a.klen), text(b), (b.prefix, b.koff, b.klen)));
+            // A long sort looks now and then for a request to stop.
+            let mut n = 0u32;
+            self.ents.sort_by(|a, b| {
+                n = n.wrapping_add(1);
+                if n & 0xffff == 0 {
+                    crate::unit::poll();
+                }
+                o.compare_headed(text(a), (a.prefix, a.koff, a.klen), text(b), (b.prefix, b.koff, b.klen))
+            });
         }
     }
 
@@ -984,7 +999,7 @@ pub fn sort(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                 }
             }
         });
-        return Ok(Prepared { run, input });
+        return Ok(Prepared { run, input, writes: false });
     }
     let input = if files.is_empty() {
         Input::Stream(Box::new(Sorter::new(o.clone())))
@@ -1029,5 +1044,5 @@ pub fn sort(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         }
         s.output(io)
     });
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes: false })
 }

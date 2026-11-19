@@ -889,11 +889,12 @@ pub fn xargs(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     if !super::known(&x.command[0]) || x.command[0] == b":" {
         return Err(format!("command: {} (xargs)", String::from_utf8_lossy(&x.command[0])));
     }
+    let writes = !crate::engine::is_pure(&x.command[0]);
     let run: Runner = Box::new(move |db, io| xargs_run(&x, db, io));
-    Ok(Prepared { run, input: Input::Whole })
+    Ok(Prepared { run, input: Input::Whole, writes })
 }
 
-fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
+fn xargs_run(x: &Xargs, db: &mut crate::engine::Access, io: &mut crate::engine::Io) -> i32 {
     for w in &x.warnings {
         io.err_line(w);
     }
@@ -905,7 +906,7 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
     // its own error then ends with 123, not 1.
     let fatal = |status: i32| if status != 0 { status } else { 1 };
     // Run one command. False when xargs must stop.
-    let exec = |argv: &[Vec<u8>], db: &mut Db, io: &mut crate::engine::Io, status: &mut i32| -> bool {
+    let exec = |argv: &[Vec<u8>], db: &mut crate::engine::Access, io: &mut crate::engine::Io, status: &mut i32| -> bool {
         if x.trace {
             let shown: Vec<String> = argv
                 .iter()

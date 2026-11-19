@@ -28,6 +28,7 @@ pub mod store;
 pub mod testgen;
 pub mod testing;
 pub mod tree;
+pub mod unit;
 pub mod util;
 pub mod vfs;
 pub mod when;

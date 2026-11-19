@@ -812,6 +812,10 @@ impl Packed {
 
     /// Bytes of the file by part: (lists, table and buckets, checksums
     /// and the rest).
+    pub fn file_len(&self) -> u64 {
+        self.len
+    }
+
     pub fn sizes(&self) -> (u64, u64, u64) {
         (self.lists_len, self.sums_off - self.table_off, self.len - self.sums_off + IDX_HEADER)
     }

@@ -224,72 +224,81 @@ impl Script {
     /// substitutions, here-documents and the bodies of `for`, `if`,
     /// `while` and `until` included.
     pub fn all_commands(&self) -> Vec<SimpleCommand> {
-        fn parts(parts: &[Part], out: &mut Vec<SimpleCommand>) {
-            for p in parts {
+        let mut out = Vec::new();
+        self.visit(&mut |c| {
+            if let Command::Simple(c) = c {
+                out.push(c.clone());
+            }
+        });
+        out
+    }
+
+    /// Call `f` on every command in the script, simple and compound, those
+    /// inside command substitutions, here-documents, the words of
+    /// assignments and redirections and the bodies of compound commands
+    /// included.
+    pub fn visit(&self, f: &mut dyn FnMut(&Command)) {
+        fn parts(ps: &[Part], f: &mut dyn FnMut(&Command)) {
+            for p in ps {
                 match p {
-                    Part::Subst { script, .. } => list(&script.items, out),
-                    Part::Arith { expr, .. } => parts_of(expr, out),
-                    Part::Param { op: ParamOp::Default(w) | ParamOp::Assign(w), .. } => parts_of(&w.parts, out),
+                    Part::Subst { script, .. } => list(&script.items, f),
+                    Part::Arith { expr, .. } => parts(expr, f),
+                    Part::Param { op: ParamOp::Default(w) | ParamOp::Assign(w), .. } => parts(&w.parts, f),
                     _ => {}
                 }
             }
         }
-        fn parts_of(p: &[Part], out: &mut Vec<SimpleCommand>) {
-            parts(p, out)
-        }
-        fn redirects(rs: &[Redirect], out: &mut Vec<SimpleCommand>) {
+        fn redirects(rs: &[Redirect], f: &mut dyn FnMut(&Command)) {
             for r in rs {
                 match r {
-                    Redirect::Out { target, .. } | Redirect::Both { target, .. } | Redirect::In { target } => parts(&target.parts, out),
-                    Redirect::Here { body } => parts(&body.borrow(), out),
+                    Redirect::Out { target, .. } | Redirect::Both { target, .. } | Redirect::In { target } => parts(&target.parts, f),
+                    Redirect::Here { body } => parts(&body.borrow(), f),
                     Redirect::Dup { .. } => {}
                 }
             }
         }
-        fn list(items: &[AndOr], out: &mut Vec<SimpleCommand>) {
+        fn list(items: &[AndOr], f: &mut dyn FnMut(&Command)) {
             for item in items {
                 for pipeline in item.pipelines() {
                     for c in &pipeline.commands {
+                        f(c);
                         match c {
                             Command::Simple(c) => {
-                                out.push(c.clone());
                                 for a in &c.assigns {
-                                    parts(&a.value.parts, out);
+                                    parts(&a.value.parts, f);
                                 }
                                 for w in &c.words {
-                                    parts(&w.parts, out);
+                                    parts(&w.parts, f);
                                 }
                             }
                             Command::Compound(c) => match &c.kind {
                                 CompoundKind::For { words, body, .. } => {
                                     for w in words {
-                                        parts(&w.parts, out);
+                                        parts(&w.parts, f);
                                     }
-                                    list(body, out);
+                                    list(body, f);
                                 }
                                 CompoundKind::If { arms, otherwise } => {
                                     for (cond, body) in arms {
-                                        list(cond, out);
-                                        list(body, out);
+                                        list(cond, f);
+                                        list(body, f);
                                     }
                                     if let Some(body) = otherwise {
-                                        list(body, out);
+                                        list(body, f);
                                     }
                                 }
                                 CompoundKind::While { cond, body, .. } => {
-                                    list(cond, out);
-                                    list(body, out);
+                                    list(cond, f);
+                                    list(body, f);
                                 }
                             },
                         }
-                        redirects(c.redirects(), out);
+                        redirects(c.redirects(), f);
                     }
                 }
             }
         }
-        let mut out = Vec::new();
-        list(&self.items, &mut out);
-        out
+        list(&self.items, f);
     }
 }
 

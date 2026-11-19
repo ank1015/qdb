@@ -278,10 +278,11 @@ as bash's subshells do, so `echo a | read X` leaves `X` unset.
 **The command limit.** A unit may run 1,000,000 commands (`--command-limit N`;
 loop turns count too). The unit that reaches the limit is stopped with
 status 3 and the message `qdb: the unit was stopped after N commands,
-the most one unit may run; what it changed before that stays`. As the
-message says, its writes up to there are kept, as they are when a
-command fails half way through a unit, and the database goes on as
-before.
+the most one unit may run; nothing it changed was kept`. A stopped unit
+leaves nothing: the tree, and the session's variables and current
+folder, are as they were before it began. (Until stage 6 its writes up
+to the limit were kept.) A unit that ends by itself keeps what it wrote,
+whatever its status, as in bash.
 
 `find -exec` and `xargs` run the engine's commands, but not the ones
 that only make sense inside a session: `cd`, `export`, `unset`, `read`,

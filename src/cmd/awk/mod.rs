@@ -306,7 +306,7 @@ pub fn awk(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             m.push(stdin, io);
             m.finish(io)
         });
-        return Ok(Prepared { run, input: Input::Stream(Box::new(Machine::new(setup))) });
+        return Ok(Prepared { run, input: Input::Stream(Box::new(Machine::new(setup))), writes: false });
     }
     let input = if files.iter().any(|f| f == b"-") { Input::Whole } else { Input::Unused };
     let run: Runner = Box::new(move |db, io: &mut Io| {
@@ -351,5 +351,5 @@ pub fn awk(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         }
         m.end(io)
     });
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes: false })
 }

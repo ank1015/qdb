@@ -14,6 +14,46 @@ use crate::tree::{is_valid_text, Cost, Db, Errno, NodeId, Scratch, TextCheck};
 use crate::vfs::VFile;
 use crate::util::lossy;
 
+/// How a unit holds the database. A reader holds it shared with other
+/// readers and may not change it; a writer holds it alone. Commands see
+/// the database through this: reading goes through `Deref`, and anything
+/// that changes the tree through `DerefMut`, which a reader refuses by
+/// throwing `ReadOnly`. So a unit taken for a reader that tries to write
+/// stops before it changes anything, and says so; it is never let through.
+pub enum Access<'d> {
+    Read(&'d Db),
+    Write(&'d mut Db),
+}
+
+/// Thrown when a unit run as a reader tries to change the database.
+#[derive(Debug)]
+pub struct ReadOnly;
+
+impl std::ops::Deref for Access<'_> {
+    type Target = Db;
+    fn deref(&self) -> &Db {
+        match self {
+            Access::Read(db) => db,
+            Access::Write(db) => db,
+        }
+    }
+}
+
+impl std::ops::DerefMut for Access<'_> {
+    fn deref_mut(&mut self) -> &mut Db {
+        match self {
+            Access::Write(db) => db,
+            Access::Read(_) => std::panic::panic_any(ReadOnly),
+        }
+    }
+}
+
+impl Access<'_> {
+    pub fn is_writer(&self) -> bool {
+        matches!(self, Access::Write(_))
+    }
+}
+
 /// What a command line produced. Two outcomes are equal when output,
 /// errors and status are: what the unit used is not part of the answer.
 #[derive(Debug, Clone, Default)]
@@ -271,8 +311,10 @@ impl<'a> Io<'a> {
         self.buf.extend_from_slice(data);
     }
 
-    /// Hand on what has been written so far.
+    /// Hand on what has been written so far. A unit asked to stop stops
+    /// here.
     pub fn flush(&mut self) {
+        crate::unit::poll();
         if self.merged && !self.err.is_empty() {
             // Errors are not buffered: they go ahead of the output that
             // still is.
@@ -297,7 +339,7 @@ impl<'a> Io<'a> {
 }
 
 /// A command with its flags already checked, ready to run.
-pub type Runner = Box<dyn FnOnce(&mut Db, &mut Io) -> i32>;
+pub type Runner = Box<dyn FnOnce(&mut Access, &mut Io) -> i32>;
 
 /// A command reading its standard input in pieces, as the stage before it
 /// produces them.
@@ -307,7 +349,7 @@ pub trait Filter {
     /// The input has ended. Returns the exit status.
     fn finish(self: Box<Self>, io: &mut Io) -> i32;
     /// The same, for a filter that then changes data, as tee does.
-    fn finish_db(self: Box<Self>, _db: &mut Db, io: &mut Io) -> i32 {
+    fn finish_db(self: Box<Self>, _db: &mut Access, io: &mut Io) -> i32 {
         self.finish(io)
     }
 }
@@ -328,11 +370,23 @@ pub enum Input {
 pub struct Prepared {
     pub run: Runner,
     pub input: Input,
+    /// The command may change the tree, as its flags stand: `sed -i`,
+    /// `sort -o`, `find -delete`, awk printing to a file. A unit none of
+    /// whose commands may write runs as a reader (`classify`).
+    pub writes: bool,
+}
+
+impl Prepared {
+    /// The same command, marked as one that may change the tree.
+    pub fn writing(mut self) -> Prepared {
+        self.writes = true;
+        self
+    }
 }
 
 impl From<Runner> for Prepared {
     fn from(run: Runner) -> Prepared {
-        Prepared { run, input: Input::Unused }
+        Prepared { run, input: Input::Unused, writes: false }
     }
 }
 
@@ -449,19 +503,25 @@ struct Ctx {
     /// command being put together: the status of a command that is
     /// nothing but assignments.
     subst: Cell<Option<i32>>,
+    /// The unit has run into the command limit: it is stopped, and what
+    /// it changed will be taken back.
+    limited: Cell<bool>,
 }
 
 impl Ctx {
     fn new(limit: u64) -> Ctx {
-        Ctx { limit, ran: Cell::new(0), loops: Cell::new(0), flow: Cell::new(None), subst: Cell::new(None) }
+        Ctx { limit, ran: Cell::new(0), loops: Cell::new(0), flow: Cell::new(None), subst: Cell::new(None), limited: Cell::new(false) }
     }
 
-    /// One more command is about to run.
+    /// One more command is about to run. A unit asked to stop stops here.
     fn count(&self, err: &mut dyn Sink) -> Result<(), Flow> {
+        crate::unit::poll();
         let n = self.ran.get() + 1;
         self.ran.set(n);
         if n > self.limit {
-            err.write(format!("qdb: the unit was stopped after {} commands, the most one unit may run; what it changed before that stays\n", self.limit).as_bytes());
+            if !self.limited.replace(true) {
+                err.write(format!("qdb: the unit was stopped after {} commands, the most one unit may run; nothing it changed was kept\n", self.limit).as_bytes());
+            }
             return Err(Flow::Stop(EXIT_LIMIT));
         }
         Ok(())
@@ -580,14 +640,14 @@ impl Fields {
 
 /// What expansion needs: the tree for globs and for the commands of a
 /// substitution, and the session for everything with a dollar.
-struct Ex<'a> {
-    db: &'a mut Db,
+struct Ex<'a, 'd> {
+    db: &'a mut Access<'d>,
     sess: &'a mut Session,
     ctx: &'a Ctx,
     err: &'a mut dyn Sink,
 }
 
-impl Ex<'_> {
+impl Ex<'_, '_> {
     /// Expand one word into arguments, in bash's order: braces, tilde,
     /// parameters with arithmetic and command substitution, field
     /// splitting, globs, then quote removal.
@@ -823,46 +883,264 @@ pub fn execute_to(db: &mut Db, line: &[u8], out: &mut dyn Sink, err: &mut dyn Si
 
 /// As `execute_to`, in the caller's session: the unit sees its variables
 /// and its current directory, and what it does to them stays.
+///
+/// The unit runs as a reader if its text shows it cannot write
+/// (`classify`), and as a writer otherwise; the answer is the same.
 pub fn execute_to_in(db: &mut Db, sess: &mut Session, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
-    db.begin_unit();
-    db.set_cwd(sess.cwd());
-    let code = execute_unit(db, sess, line, out, err);
-    db.set_cwd(b"/");
-    db.end_unit();
-    sess.status = code;
-    code
+    let end = match classify(line) {
+        Kind::Reader => run_unit(Access::Read(db), sess, line, out, err),
+        Kind::Writer => run_unit(Access::Write(db), sess, line, out, err),
+    };
+    after_unit(db, &end, err);
+    end.code
 }
 
-fn execute_unit(db: &mut Db, sess: &mut Session, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
+/// What the holder of a database does after a unit that found damage or
+/// failed inside, once it holds the database alone: a reader could not
+/// mark it. The database then refuses every unit until it is opened
+/// again.
+pub fn after_unit(db: &mut Db, end: &UnitEnd, err: &mut dyn Sink) {
+    match &end.ending {
+        Ending::Damaged(msg, seg) if db.failure().is_none() => {
+            db.after_damage(&crate::disk::Damage(msg.clone(), *seg));
+            if let Some(e) = db.failure() {
+                err.write(format!("qdb: {}\n", e).as_bytes());
+            }
+        }
+        Ending::Fault(what) => db.fail_internal(what),
+        _ => {}
+    }
+}
+
+/// Whether a unit can change the tree, as far as its text shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// Nothing in it can write: it may run beside other readers.
+    Reader,
+    /// It may write: it runs alone.
+    Writer,
+}
+
+/// Commands that never change the tree, whatever their arguments.
+const PURE: &[&str] = &[
+    "echo", "cat", "head", "tail", "wc", "ls", "grep", "rg", "printf", "test", "[", "true", ":", "false", "sleep", "basename", "dirname", "seq",
+    "pwd", "du", "date", "cut", "tr", "nl", "diff", "sort", "uniq", "awk",
+];
+
+/// Commands that change the tree or not as their flags say. They are
+/// judged by their flags when every argument is written out.
+const DEPENDS: &[&str] = &["sed", "find", "tee", "xargs"];
+
+/// True if the command never changes the tree, whatever its arguments.
+pub fn is_pure(name: &[u8]) -> bool {
+    PURE.iter().any(|n| n.as_bytes() == name)
+}
+
+/// A word whose value is the text written: no expansion, no glob, no
+/// braces.
+fn plain(w: &Word) -> bool {
+    let bytes = w.bytes();
+    let unquoted = |set: &[u8]| bytes.iter().any(|&(c, quoted)| !quoted && set.contains(&c));
+    // Braces expand only with a comma or `..` between them: `{}` is
+    // just text.
+    let braces = unquoted(b"{") && unquoted(b"}") && (unquoted(b",") || bytes.windows(2).any(|w| w[0] == (b'.', false) && w[1] == (b'.', false)));
+    !w.has_subst() && !unquoted(b"*?[") && !braces
+}
+
+/// Decide from a unit's text alone whether it can change the tree. It is
+/// a reader if nothing in it can write: every command is one that never
+/// writes, or one whose written-out flags say it does not; every
+/// redirection of output goes to /dev/null; and no command's name comes
+/// from an expansion. Anything else is a writer. A unit that does not
+/// parse is a reader: it fails before anything runs.
+pub fn classify(line: &[u8]) -> Kind {
+    let Ok(script) = shell::parse(line) else { return Kind::Reader };
+    let mut writer = false;
+    script.visit(&mut |c| {
+        if writer {
+            return;
+        }
+        for r in c.redirects() {
+            if let Redirect::Out { target, .. } | Redirect::Both { target, .. } = r {
+                if !plain(target) || target.text() != DEV_NULL {
+                    writer = true;
+                    return;
+                }
+            }
+        }
+        let Command::Simple(c) = c else { return };
+        let Some(first) = c.words.first() else { return };
+        if !plain(first) {
+            writer = true;
+            return;
+        }
+        let name = first.text();
+        if is_builtin(&name) || is_pure(&name) {
+            return;
+        }
+        if DEPENDS.iter().any(|n| n.as_bytes() == name.as_slice()) && c.words.iter().all(plain) {
+            let args: Vec<Vec<u8>> = c.words[1..].iter().map(|w| w.text()).collect();
+            match cmd::prepare(&name, &args) {
+                // Refused before anything runs.
+                Err(_) => return,
+                Ok(p) if !p.writes => return,
+                Ok(_) => {}
+            }
+        }
+        writer = true;
+    });
+    if writer {
+        Kind::Writer
+    } else {
+        Kind::Reader
+    }
+}
+
+/// How a unit ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ending {
+    /// It ran to its end, whatever its status: what it changed is kept.
+    Ran,
+    /// It ran more commands than one unit may, and was stopped: nothing
+    /// it changed is kept.
+    Limit,
+    /// It was stopped from outside (`unit::Stop`): nothing it changed is
+    /// kept.
+    Stopped(crate::unit::Reason),
+    /// A write would have passed one of the database's quotas (the
+    /// message names it): nothing it changed is kept.
+    Quota(String),
+    /// Damage was found in the database's files (the message, and the
+    /// data file whose index is damaged). Nothing the unit changed is
+    /// logged, and the database must be opened again. After a reader the
+    /// holder of the database marks it and reports (`after_unit`).
+    Damaged(String, Option<u32>),
+    /// The engine failed inside it. Nothing it changed is kept, and the
+    /// database must be opened again.
+    Fault(String),
+}
+
+/// A unit's exit status and how it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitEnd {
+    pub code: i32,
+    pub ending: Ending,
+}
+
+/// Run one unit with the access given: a reader with the database
+/// shared, a writer with it alone. A writer's changes are committed when
+/// it ends by itself, and taken back when it is stopped. A reader that
+/// tries to write is stopped as an engine fault, having changed nothing.
+///
+/// The session is left as it was if the unit is stopped.
+pub fn run_unit(mut db: Access, sess: &mut Session, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> UnitEnd {
     if let Some(e) = db.failure() {
         err.write(format!("qdb: {}\n", e).as_bytes());
-        return 2;
+        return UnitEnd { code: 2, ending: Ending::Ran };
     }
+    db.begin_unit();
+    db.set_cwd(sess.cwd());
+    let saved = sess.clone();
     // Reads cannot return an error, so damage found while reading is
-    // thrown (`disk::Damage`). It ends the unit and the use of this
-    // database: what the unit had changed so far is not logged.
+    // thrown (`disk::Damage`), and so is a request to stop.
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let code = run_line(db, sess, line, out, err);
+        let (code, limited) = run_line(&mut db, sess, line, out, err);
         // The unit's changes become one record of the log; a file that
         // `>` emptied and nothing wrote to is now empty for good.
-        db.commit();
-        code
-    }));
-    let code = match ran {
-        Ok(code) => code,
-        Err(payload) => match payload.downcast::<crate::disk::Damage>() {
-            Ok(d) => {
-                db.after_damage(&d);
-                2
+        if !limited {
+            if let Access::Write(db) = &mut db {
+                db.commit();
             }
-            Err(other) => std::panic::resume_unwind(other),
-        },
+        }
+        (code, limited)
+    }));
+    let end = match ran {
+        Ok((code, false)) => UnitEnd { code, ending: Ending::Ran },
+        Ok((code, true)) => {
+            if let Access::Write(db) = &mut db {
+                db.rollback();
+            }
+            *sess = saved;
+            UnitEnd { code, ending: Ending::Limit }
+        }
+        Err(payload) => {
+            let payload = match payload.downcast::<crate::unit::Stopped>() {
+                Ok(stopped) => {
+                    let why = stopped.0;
+                    if let Access::Write(db) = &mut db {
+                        db.rollback();
+                    }
+                    *sess = saved;
+                    err.write(format!("qdb: {}\n", why.message()).as_bytes());
+                    let code = match why {
+                        crate::unit::Reason::Deadline => 124,
+                        crate::unit::Reason::Memory | crate::unit::Reason::Scratch => 137,
+                        _ => 143,
+                    };
+                    db.set_cwd(b"/");
+                    db.end_unit();
+                    return UnitEnd { code, ending: Ending::Stopped(why) };
+                }
+                Err(other) => other,
+            };
+            let payload = match payload.downcast::<crate::tree::QuotaReached>() {
+                Ok(q) => {
+                    if let Access::Write(db) = &mut db {
+                        db.rollback();
+                    }
+                    *sess = saved;
+                    err.write(format!("qdb: {}; nothing the unit changed was kept\n", q.0).as_bytes());
+                    db.set_cwd(b"/");
+                    db.end_unit();
+                    return UnitEnd { code: 1, ending: Ending::Quota(q.0) };
+                }
+                Err(other) => other,
+            };
+            let payload = match payload.downcast::<crate::disk::Damage>() {
+                Ok(d) => {
+                    *sess = saved;
+                    if let Access::Write(db) = &mut db {
+                        db.after_damage(&d);
+                    }
+                    db.set_cwd(b"/");
+                    db.end_unit();
+                    if let Some(e) = db.failure() {
+                        err.write(format!("qdb: {}\n", e).as_bytes());
+                    }
+                    return UnitEnd { code: 2, ending: Ending::Damaged(d.0.clone(), d.1) };
+                }
+                Err(other) => other,
+            };
+            let what = if payload.downcast_ref::<ReadOnly>().is_some() {
+                "a unit run as a reader tried to change the tree".to_string()
+            } else if let Some(s) = payload.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "a panic".to_string()
+            };
+            *sess = saved;
+            if let Access::Write(db) = &mut db {
+                // The tree may be half changed; taking the unit back is
+                // tried, and the database is marked so that it is opened
+                // again from disk before anything more runs on it.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| db.rollback()));
+                db.fail_internal(&what);
+            }
+            err.write(format!("qdb: internal error: {}; nothing the unit changed was kept\n", what).as_bytes());
+            UnitEnd { code: 2, ending: Ending::Fault(what) }
+        }
     };
+    db.set_cwd(b"/");
+    db.end_unit();
     if let Some(e) = db.failure() {
-        err.write(format!("qdb: {}\n", e).as_bytes());
-        return 2;
+        if end.ending == Ending::Ran {
+            err.write(format!("qdb: {}\n", e).as_bytes());
+            return UnitEnd { code: 2, ending: Ending::Ran };
+        }
     }
-    code
+    end
 }
 
 /// True if `text` is a complete unit as bash would read it from a
@@ -880,12 +1158,21 @@ pub fn is_complete(text: &[u8]) -> bool {
     }
 }
 
-fn run_line(db: &mut Db, sess: &mut Session, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
+/// Run a unit's text. Returns its status, and whether it was stopped at
+/// the command limit.
+fn run_line(db: &mut Access, sess: &mut Session, line: &[u8], out: &mut dyn Sink, err: &mut dyn Sink) -> (i32, bool) {
     let script = match shell::parse(line) {
         Ok(s) => s,
-        Err(ParseError::Unsupported(what)) => return fail(format!("unsupported syntax: {}", what), err),
-        Err(ParseError::Syntax(what)) | Err(ParseError::Incomplete(what)) => return fail(what, err),
+        Err(ParseError::Unsupported(what)) => return (fail(format!("unsupported syntax: {}", what), err), false),
+        Err(ParseError::Syntax(what)) | Err(ParseError::Incomplete(what)) => return (fail(what, err), false),
     };
+    let limit = db.config().command_limit;
+    let ctx = Ctx::new(crate::unit::command_limit().map_or(limit, |n| n.min(limit)));
+    let code = run_script(db, sess, &script, &ctx, out, err);
+    (code, ctx.limited.get())
+}
+
+fn run_script(db: &mut Access, sess: &mut Session, script: &Script, ctx: &Ctx, out: &mut dyn Sink, err: &mut dyn Sink) -> i32 {
     // Check everything the text shows before running anything.
     let mut ready = Vec::new();
     if let Err(what) = check_list(db, &script.items, Some(&mut ready)) {
@@ -894,10 +1181,9 @@ fn run_line(db: &mut Db, sess: &mut Session, line: &[u8], out: &mut dyn Sink, er
     for w in &script.warnings {
         err.write(format!("qdb: {}\n", w).as_bytes());
     }
-    let ctx = Ctx::new(db.config().command_limit);
     let mut none = None;
     let gone = Cell::new(false);
-    let mut r = Run { ctx: &ctx, out, err, stdin: &mut none, gone: &gone, merged: false };
+    let mut r = Run { ctx, out, err, stdin: &mut none, gone: &gone, merged: false };
     // An expansion that fails gives up the rest of its line; the unit
     // goes on with the next line.
     let mut code = 0;
@@ -928,7 +1214,7 @@ fn run_line(db: &mut Db, sess: &mut Session, line: &[u8], out: &mut dyn Sink, er
 /// and its flags are checked; of one that does, only the name can be
 /// checked, and the rest when it is reached. The commands of the first
 /// pipeline are kept in `ready` when they will run exactly as checked.
-fn check_list(db: &mut Db, items: &[shell::AndOr], mut ready: Option<&mut Vec<Option<Prepared>>>) -> Result<(), String> {
+fn check_list(db: &mut Access, items: &[shell::AndOr], mut ready: Option<&mut Vec<Option<Prepared>>>) -> Result<(), String> {
     let mut first = true;
     for item in items {
         for pipeline in item.pipelines() {
@@ -986,7 +1272,7 @@ fn check_list(db: &mut Db, items: &[shell::AndOr], mut ready: Option<&mut Vec<Op
 
 /// Check what is inside the parts of a word. Returns true if the word's
 /// value is only known when it runs.
-fn check_parts(db: &mut Db, parts: &[Part]) -> Result<bool, String> {
+fn check_parts(db: &mut Access, parts: &[Part]) -> Result<bool, String> {
     let mut any = false;
     for p in parts {
         match p {
@@ -1005,7 +1291,7 @@ fn check_parts(db: &mut Db, parts: &[Part]) -> Result<bool, String> {
     Ok(any)
 }
 
-fn check_simple(db: &mut Db, c: &SimpleCommand) -> Result<Option<Prepared>, String> {
+fn check_simple(db: &mut Access, c: &SimpleCommand) -> Result<Option<Prepared>, String> {
     let mut fixed = true;
     for w in &c.words {
         fixed &= !check_parts(db, &w.parts)?;
@@ -1037,7 +1323,7 @@ fn check_simple(db: &mut Db, c: &SimpleCommand) -> Result<Option<Prepared>, Stri
     Ok(None)
 }
 
-fn run_list(db: &mut Db, sess: &mut Session, items: &[shell::AndOr], r: &mut Run) -> Result<i32, Flow> {
+fn run_list(db: &mut Access, sess: &mut Session, items: &[shell::AndOr], r: &mut Run) -> Result<i32, Flow> {
     let mut code = 0;
     for item in items {
         code = run_and_or(db, sess, item, r, None)?;
@@ -1048,7 +1334,7 @@ fn run_list(db: &mut Db, sess: &mut Session, items: &[shell::AndOr], r: &mut Run
     Ok(code)
 }
 
-fn run_and_or(db: &mut Db, sess: &mut Session, item: &shell::AndOr, r: &mut Run, ready: Option<Vec<Option<Prepared>>>) -> Result<i32, Flow> {
+fn run_and_or(db: &mut Access, sess: &mut Session, item: &shell::AndOr, r: &mut Run, ready: Option<Vec<Option<Prepared>>>) -> Result<i32, Flow> {
     let mut code = run_pipeline(db, sess, &item.first, r, ready)?;
     sess.status = code;
     for (op, pipeline) in &item.rest {
@@ -1062,19 +1348,19 @@ fn run_and_or(db: &mut Db, sess: &mut Session, item: &shell::AndOr, r: &mut Run,
 
 /// What one stage of a pipeline runs.
 struct Work<'a> {
-    run: Box<dyn FnOnce(&mut Db, &mut Io) -> i32 + 'a>,
+    run: Box<dyn FnOnce(&mut Access, &mut Io) -> i32 + 'a>,
     input: Input,
 }
 
 /// A variable as it was before `NAME=value command` set it.
 type Before = (Vec<u8>, Option<Vec<u8>>);
 
-fn run_pipeline(db: &mut Db, sess: &mut Session, pipeline: &Pipeline, r: &mut Run, ready: Option<Vec<Option<Prepared>>>) -> Result<i32, Flow> {
+fn run_pipeline(db: &mut Access, sess: &mut Session, pipeline: &Pipeline, r: &mut Run, ready: Option<Vec<Option<Prepared>>>) -> Result<i32, Flow> {
     let code = run_pipeline_plain(db, sess, pipeline, r, ready)?;
     Ok(if pipeline.negated { (code == 0) as i32 } else { code })
 }
 
-fn run_pipeline_plain(db: &mut Db, sess: &mut Session, pipeline: &Pipeline, r: &mut Run, ready: Option<Vec<Option<Prepared>>>) -> Result<i32, Flow> {
+fn run_pipeline_plain(db: &mut Access, sess: &mut Session, pipeline: &Pipeline, r: &mut Run, ready: Option<Vec<Option<Prepared>>>) -> Result<i32, Flow> {
     db.set_cwd(sess.cwd());
     let n = pipeline.commands.len();
     // A loop or an `if` that stands alone, with no redirection, runs
@@ -1109,7 +1395,7 @@ fn run_pipeline_plain(db: &mut Db, sess: &mut Session, pipeline: &Pipeline, r: &
                     // its own in bash, which counts loops from none:
                     // `continue 2` in its one loop is `continue`.
                     let own_shell = n > 1;
-                    let run: Box<dyn FnOnce(&mut Db, &mut Io) -> i32 + '_> = Box::new(move |db, io| {
+                    let run: Box<dyn FnOnce(&mut Access, &mut Io) -> i32 + '_> = Box::new(move |db, io| {
                         let around = ctx.loops.get();
                         if own_shell {
                             ctx.loops.set(0);
@@ -1182,7 +1468,7 @@ fn run_pipeline_plain(db: &mut Db, sess: &mut Session, pipeline: &Pipeline, r: &
 /// Put a simple command together: expand its words, its assignments and
 /// its redirections, and find what it runs.
 fn prepare_simple<'a>(
-    db: &mut Db,
+    db: &mut Access,
     sess: &'a mut Session,
     ctx: &'a Ctx,
     c: &SimpleCommand,
@@ -1287,7 +1573,7 @@ impl Sink for IoErr<'_, '_, '_> {
 
 /// Run a loop or an `if` with the streams of a stage: its standard input
 /// is what `read` and the commands inside take from.
-fn compound_in_io(db: &mut Db, sess: &mut Session, ctx: &Ctx, kind: &CompoundKind, io: &mut Io) -> i32 {
+fn compound_in_io(db: &mut Access, sess: &mut Session, ctx: &Ctx, kind: &CompoundKind, io: &mut Io) -> i32 {
     let mut stdin = if io.has_stdin() { Some(io.take_stdin()) } else { None };
     let gone = Cell::new(false);
     let merged = io.merged;
@@ -1329,7 +1615,7 @@ fn step(result: Result<i32, Flow>, ctx: &Ctx, sess: &Session) -> Result<Step, Fl
     }
 }
 
-fn run_compound(db: &mut Db, sess: &mut Session, kind: &CompoundKind, r: &mut Run) -> Result<i32, Flow> {
+fn run_compound(db: &mut Access, sess: &mut Session, kind: &CompoundKind, r: &mut Run) -> Result<i32, Flow> {
     let ctx = r.ctx;
     match kind {
         CompoundKind::If { arms, otherwise } => {
@@ -1407,7 +1693,7 @@ fn run_compound(db: &mut Db, sess: &mut Session, kind: &CompoundKind, r: &mut Ru
 }
 
 /// Run one of the commands that act on the session.
-fn builtin(db: &mut Db, sess: &mut Session, ctx: &Ctx, name: &[u8], args: &[Vec<u8>], io: &mut Io) -> i32 {
+fn builtin(db: &mut Access, sess: &mut Session, ctx: &Ctx, name: &[u8], args: &[Vec<u8>], io: &mut Io) -> i32 {
     io.errors_first();
     match name {
         b"cd" => {
@@ -1609,7 +1895,7 @@ fn read_line(sess: &mut Session, args: &[Vec<u8>], io: &mut Io) -> i32 {
 
 /// Run a command given as words, as `xargs` and `find -exec` do, with the
 /// streams of the command that runs it.
-pub fn run_argv(db: &mut Db, argv: &[Vec<u8>], io: &mut Io) -> i32 {
+pub fn run_argv(db: &mut Access, argv: &[Vec<u8>], io: &mut Io) -> i32 {
     let Some((name, args)) = argv.split_first() else { return 0 };
     // `:` is part of the shell, like cd and read, which `cmd` does not
     // know at all: none of them can be run from here.
@@ -1625,7 +1911,7 @@ pub fn run_argv(db: &mut Db, argv: &[Vec<u8>], io: &mut Io) -> i32 {
 
 /// One command of a pipeline.
 struct Stage<'a> {
-    run: Option<Box<dyn FnOnce(&mut Db, &mut Io) -> i32 + 'a>>,
+    run: Option<Box<dyn FnOnce(&mut Access, &mut Io) -> i32 + 'a>>,
     state: State,
     /// The command as a filter, when its standard input is a file it can
     /// take a piece at a time.
@@ -1735,7 +2021,7 @@ impl<'a> Stage<'a> {
     ///
     /// `inherited` is what is left of the standard input of the loop the
     /// command is in, for the first command of a pipeline there.
-    fn end(&mut self, db: &mut Db, down: &mut dyn Sink, uerr: &mut dyn Sink, inherited: Option<&[u8]>) -> i32 {
+    fn end(&mut self, db: &mut Access, down: &mut dyn Sink, uerr: &mut dyn Sink, inherited: Option<&[u8]>) -> i32 {
         let state = std::mem::replace(&mut self.state, State::Closed(None));
         let mut undo = Vec::new();
         let (opened, stdin, failed) = open_redirects(db, &self.redirs, &mut undo);
@@ -1874,7 +2160,7 @@ enum Undo {
     Truncated(NodeId, i64),
 }
 
-fn open_redirect(db: &mut Db, append: bool, path: &[u8], undo: &mut Vec<Undo>) -> Result<NodeId, Errno> {
+fn open_redirect(db: &mut Access, append: bool, path: &[u8], undo: &mut Vec<Undo>) -> Result<NodeId, Errno> {
     match db.resolve(path) {
         Ok(id) if db.is_dir(id) => Err(Errno::IsDir),
         Ok(id) => {
@@ -1912,7 +2198,7 @@ type Target = (bool, NodeId, Vec<u8>);
 /// takes the output. Returns the file each one opened for writing, where
 /// standard input comes from, and, if one could not be opened, its index
 /// and the message.
-fn open_redirects(db: &mut Db, redirs: &[Redir], undo: &mut Vec<Undo>) -> (Vec<Option<Target>>, Option<Stdin>, Option<(usize, String)>) {
+fn open_redirects(db: &mut Access, redirs: &[Redir], undo: &mut Vec<Undo>) -> (Vec<Option<Target>>, Option<Stdin>, Option<(usize, String)>) {
     let mut opened: Vec<Option<Target>> = redirs.iter().map(|_| None).collect();
     let mut stdin = None;
     for (i, r) in redirs.iter().enumerate() {
@@ -1953,11 +2239,11 @@ fn open_redirects(db: &mut Db, redirs: &[Redir], undo: &mut Vec<Undo>) -> (Vec<O
 /// Store redirected output, already found to be valid text, in its file.
 /// Store what a command gathered for a file of its own, as tee does.
 /// The output must have ended and been found to be valid text.
-pub fn store_output(db: &mut Db, id: NodeId, append: bool, path: &[u8], out: &mut Spool, stderr: &mut Vec<u8>) -> i32 {
+pub fn store_output(db: &mut Access, id: NodeId, append: bool, path: &[u8], out: &mut Spool, stderr: &mut Vec<u8>) -> i32 {
     store_redirect(db, (append, id, path.to_vec()), out, 0, stderr)
 }
 
-fn store_redirect(db: &mut Db, target: Target, out: &mut Spool, mut code: i32, stderr: &mut Vec<u8>) -> i32 {
+fn store_redirect(db: &mut Access, target: Target, out: &mut Spool, mut code: i32, stderr: &mut Vec<u8>) -> i32 {
     let (append, id, path) = target;
     if let Some(e) = out.error.take() {
         // Reported when the command line ends, like any failure to store.

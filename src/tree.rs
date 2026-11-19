@@ -281,6 +281,13 @@ pub struct Config {
     /// A unit is stopped once it has run this many commands, so that a
     /// loop without an end cannot hold the database for good.
     pub command_limit: u64,
+    /// Quotas: the most bytes of text the tree may hold, the most files
+    /// and folders, and the most bytes its files on disk may take, upkeep
+    /// included. A unit that would pass one is stopped before the write
+    /// that would, and leaves nothing (`QuotaReached`).
+    pub max_text: u64,
+    pub max_nodes: u64,
+    pub max_disk: u64,
     /// The data file being written gets an index file of its own at
     /// close only once it holds this many bytes; below that, opening
     /// indexes its content again, which is quicker than reading a file.
@@ -292,7 +299,7 @@ const INDEX_WAIT: u64 = 16 << 20;
 
 impl Default for Config {
     fn default() -> Config {
-        Config { piece: 64 * 1024, segment: 128 << 20, sync: SyncMode::Always, batch_lines: 64, batch_bytes: 4 << 20, index: true, checkpoint: 1 << 20, spool: 8 << 20, upkeep: true, compress: false, index_later: false, command_limit: 1_000_000, index_file_min: 256 << 10 }
+        Config { piece: 64 * 1024, segment: 128 << 20, sync: SyncMode::Always, batch_lines: 64, batch_bytes: 4 << 20, index: true, checkpoint: 1 << 20, spool: 8 << 20, upkeep: true, compress: false, index_later: false, command_limit: 1_000_000, index_file_min: 256 << 10, max_text: u64::MAX, max_nodes: u64::MAX, max_disk: u64::MAX }
     }
 }
 
@@ -435,6 +442,7 @@ pub fn add_reads(r: &[u64; 6]) {
 
 /// Bytes a command sent to scratch files, for the cost report.
 pub fn count_scratch(bytes: u64) {
+    crate::unit::add_scratch(bytes);
     bump(T_SCRATCH, bytes);
 }
 
@@ -639,6 +647,45 @@ pub struct Db {
     /// removed: cut shorter a step at a time, since removing a large
     /// file in one go takes the operating system a long moment.
     dying: Vec<(String, Box<dyn crate::vfs::VFile>)>,
+    /// How to take back what the unit now running has changed, if it is
+    /// stopped (`rollback`). Emptied when the unit ends.
+    undo: Undo,
+    /// Bytes of text in all files, for the text quota.
+    text_total: u64,
+}
+
+/// Thrown when a write would pass one of the database's quotas. The
+/// message names the quota.
+#[derive(Debug, Clone)]
+pub struct QuotaReached(pub String);
+
+#[cold]
+fn over_quota(what: String) -> ! {
+    std::panic::panic_any(QuotaReached(what))
+}
+
+/// What a unit has changed, kept so that it can be taken back.
+#[derive(Default)]
+struct Undo {
+    /// Changes to the shape of the tree, in order.
+    steps: Vec<UndoStep>,
+    /// The first id this unit handed out: nodes at or above it are new,
+    /// and taking back their making takes back everything about them.
+    base: NodeId,
+    /// Old files whose content the unit changed: their pieces, length
+    /// and version before the first change.
+    content: std::collections::HashMap<NodeId, (Vec<Piece>, u64, u32)>,
+    /// Old nodes whose time the unit set: the time before.
+    times: std::collections::HashMap<NodeId, i64>,
+    /// Uses of pieces the unit added: given up if it is taken back.
+    acquired: Vec<(NodeId, Piece)>,
+}
+
+enum UndoStep {
+    Made(NodeId),
+    /// Nodes taken out of the tree, the top one first, as they were.
+    Removed(Vec<Node>),
+    Moved { id: NodeId, parent: NodeId, name: Vec<u8> },
 }
 
 /// How much shorter a file being removed gets per step.
@@ -841,6 +888,8 @@ impl Db {
             totals: Default::default(),
             retired: Vec::new(),
             veils: Vec::new(),
+            undo: Undo::default(),
+            text_total: 0,
             timed: Default::default(),
             clock: None,
             seq: 0,
@@ -911,6 +960,8 @@ impl Db {
                 report.created = true;
                 report.nodes = 1;
                 report.data_files = 1;
+                db.undo_forget();
+                db.text_total = db.content_bytes() as u64;
                 return Ok((db, report));
             }
         };
@@ -1196,6 +1247,8 @@ impl Db {
             report.rebuilt = rebuilt.iter().filter(|id| **id != active || troubled || !small).map(|id| disk::seg_name(*id)).collect();
             report.rebuilt_bytes = bytes;
         }
+        db.undo_forget();
+        db.text_total = db.content_bytes() as u64;
         Ok((db, report))
     }
 
@@ -1307,7 +1360,7 @@ impl Db {
             for ord in index.next_doc() - 1..total {
                 // A position no file uses still takes a number.
                 if todo.get(at).is_some_and(|p| p.seg == id && p.ord == ord) {
-                    let text = self.text_of(&todo[at]);
+                    let text = self.piece_text(&todo[at]);
                     bytes += text.len() as u64;
                     index.add(&text);
                     at += 1;
@@ -1667,7 +1720,7 @@ impl Db {
                     break;
                 }
                 self.clean_credit -= piece.len as u64;
-                let text = self.text_of(&piece).into_owned();
+                let text = self.piece_text(&piece).into_owned();
                 let new = self.store(found[0].0, &text);
                 if self.failed.is_some() {
                     return;
@@ -1833,6 +1886,15 @@ impl Db {
         msg
     }
 
+    /// The engine failed inside a unit (a panic that was caught): this
+    /// database refuses every further unit, and has to be closed and
+    /// opened again, which recovers it from what is on disk.
+    pub fn fail_internal(&mut self, what: &str) {
+        if self.failed.is_none() {
+            self.failed = Some(format!("the engine failed ({}); the database must be opened again", what));
+        }
+    }
+
     fn fail(&mut self, e: io::Error) {
         if self.failed.is_none() {
             self.failed = Some(format!("storage failed, nothing more will be written: {}", e));
@@ -1944,6 +2006,9 @@ impl Db {
                 })
                 .collect();
             let payload = 8 + items.len() as u64 * disk::TABLE_ENTRY + items.iter().map(|s| s.bytes.len() as u64).sum::<u64>();
+            if self.cfg.max_disk != u64::MAX && self.disk_used() + payload > self.cfg.max_disk {
+                over_quota(format!("the filesystem would take more than {} bytes on disk, its quota", self.cfg.max_disk));
+            }
             if !self.seg(self.active).fits(payload) {
                 if let Err(e) = self.roll(payload) {
                     self.fail(e);
@@ -1965,6 +2030,7 @@ impl Db {
                         }
                     }
                     self.live_pieces += pieces.len() as u64;
+                    self.undo.acquired.extend(pieces.iter().map(|p| (owner, *p)));
                     self.io.content_bytes += payload + REC_HEADER;
                     out.extend(pieces);
                 }
@@ -1983,10 +2049,21 @@ impl Db {
         if del == 0 && new.is_empty() {
             return;
         }
+        let max_text = self.cfg.max_text;
         let t = match &mut self.nodes.get_mut(id).unwrap().kind {
             NodeKind::File(t) => t,
             NodeKind::Folder(_) => panic!("content of a folder"),
         };
+        let added: u64 = new.iter().map(|p| p.len as u64).sum();
+        let removed: u64 = t.pieces[at..at + del].iter().map(|p| p.len as u64).sum();
+        let total = self.text_total + added - removed;
+        if added > removed && total > max_text {
+            over_quota(format!("the filesystem would hold more than {} bytes of text, its quota", max_text));
+        }
+        if id < self.undo.base {
+            self.undo.content.entry(id).or_insert_with(|| (t.pieces.clone(), t.len, t.ver));
+        }
+        self.text_total = total;
         t.ver += 1;
         if !self.volatile {
             for n in [OP_SPLICE, id, t.ver as u64, at as u64, del as u64, new.len() as u64] {
@@ -1998,7 +2075,6 @@ impl Db {
         }
         self.dirty = true;
         self.epoch += 1;
-        let added: u64 = new.iter().map(|p| p.len as u64).sum();
         let gone: Vec<Piece> = t.pieces.splice(at..at + del, new).collect();
         t.len = t.len + added - gone.iter().map(|p| p.len as u64).sum::<u64>();
         self.retired.extend(gone.into_iter().map(|p| (id, p)));
@@ -2012,7 +2088,7 @@ impl Db {
     }
 
     fn piece_is(&self, p: &Piece, bytes: &[u8]) -> bool {
-        p.len as usize == bytes.len() && *self.text_of(p) == *bytes
+        p.len as usize == bytes.len() && *self.piece_text(p) == *bytes
     }
 
     /// Store new content for a file. Returns false, having written
@@ -2102,7 +2178,7 @@ impl Db {
             if k == old.len() {
                 break;
             }
-            let text = self.text_of(&old[k]);
+            let text = self.piece_text(&old[k]);
             let n = (text.len() - within).min(buf.len() - pos);
             if text[within..within + n] != buf[pos..pos + n] {
                 break;
@@ -2121,7 +2197,7 @@ impl Db {
         // Only a file's last piece may end without a newline: if the
         // file's last piece does and more follows it now, it is written
         // again with what follows.
-        if k == old.len() && k > 0 && !self.text_of(&old[k - 1]).ends_with(b"\n") {
+        if k == old.len() && k > 0 && !self.piece_text(&old[k - 1]).ends_with(b"\n") {
             k -= 1;
             within = old[k].len as usize;
         }
@@ -2129,7 +2205,7 @@ impl Db {
         // part of that piece that was the same.
         let mut pending: Vec<u8> = Vec::new();
         if within > 0 {
-            pending.extend_from_slice(&self.text_of(&old[k])[..within]);
+            pending.extend_from_slice(&self.piece_text(&old[k])[..within]);
         }
         let mut new: Vec<Piece> = Vec::new();
         const STRETCH: usize = 4 << 20;
@@ -2172,6 +2248,7 @@ impl Db {
             if self.segs[p.seg as usize].as_mut().expect("a piece in a data file that is gone").add_user(p, to) {
                 self.live_pieces += 1;
             }
+            self.undo.acquired.push((to, *p));
         }
         self.splice(to, 0, n, pieces);
         self.unveil(to);
@@ -2201,7 +2278,7 @@ impl Db {
             let p = &pieces[n - 1 - take];
             let len = p.len as usize;
             // A last piece that does not end its line has to be joined.
-            let open = take == 0 && !self.text_of(p).ends_with(b"\n");
+            let open = take == 0 && !self.piece_text(p).ends_with(b"\n");
             let small = len < self.cfg.piece / 2 && len <= 2 * size && size + len <= self.cfg.piece;
             if !open && !small {
                 break;
@@ -2216,7 +2293,7 @@ impl Db {
         }
         let mut all = Vec::with_capacity(size);
         for p in &pieces[n - take..] {
-            all.extend_from_slice(&self.text_of(p));
+            all.extend_from_slice(&self.piece_text(p));
         }
         all.extend_from_slice(data);
         let new = self.store(id, &all);
@@ -2345,9 +2422,141 @@ impl Db {
             r = r.and_then(|_| self.upkeep(wrote));
         }
         self.mark = self.io.content_bytes + self.io.log_bytes;
+        self.undo_forget();
         if let Err(e) = r {
             self.fail(e);
         }
+    }
+
+    /// What the unit changed is now kept: nothing more to take back.
+    fn undo_forget(&mut self) {
+        let u = &mut self.undo;
+        u.steps.clear();
+        u.content.clear();
+        u.times.clear();
+        u.acquired.clear();
+        u.base = self.next_id;
+    }
+
+    /// Take back everything changed since the last command line ended,
+    /// as if the unit now running had never begun: for a unit that is
+    /// stopped. Nothing is written; content it stored stays in the data
+    /// file, used by no file, until upkeep reclaims the space.
+    pub fn rollback(&mut self) {
+        let mut undo = std::mem::take(&mut self.undo);
+        while let Some(step) = undo.steps.pop() {
+            match step {
+                UndoStep::Made(id) => {
+                    let Some(node) = self.nodes.remove(id) else { continue };
+                    let parent = node.parent.unwrap();
+                    if let NodeKind::File(t) = &node.kind {
+                        self.text_total -= t.len;
+                    }
+                    // Whatever is in a new folder now is new too: an old
+                    // node moved into it was moved back before this.
+                    if let NodeKind::Folder(c) = &node.kind {
+                        let mut stack: Vec<NodeId> = c.values().copied().collect();
+                        while let Some(n) = stack.pop() {
+                            match self.nodes.remove(n) {
+                                Some(Node { kind: NodeKind::Folder(c), .. }) => stack.extend(c.values().copied()),
+                                Some(Node { kind: NodeKind::File(t), .. }) => self.text_total -= t.len,
+                                None => {}
+                            }
+                        }
+                    }
+                    if let Some(Node { kind: NodeKind::Folder(c), .. }) = self.nodes.get_mut(parent) {
+                        if c.get(&node.name) == Some(&id) {
+                            c.remove(&node.name);
+                        }
+                    }
+                    let files = match &node.kind {
+                        NodeKind::File(_) => 1,
+                        NodeKind::Folder(_) => node.aux as i64,
+                    };
+                    self.count_files(Some(parent), -files);
+                }
+                UndoStep::Removed(nodes) => {
+                    let mut files = 0;
+                    let (mut top, mut top_name) = (None, Vec::new());
+                    for (i, mut node) in nodes.into_iter().enumerate() {
+                        if i == 0 {
+                            files = match &node.kind {
+                                NodeKind::File(_) => 1,
+                                NodeKind::Folder(_) => node.aux as i64,
+                            };
+                            top = Some((node.id, node.parent.unwrap()));
+                            top_name = node.name.clone();
+                        }
+                        if let NodeKind::File(t) = &mut node.kind {
+                            t.veiled = false;
+                            self.text_total += t.len;
+                        }
+                        self.nodes.insert(node);
+                    }
+                    if let Some((id, parent)) = top {
+                        if let Some(Node { kind: NodeKind::Folder(c), .. }) = self.nodes.get_mut(parent) {
+                            c.insert(top_name, id);
+                        }
+                        self.count_files(Some(parent), files);
+                    }
+                }
+                UndoStep::Moved { id, parent, name } => {
+                    let (now_parent, now_name, files) = {
+                        let n = &self.nodes[id];
+                        let files = match &n.kind {
+                            NodeKind::File(_) => 1,
+                            NodeKind::Folder(_) => n.aux as i64,
+                        };
+                        (n.parent.unwrap(), n.name.clone(), files)
+                    };
+                    if let NodeKind::Folder(c) = &mut self.nodes.get_mut(now_parent).unwrap().kind {
+                        c.remove(&now_name);
+                    }
+                    if let NodeKind::Folder(c) = &mut self.nodes.get_mut(parent).unwrap().kind {
+                        c.insert(name.clone(), id);
+                    }
+                    let n = self.nodes.get_mut(id).unwrap();
+                    n.parent = Some(parent);
+                    n.name = name;
+                    self.count_files(Some(now_parent), -files);
+                    self.count_files(Some(parent), files);
+                }
+            }
+        }
+        for (id, (pieces, len, ver)) in undo.content.drain() {
+            if let Some(Node { kind: NodeKind::File(t), .. }) = self.nodes.get_mut(id) {
+                self.text_total = self.text_total + len - t.len;
+                t.pieces = pieces;
+                t.len = len;
+                t.ver = ver;
+            }
+        }
+        for (id, t) in undo.times.drain() {
+            if let Some(node) = self.nodes.get_mut(id) {
+                node.mtime = t;
+            }
+        }
+        while let Some(id) = self.veils.pop() {
+            if let Some(Node { kind: NodeKind::File(t), .. }) = self.nodes.get_mut(id) {
+                t.veiled = false;
+            }
+        }
+        // The pieces it took out of files are back in them; the uses it
+        // added are given up.
+        self.retired.clear();
+        for (user, p) in undo.acquired.drain(..) {
+            if let Some(seg) = self.segs[p.seg as usize].as_mut() {
+                if seg.drop_user(&p, user) {
+                    self.live_pieces -= 1;
+                }
+            }
+        }
+        self.timed.clear();
+        self.ops.clear();
+        self.dirty = false;
+        self.epoch += 1;
+        self.undo = undo;
+        self.undo_forget();
     }
 
     fn log_commit(&mut self) -> io::Result<()> {
@@ -2411,7 +2620,13 @@ impl Db {
 
     /// The text of one piece.
     #[inline]
+    /// The text of a piece. A unit asked to stop stops here.
     pub fn text_of(&self, p: &Piece) -> Cow<'_, [u8]> {
+        crate::unit::poll();
+        self.piece_text(p)
+    }
+
+    fn piece_text(&self, p: &Piece) -> Cow<'_, [u8]> {
         bump(T_TEXT_BYTES, p.len as u64);
         bump(T_TEXT_PIECES, 1);
         let stored = self.seg(p.seg).piece(p);
@@ -2449,10 +2664,11 @@ impl Db {
     /// pieces are joined in memory. A command that can work a piece at a
     /// time should use `pieces`.
     pub fn content(&self, id: NodeId) -> Cow<'_, [u8]> {
+        crate::unit::poll();
         let pieces = self.pieces(id);
         match pieces {
             [] => Cow::Borrowed(&[]),
-            [one] => self.text_of(one),
+            [one] => self.piece_text(one),
             [first, ..] => {
                 let seg = self.seg(first.seg);
                 let mut end = first.off as u64;
@@ -2471,7 +2687,7 @@ impl Db {
                 }
                 let mut all = Vec::with_capacity(self.text(id).len as usize);
                 for p in pieces {
-                    all.extend_from_slice(&self.text_of(p));
+                    all.extend_from_slice(&self.piece_text(p));
                 }
                 Cow::Owned(all)
             }
@@ -2844,6 +3060,7 @@ impl Db {
 
     /// Children of a folder in byte order. Panics on a file.
     pub fn children(&self, id: NodeId) -> &BTreeMap<Vec<u8>, NodeId> {
+        crate::unit::poll();
         match &self.nodes[id].kind {
             NodeKind::Folder(c) => {
                 bump(T_TREE_NODES, c.len() as u64);
@@ -2863,6 +3080,31 @@ impl Db {
 
     pub fn node_count(&self) -> usize {
         self.nodes.len
+    }
+
+    /// Bytes of text in all files, kept as the tree changes.
+    pub fn text_bytes(&self) -> u64 {
+        self.text_total
+    }
+
+    /// Bytes the database's files take on disk: data files, index files
+    /// and the saved tree.
+    pub fn disk_used(&self) -> u64 {
+        let mut n = self.ckp_size + 24;
+        for seg in self.segs.iter().flatten() {
+            n += seg.end;
+            if let Some(p) = &seg.packed {
+                n += p.file_len();
+            }
+        }
+        n
+    }
+
+    /// Set the quotas (see `Config`).
+    pub fn set_quotas(&mut self, max_text: u64, max_nodes: u64, max_disk: u64) {
+        self.cfg.max_text = max_text;
+        self.cfg.max_nodes = max_nodes;
+        self.cfg.max_disk = max_disk;
     }
 
     /// Total bytes of file content.
@@ -3036,7 +3278,11 @@ impl Db {
         if id == NULL {
             return;
         }
-        self.nodes.get_mut(id).unwrap().mtime = t;
+        let node = self.nodes.get_mut(id).unwrap();
+        if id < self.undo.base {
+            self.undo.times.entry(id).or_insert(node.mtime);
+        }
+        node.mtime = t;
         self.dirty = true;
         self.epoch += 1;
         if !self.volatile {
@@ -3063,11 +3309,16 @@ impl Db {
 
     fn alloc(&mut self, name: &[u8], parent: NodeId, kind: NodeKind) -> NodeId {
         assert!(is_valid_name(name), "invalid node name");
+        // The root is not counted.
+        if self.nodes.len as u64 > self.cfg.max_nodes {
+            over_quota(format!("the filesystem would hold more than {} files and folders, its quota", self.cfg.max_nodes));
+        }
         let id = self.next_id;
         self.next_id += 1;
         let is_file = matches!(kind, NodeKind::File(_));
         self.nodes.insert(Node { id, name: name.to_vec(), parent: Some(parent), kind, aux: 0, mtime: 0 });
         self.link(id);
+        self.undo.steps.push(UndoStep::Made(id));
         self.log_name(if is_file { OP_MKFILE } else { OP_MKDIR }, id, parent, name);
         let now = self.now();
         self.set_mtime(id, now);
@@ -3113,23 +3364,27 @@ impl Db {
         self.epoch += 1;
         self.touch(parent);
         let mut stack = vec![id];
+        let mut taken = Vec::new();
         while let Some(n) = stack.pop() {
             if let Some(node) = self.nodes.remove(n) {
                 if !self.volatile {
                     disk::put_u64(&mut self.ops, OP_REMOVE);
                     disk::put_u64(&mut self.ops, n);
                 }
-                match node.kind {
+                match &node.kind {
                     NodeKind::Folder(c) => stack.extend(c.values().copied()),
                     NodeKind::File(t) => {
                         if t.veiled {
                             self.veils.retain(|v| *v != n);
                         }
-                        self.retired.extend(t.pieces.into_iter().map(|p| (n, p)));
+                        self.retired.extend(t.pieces.iter().map(|p| (n, *p)));
+                        self.text_total -= t.len;
                     }
                 }
+                taken.push(node);
             }
         }
+        self.undo.steps.push(UndoStep::Removed(taken));
     }
 
     /// Move a node to a new parent and name, keeping its id. The destination
@@ -3155,6 +3410,9 @@ impl Db {
         }
         if let NodeKind::Folder(c) = &mut self.nodes.get_mut(new_parent).unwrap().kind {
             c.insert(new_name.to_vec(), id);
+        }
+        if id < self.undo.base {
+            self.undo.steps.push(UndoStep::Moved { id, parent: old_parent, name: old_name.clone() });
         }
         let n = self.nodes.get_mut(id).unwrap();
         n.parent = Some(new_parent);
@@ -3246,7 +3504,7 @@ impl Db {
                     for (i, p) in old.iter().enumerate() {
                         let shared = p.seg < first_new && self.seg(p.seg).owners[p.ord as usize] == SHARED;
                         if !shared {
-                            buf.extend_from_slice(&self.text_of(p));
+                            buf.extend_from_slice(&self.piece_text(p));
                         }
                         if !buf.is_empty() && (shared || buf.len() >= 16 << 20 || i + 1 == old.len()) {
                             new.extend(self.store(id, &buf));
@@ -3261,7 +3519,7 @@ impl Db {
                                     new.extend(there.iter().copied());
                                 }
                                 None => {
-                                    let text = self.text_of(p).into_owned();
+                                    let text = self.piece_text(p).into_owned();
                                     let there = self.store(id, &text);
                                     new.extend(there.iter().copied());
                                     moved.insert((p.seg, p.ord), there);
@@ -3390,7 +3648,7 @@ impl Db {
                         if !recorded {
                             return Err(format!("{}: piece {} is not recorded as belonging to file {}", seg.name(), p.ord, node.id));
                         }
-                        let text = self.text_of(p);
+                        let text = self.piece_text(p);
                         if disk::crc(seg.bytes(p.off as u64, p.slen as usize)) != p.crc {
                             return Err(format!("{}: damaged: the {} bytes at offset {} do not match their checksum", seg.name(), p.slen, p.off));
                         }
@@ -3407,6 +3665,9 @@ impl Db {
                     bytes += len;
                 }
             }
+        }
+        if bytes != self.text_total {
+            return Err(format!("the tree is not sound: its files hold {} bytes of text and {} are counted", bytes, self.text_total));
         }
         // A piece that several files use is one piece; the uses must be
         // the ones recorded.
@@ -3497,7 +3758,7 @@ impl Db {
                 let mut next = 0;
                 for ord in 0..seg.indexed {
                     if live.get(next).is_some_and(|l| l.0.ord == ord) {
-                        fresh.add(&self.text_of(&live[next].0));
+                        fresh.add(&self.piece_text(&live[next].0));
                         next += 1;
                     } else {
                         fresh.add(b"");

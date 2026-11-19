@@ -1172,7 +1172,7 @@ pub fn rg(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             io.err_line(m);
             2
         });
-        Ok(Prepared { run: r, input: Input::Unused })
+        Ok(Prepared { run: r, input: Input::Unused, writes: false })
     };
     if let Some(m) = fatal {
         return fail(m);
@@ -1259,5 +1259,5 @@ pub fn rg(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             1
         }
     });
-    Ok(Prepared { run, input: if reads_stdin { Input::Whole } else { Input::Unused } })
+    Ok(Prepared { run, input: if reads_stdin { Input::Whole } else { Input::Unused }, writes: false })
 }

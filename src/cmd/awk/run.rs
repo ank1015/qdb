@@ -1405,6 +1405,9 @@ impl Rt {
 
     fn turn(&mut self) -> bool {
         self.turns += 1;
+        if self.turns & 1023 == 0 {
+            crate::unit::poll();
+        }
         if self.turns > MAX_TURNS {
             self.fail(&format!("stopped after {} turns of its loops, the most one run of awk may take", MAX_TURNS));
         }

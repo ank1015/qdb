@@ -840,7 +840,12 @@ impl Exec {
         let mut print = !prog.quiet;
         let mut quit = None;
         let mut pc = 0;
+        let mut steps = 0u32;
         while pc < prog.cmds.len() {
+            steps = steps.wrapping_add(1);
+            if steps & 4095 == 0 {
+                crate::unit::poll();
+            }
             let c = &prog.cmds[pc];
             if matches!(c.kind, Kind::Close) {
                 pc += 1;
@@ -1279,6 +1284,7 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     let prog = Rc::new(prog);
     let files = a.files;
     let in_place = a.in_place;
+    let writes = in_place.is_some();
     let separate = a.separate || in_place.is_some();
     let input = if in_place.is_some() {
         Input::Unused
@@ -1433,5 +1439,5 @@ pub fn sed(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         }
         status
     });
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes })
 }
