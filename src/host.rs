@@ -393,6 +393,31 @@ impl Host {
         Ok(())
     }
 
+    /// Look at a filesystem's database directly, as a reader would. For
+    /// tools and tests (the harness compares trees through it); nothing
+    /// on the API reaches it.
+    pub fn with_db<R>(&self, id: &str, f: impl FnOnce(&Db) -> R) -> Result<R, HostError> {
+        let fs = self.get(id)?;
+        let stop = Stop::new();
+        let _pass = fs.enter(false, &stop).ok_or(HostError::ShuttingDown)?;
+        self.ensure_open(&fs)?;
+        let g = fs.db.read().unwrap_or_else(|e| e.into_inner());
+        Ok(f(g.as_ref().unwrap()))
+    }
+
+    /// Change a filesystem's database directly, alone on it, as a writer
+    /// would. For tools and tests: loading a test's starting tree.
+    pub fn with_db_mut<R>(&self, id: &str, f: impl FnOnce(&mut Db) -> R) -> Result<R, HostError> {
+        let fs = self.get(id)?;
+        let stop = Stop::new();
+        let _pass = fs.enter(true, &stop).ok_or(HostError::ShuttingDown)?;
+        self.ensure_open(&fs)?;
+        let mut g = fs.db.write().unwrap_or_else(|e| e.into_inner());
+        let r = f(g.as_mut().unwrap());
+        fs.mem.store(g.as_ref().unwrap().memory_estimate(), Relaxed);
+        Ok(r)
+    }
+
     /// Sizes and counts of a filesystem.
     pub fn info(&self, id: &str) -> Result<FsInfo, HostError> {
         let fs = self.get(id)?;

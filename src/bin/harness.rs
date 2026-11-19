@@ -30,7 +30,10 @@ With no case files, runs every tests/cases/*.case.
   --store MODE      where the engine keeps its data: memory (default), disk
                     (a database directory, checked with --check's checks
                     when each case ends), or reopen (the same, closed and
-                    opened again after every step, and checked each time)
+                    opened again after every step, and checked each time),
+                    or api (each case on a filesystem of its own on a
+                    server in this process, every step a request over
+                    HTTP, checked when the case ends)
   --sync MODE       with disk or reopen: always (default) or batch
   --piece BYTES     cut file content into pieces of at most this many bytes
                     (default 65536); a small value makes small test files
@@ -281,6 +284,56 @@ enum Mode {
     Memory,
     Disk,
     Reopen,
+    /// Through the API: every case on a filesystem of its own on a server
+    /// in this process, each step one request over HTTP.
+    Api,
+}
+
+/// The server of --store api, started once.
+struct Api {
+    svc: std::sync::Arc<qdb::service::Service>,
+    client: std::sync::Mutex<qdb::net::http::Client>,
+    key: String,
+    dir: PathBuf,
+}
+
+static API: std::sync::OnceLock<Api> = std::sync::OnceLock::new();
+
+const API_ADMIN: &str = "harness-admin-key-0123456789";
+
+fn api(cfg: &Config) -> &'static Api {
+    API.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("qdb-harness-api-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut sc = qdb::service::ServiceConfig::new(&dir, API_ADMIN);
+        sc.host.db = cfg.clone();
+        // Cases make big outputs now and then; the cap is not under test.
+        sc.output_cap = 1 << 30;
+        sc.max_request = 1 << 30;
+        let svc = qdb::service::Service::open(sc).expect("the server opens");
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port");
+        let addr = l.local_addr().unwrap().to_string();
+        let s2 = svc.clone();
+        std::thread::spawn(move || qdb::service::serve(s2, l));
+        let mut client = qdb::net::http::Client::new(&addr);
+        let body = r#"{"quotas":{"filesystems":1000000}}"#;
+        let r = client.request("POST", "/v1/accounts", Some(API_ADMIN), body.as_bytes()).expect("an account");
+        let j = qdb::net::json::Json::parse(&r.body).expect("JSON");
+        let key = j.get("key").and_then(|k| k.as_str()).expect("a key").to_string();
+        Api { svc, client: std::sync::Mutex::new(client), key, dir }
+    })
+}
+
+impl Api {
+    fn call(&self, method: &str, path: &str, body: &[u8]) -> Result<qdb::net::json::Json, String> {
+        let mut c = self.client.lock().unwrap_or_else(|e| e.into_inner());
+        let r = c.request(method, path, Some(&self.key), body).map_err(|e| format!("{} {}: {}", method, path, e))?;
+        let j = qdb::net::json::Json::parse(&r.body).map_err(|e| format!("{} {}: {}", method, path, e))?;
+        if r.status / 100 != 2 {
+            return Err(format!("{} {}: HTTP {}: {}", method, path, r.status, j.to_string()));
+        }
+        Ok(j)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -295,6 +348,7 @@ impl Setup {
             Mode::Memory => "in memory".to_string(),
             Mode::Disk => format!("on disk, sync {}", if self.cfg.sync == SyncMode::Always { "always" } else { "batch" }),
             Mode::Reopen => format!("on disk, closed and reopened after every step, sync {}", if self.cfg.sync == SyncMode::Always { "always" } else { "batch" }),
+            Mode::Api => format!("through the API, sync {}", if self.cfg.sync == SyncMode::Always { "always" } else { "batch" }),
         };
         format!(
             "{}, pieces of {} bytes, index {}{}{}",
@@ -311,6 +365,8 @@ impl Setup {
 struct Engine {
     db: Option<Db>,
     dir: Option<PathBuf>,
+    /// The filesystem, through the API.
+    fs: Option<String>,
     setup: Setup,
     reopens: usize,
 }
@@ -318,6 +374,13 @@ struct Engine {
 impl Engine {
     /// A database holding a copy of `start`.
     fn new(start: &Db, setup: &Setup, scratch: &mut Scratch) -> Result<Engine, String> {
+        if setup.mode == Mode::Api {
+            let a = api(&setup.cfg);
+            let j = a.call("POST", "/v1/filesystems", b"")?;
+            let fs = j.get("filesystem").and_then(|f| f.as_str()).ok_or("no filesystem ID")?.to_string();
+            a.svc.host().with_db_mut(&fs, |db| store::copy_into(start, db)).map_err(|e| e.to_string())??;
+            return Ok(Engine { db: None, dir: None, fs: Some(fs), setup: setup.clone(), reopens: 0 });
+        }
         let (mut db, dir) = match setup.mode {
             Mode::Memory => (Db::in_memory(setup.cfg.clone()), None),
             _ => {
@@ -327,14 +390,41 @@ impl Engine {
             }
         };
         store::copy_into(start, &mut db)?;
-        Ok(Engine { db: Some(db), dir, setup: setup.clone(), reopens: 0 })
+        Ok(Engine { db: Some(db), dir, fs: None, setup: setup.clone(), reopens: 0 })
     }
 
     fn db(&self) -> &Db {
         self.db.as_ref().unwrap()
     }
 
+    /// Look at the database, wherever it is.
+    fn with<R>(&self, f: impl FnOnce(&Db) -> R) -> R {
+        match &self.fs {
+            Some(fs) => api(&self.setup.cfg).svc.host().with_db(fs, f).expect("the case's filesystem"),
+            None => f(self.db()),
+        }
+    }
+
+    fn snapshot(&self) -> Vec<(Vec<u8>, Option<Vec<u8>>)> {
+        self.with(|db| db.snapshot())
+    }
+
     fn execute(&mut self, command: &[u8]) -> Result<Outcome, String> {
+        if let Some(fs) = &self.fs {
+            use qdb::net::json::Json;
+            let a = api(&self.setup.cfg);
+            let text = std::str::from_utf8(command).map_err(|_| "a command that is not UTF-8 cannot go through the API".to_string())?;
+            let j = a.call("POST", &format!("/v1/filesystems/{}/run", fs), Json::obj().with("command", text).to_string().as_bytes())?;
+            let bytes = |name: &str| -> Result<Vec<u8>, String> {
+                if let Some(s) = j.get(name).and_then(Json::as_str) {
+                    return Ok(s.as_bytes().to_vec());
+                }
+                let b = j.get(&format!("{}_base64", name)).and_then(Json::as_str).ok_or(format!("no {} in the answer", name))?;
+                qdb::net::codec::unbase64(b).ok_or(format!("bad base64 in {}", name))
+            };
+            let code = j.get("exit_status").and_then(Json::as_i64).ok_or("no exit status")? as i32;
+            return Ok(Outcome { stdout: bytes("stdout")?, stderr: bytes("stderr")?, code, cost: Default::default() });
+        }
         let out = execute(self.db.as_mut().unwrap(), command);
         if self.setup.mode == Mode::Reopen {
             self.reopen()?;
@@ -364,6 +454,9 @@ impl Engine {
     /// The checks of `qdb --check`, and for a database on disk a last
     /// close and reopen.
     fn finish(mut self) -> Result<(), String> {
+        if self.fs.is_some() {
+            return self.with(|db| db.check()).map(|_| ()).map_err(|e| format!("check: {}", e));
+        }
         self.db().check().map_err(|e| format!("check: {}", e))?;
         if self.dir.is_some() {
             self.reopen()?;
@@ -374,6 +467,9 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        if let Some(fs) = &self.fs {
+            let _ = api(&self.setup.cfg).call("DELETE", &format!("/v1/filesystems/{}", fs), b"");
+        }
         self.db = None;
         if let Some(dir) = &self.dir {
             let _ = std::fs::remove_dir_all(dir);
@@ -414,7 +510,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> 
     let result = (|| {
         for step in &case.steps {
             let fail = |what: String| Err(format!("{}:{}: {}\n{}", case.file, step.line, step.command, what));
-            let before = db.db().snapshot();
+            let before = db.snapshot();
             match &step.kind {
                 Kind::Setup => {
                     db.execute(step.command.as_bytes())?;
@@ -431,7 +527,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> 
                             show(&got.stderr)
                         ));
                     }
-                    if db.db().snapshot() != before {
+                    if db.snapshot() != before {
                         return fail("    a rejected command changed the tree\n".into());
                     }
                 }
@@ -456,7 +552,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> 
                     let engine_command = step.command.replace("{ROOT}", "");
                     check_safe(&real_command, root)?;
                     // Both sides start the step with the same file times.
-                    sync_times(db.db(), root);
+                    db.with(|d| sync_times(d, root));
                     let real = run_real(root, &real_command);
                     let got = db.execute(engine_command.as_bytes())?;
                     // Once a case has stored unordered output, later steps
@@ -487,7 +583,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> 
                     let real_tree: Vec<(Vec<u8>, Option<Vec<u8>>)> =
                         store::snapshot_dir(root).map_err(|e| e.to_string())?.into_iter().map(|(p, c)| (p, c.map(|c| qdb::testing::bash_prefix(&c)))).collect();
                     let real_tree = normalise(real_tree);
-                    if let Some(d) = tree_diff(&real_tree, &normalise(db.db().snapshot())) {
+                    if let Some(d) = tree_diff(&real_tree, &normalise(db.snapshot())) {
                         what.push_str(&format!("    tree after the command:\n{}", d));
                     }
                     if !what.is_empty() {
@@ -1711,6 +1807,7 @@ fn run() -> Result<bool, String> {
                     "memory" => Mode::Memory,
                     "disk" => Mode::Disk,
                     "reopen" => Mode::Reopen,
+                    "api" => Mode::Api,
                     other => return Err(format!("--store: {} is not memory, disk or reopen", other)),
                 }
             }
@@ -1903,7 +2000,12 @@ fn run() -> Result<bool, String> {
 
 fn main() -> std::process::ExitCode {
     let worker = std::thread::Builder::new().stack_size(64 << 20).spawn(run).expect("spawn");
-    match worker.join().expect("harness panicked") {
+    let result = worker.join().expect("harness panicked");
+    if let Some(a) = API.get() {
+        a.svc.shutdown();
+        let _ = std::fs::remove_dir_all(&a.dir);
+    }
+    match result {
         Ok(true) => std::process::ExitCode::SUCCESS,
         Ok(false) => std::process::ExitCode::from(1),
         Err(msg) => {
