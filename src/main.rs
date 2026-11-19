@@ -57,7 +57,12 @@ Runs bash command lines against a tree of text files.
                    `cpu_us` and `elapsed_us` are measured; `status` is the
                    unit's exit status
   --command-limit N  stop a unit once it has run N commands (default
-                   1000000), with exit status 3; what it changed stays
+                   1000000), with exit status 3; nothing it changed is kept
+  --quota-text N, --quota-nodes N, --quota-disk N
+                   with --db: the most text, files and folders, and disk
+                   the database may hold (default: no limit); a unit that
+                   would pass one stops with exit status 1 and nothing it
+                   changed is kept. --stats reports what is used of each
   -c COMMAND       run COMMAND; can be given more than once
 
 Each -c is one unit: all of what it changes is there after a crash, or
@@ -115,6 +120,9 @@ fn run() -> Result<i32, String> {
                 qdb::par::set_default_lender(Some(std::sync::Arc::new(qdb::par::Fixed(n.saturating_sub(1)))));
                 qdb::par::set_max_threads(n);
             }
+            "--quota-text" => cfg.max_text = value("--quota-text")?.parse().map_err(|_| "--quota-text needs a number of bytes")?,
+            "--quota-nodes" => cfg.max_nodes = value("--quota-nodes")?.parse().map_err(|_| "--quota-nodes needs a number")?,
+            "--quota-disk" => cfg.max_disk = value("--quota-disk")?.parse().map_err(|_| "--quota-disk needs a number of bytes")?,
             "--command-limit" => cfg.command_limit = value("--command-limit")?.parse().map_err(|_| "--command-limit needs a number")?,
             "--check" => check = true,
             "--stats" => stats = true,
@@ -260,6 +268,17 @@ fn run() -> Result<i32, String> {
         if s.raw_text > 0 {
             println!("{:<28}{:>16.3}", "total / raw text", s.total() as f64 / s.raw_text as f64);
         }
+        let quota = |name: &str, used: u64, max: u64| {
+            if max == u64::MAX {
+                println!("{:<28}{:>16} of no quota", name, used);
+            } else {
+                println!("{:<28}{:>16} of {} ({:.1}%)", name, used, max, used as f64 * 100.0 / max.max(1) as f64);
+            }
+        };
+        let c = db.config();
+        quota("quota: text", db.text_bytes(), c.max_text);
+        quota("quota: files and folders", db.node_count() as u64, c.max_nodes);
+        quota("quota: disk", db.disk_used(), c.max_disk);
     }
     if let Some(dir) = dump {
         store::dump_dir(&db, &dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
@@ -271,12 +290,9 @@ fn run() -> Result<i32, String> {
 fn main() -> ExitCode {
     // Damage found while reading is thrown as a panic that carries its
     // message; it is reported below like any other error.
-    let usual = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        if info.payload().downcast_ref::<Damage>().is_none() {
-            usual(info);
-        }
-    }));
+    // So are a quota reached and a unit stopped: each is caught and said
+    // in words.
+    qdb::unit::quiet_panics();
     // Deep folder trees and long lines recurse; give the work a large stack.
     let worker = std::thread::Builder::new().stack_size(64 << 20).spawn(run).expect("spawn");
     match worker.join() {
