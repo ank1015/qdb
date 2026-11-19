@@ -263,6 +263,42 @@ fn output_is_capped_or_streamed() {
 }
 
 #[test]
+fn a_client_that_stops_reading_a_stream_is_gone() {
+    let dir = Dir::new("noread");
+    let srv = Server::start(&dir, |c| c.write_timeout = Duration::from_millis(300));
+    let mut c = srv.client();
+    let (_, key) = account(&mut c, "");
+    let fs = new_fs(&mut c, &key);
+    cmd(&mut c, &key, &fs, "echo keep > k.txt");
+    // Endless output, never read; the connection stays open.
+    let mut s = std::net::TcpStream::connect(&srv.addr).unwrap();
+    let body = r#"{"command":"rm k.txt; while true; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done","stream":true}"#;
+    use std::io::Write;
+    write!(s, "POST /v1/filesystems/{}/run HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\nContent-Length: {}\r\n\r\n{}", fs, key, body.len(), body).unwrap();
+    // It has started once the answer's head comes; then nothing more is
+    // read.
+    use std::io::Read;
+    let mut head = [0u8; 64];
+    s.read_exact(&mut head).unwrap();
+    assert!(head.starts_with(b"HTTP/1.1 200"));
+    let started = Instant::now();
+    // The writer is stopped as its client gone, and the filesystem is
+    // as it was.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let j = cmd(&mut c, &key, &fs, "ls");
+        if out(&j) == "k.txt\n" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{:?}", j);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(started.elapsed() < Duration::from_secs(5));
+    drop(s);
+    srv.stop();
+}
+
+#[test]
 fn limits_stop_units_and_leave_nothing() {
     let dir = Dir::new("limits");
     let srv = Server::start(&dir, |_| {});
@@ -312,8 +348,15 @@ fn a_caller_going_away_stops_its_unit() {
         assert!(Instant::now() < deadline, "{:?}", j);
         std::thread::sleep(Duration::from_millis(20));
     }
-    let (_, j) = call(&mut c, "GET", &format!("/v1/filesystems/{}", fs), Some(&key), "");
-    assert_eq!(j.get("usage").unwrap().get("stopped").unwrap().as_i64(), Some(1), "{:?}", j);
+    // Its usage is counted just after the filesystem is let go.
+    loop {
+        let (_, j) = call(&mut c, "GET", &format!("/v1/filesystems/{}", fs), Some(&key), "");
+        if j.get("usage").unwrap().get("stopped").unwrap().as_i64() == Some(1) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{:?}", j);
+        std::thread::sleep(Duration::from_millis(20));
+    }
     srv.stop();
 }
 

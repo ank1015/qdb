@@ -121,6 +121,9 @@ pub struct ServiceConfig {
     pub output_cap: usize,
     /// A session no unit has used for this long ends.
     pub session_idle: Duration,
+    /// How long a write to a client may make no progress before the
+    /// client is taken as gone (and a streamed unit stopped).
+    pub write_timeout: Duration,
     /// What a new account may use.
     pub defaults: Settings,
 }
@@ -138,6 +141,7 @@ impl ServiceConfig {
             max_request: 16 << 20,
             output_cap: 1 << 20,
             session_idle: Duration::from_secs(15 * 60),
+            write_timeout: Duration::from_secs(10),
             defaults: Settings::default(),
         }
     }
@@ -789,6 +793,9 @@ fn connection(svc: &Arc<Service>, stream: TcpStream) {
     let mut w = stream;
     // A connection that says nothing for this long is closed.
     let _ = w.set_read_timeout(Some(Duration::from_secs(300)));
+    // A client that stops reading is taken as gone after this long: a
+    // streamed unit blocked on it is stopped and gives its worker back.
+    let _ = w.set_write_timeout(Some(svc.cfg.write_timeout));
     loop {
         let req = match http::read_request(&mut r, svc.cfg.max_request) {
             Ok(req) => req,
@@ -1133,6 +1140,43 @@ struct Streamed<'a> {
     held: Vec<u8>,
     failed: bool,
     stop: Arc<Stop>,
+    /// How long a write may make no progress.
+    idle: Duration,
+}
+
+/// Write all of `data` to a client, giving up when the unit is stopped
+/// (its deadline, say) or when the client has taken nothing for `idle`.
+/// A blocking write would wait for as long as the client does not read,
+/// holding the unit, its worker and its filesystem past any deadline.
+fn write_watched(w: &TcpStream, mut data: &[u8], stop: &Stop, idle: Duration) -> io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+    let fd = w.as_raw_fd();
+    let mut progress = Instant::now();
+    while !data.is_empty() {
+        // SAFETY: a send on a descriptor the stream holds open, from a
+        // buffer that lives through the call.
+        let n = unsafe { libc::send(fd, data.as_ptr() as *const libc::c_void, data.len(), libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL) };
+        if n > 0 {
+            data = &data[n as usize..];
+            progress = Instant::now();
+            continue;
+        }
+        let e = io::Error::last_os_error();
+        match e.kind() {
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted => {}
+            _ => return Err(e),
+        }
+        if stop.requested().is_some() {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "the unit was stopped"));
+        }
+        if progress.elapsed() >= idle {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the client took nothing"));
+        }
+        let mut p = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+        // SAFETY: poll on one descriptor the stream holds open.
+        unsafe { libc::poll(&mut p, 1, 20) };
+    }
+    Ok(())
 }
 
 impl Streamed<'_> {
@@ -1154,7 +1198,10 @@ impl Streamed<'_> {
         put_bytes(&mut j, self.name, &part);
         let mut line = j.to_string();
         line.push('\n');
-        if http::write_chunk(self.w, line.as_bytes()).is_err() {
+        let mut chunk = format!("{:x}\r\n", line.len()).into_bytes();
+        chunk.extend_from_slice(line.as_bytes());
+        chunk.extend_from_slice(b"\r\n");
+        if write_watched(self.w, &chunk, &self.stop, self.idle).is_err() {
             self.failed = true;
             self.stop.request(Reason::Gone);
         }
@@ -1287,7 +1334,7 @@ fn run(svc: &Arc<Service>, req: &http::Request, acc: &str, fs: &str, w: &mut Tcp
         let mut err = ErrHeld { buf: Vec::new(), cap: svc.cfg.output_cap, cut: false };
         let w2 = w.try_clone();
         let Ok(mut w2) = w2 else { return None };
-        let mut out = Streamed { w: &mut w2, name: "stdout", held: Vec::new(), failed: false, stop: stop.clone() };
+        let mut out = Streamed { w: &mut w2, name: "stdout", held: Vec::new(), failed: false, stop: stop.clone(), idle: svc.cfg.write_timeout };
         let result = svc.host.run(fs, &request, sess, &mut out, &mut err);
         out.send(true);
         if !err.buf.is_empty() {
@@ -1308,7 +1355,14 @@ fn run(svc: &Arc<Service>, req: &http::Request, acc: &str, fs: &str, w: &mut Tcp
         if let Some(s) = &session {
             s.used.store(svc.tick(), Relaxed);
         }
-        let _ = http::write_chunk(w, line.as_bytes()).and_then(|_| http::write_last_chunk(w));
+        // Not held up by a client that does not read: the worker is still
+        // this unit's until it returns.
+        let mut chunk = format!("{:x}\r\n", line.len()).into_bytes();
+        chunk.extend_from_slice(line.as_bytes());
+        chunk.extend_from_slice(b"\r\n0\r\n\r\n");
+        if out.failed || write_watched(w, &chunk, &Stop::new(), svc.cfg.write_timeout).is_err() {
+            let _ = w.shutdown(std::net::Shutdown::Both);
+        }
         return None;
     }
     let mut out = Capped { buf: Vec::new(), cap: svc.cfg.output_cap, cut: false };
