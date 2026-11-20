@@ -1,0 +1,65 @@
+FAIL  generated xargs seed 601:713: find . -name '*.txt' -type f | sort | xargs -L 3 -s 43 grep -c a
+    exit status: real 1, engine 123
+    stdout, real:
+      (empty)
+    stdout, engine:
+      "./a.txt:5\n"
+      "./docs/a.txt:8\n"
+      "./docs/old/b.txt:0\n"
+      "./one.txt:4\n"
+      "./two.txt:4\n"
+    stderr, real:
+      "xargs: argument list too long\n"
+    stderr, engine:
+      "grep: ./data/long: No such file or directory\n"
+      "grep: name.txt: No such file or directory\n"
+      "grep: ./long: No such file or directory\n"
+      "grep: name.txt: No such file or directory\n"
+      "grep: ./src/long: No such file or directory\n"
+      "grep: name.txt: No such file or directory\n"
+
+FAIL  generated xargs seed 601:1179: printf '%s\n' 'x1	a = alpha.café.Needle' 'y22 gamma,alpha,the.gamma' 'z333' | xargs -L 3 -s 60 echo pre
+    exit status: real 1, engine 0
+    stdout, real:
+      (empty)
+    stdout, engine:
+      "pre x1 a = alpha.café.Needle y22\n"
+      "pre gamma,alpha,the.gamma z333\n"
+    stderr, real:
+      "xargs: argument list too long\n"
+    stderr, engine:
+      (empty)
+
+FAIL  generated xargs seed 601:5863: echo docs/main.rs docs/a.txt src/main.rs src/c.TXT | xargs -L 3 -s 49 wc -l
+    exit status: real 1, engine 0
+    stdout, real:
+      (empty)
+    stdout, engine:
+      "  3 docs/main.rs\n"
+      " 12 docs/a.txt\n"
+      "  0 src/main.rs\n"
+      " 15 total\n"
+      "12 src/c.TXT\n"
+    stderr, real:
+      "xargs: argument list too long\n"
+    stderr, engine:
+      (empty)
+
+FAIL  generated xargs seed 601:5913: printf '%s\n' 'foo' 'baz2400:beta baz delta = Ünï' 'gamma' | xargs -L 1 -P 1 -s 40 basename -a
+    exit status: real 1, engine 0
+    stdout, real:
+      "foo\n"
+    stdout, engine:
+      "foo\n"
+      "baz2400:beta\n"
+      "baz\n"
+      "delta\n"
+      "=\n"
+      "Ünï\n"
+      "gamma\n"
+    stderr, real:
+      "xargs: argument list too long\n"
+    stderr, engine:
+      (empty)
+
+generated xargs: 10000 cases, seed 601, in memory, pieces of 65536 bytes, index on: 9996 passed, 0 known differences, 4 failed

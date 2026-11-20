@@ -1,0 +1,1 @@
+isolation: 1000000 requests from 8 connections with two accounts' keys, against their own and each other's filesystems, guessed IDs and odd paths, seed 1: no answer held the other account's markers or IDs, and every request for the other's filesystem was answered as for one that does not exist (13 s)

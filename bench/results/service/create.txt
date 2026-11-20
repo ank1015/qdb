@@ -1,0 +1,3 @@
+on tmpfs (syncs cost nothing): small filesystems: 2000 made, 1 connection; making one took median 0.137 ms, 99th percentile 0.255 ms
+on disk: 2000 made, 1 connection; median 3.865 ms, 99th percentile 15.681 ms
+strace over 500 creates each followed by one small write: 3079 fsync/fdatasync, so 5 syncs per create and 1 per write

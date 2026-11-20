@@ -1,0 +1,5 @@
+FAIL  counters: text_bytes is 349790, above its baseline of 11959: grep -rn zealto . | head -n 1
+FAIL  counters: text_pieces is 58, above its baseline of 4: grep -rn zealto . | head -n 1
+FAIL  counters: tree_nodes is 339, above its baseline of 22: grep -rn zealto . | head -n 1
+counters: 224 units run twice on the same database, 24 with different counts; 6 counts above the baseline
+0

@@ -173,6 +173,12 @@ $ printf '  a  \n' | xargs -I{} echo '[{}]'
 $ printf 'aaaa bbbb cccc\n' | xargs -n 2 -x -s 14
 $ printf 'aaaa\n' | xargs -I{} -s 12 echo {}{}
 $ printf 'a b\nc d\n' | xargs -L 1 -x -s 9
+# -L and -l imply -x; a later -n takes that back, an -x given outright stays.
+$ printf 'aa bb cc dd\n' | xargs -L 1 -s 10 echo; echo $?
+$ printf 'aa bb\ncc dd\n' | xargs -l -s 12 echo; echo $?
+$ printf '%s\n' a b c d | xargs -L 1 -n 3 -s 10 echo; echo $?
+$ printf '%s\n' a b c d | xargs -x -L 1 -n 3 -s 10 echo; echo $?
+$ printf '%s\n' a b c d | xargs -n 3 -L 1 -s 10 echo; echo $?
 $ echo x > f; echo y > g; echo f g | xargs cat
 $ echo x > f; echo y > g; ls | xargs -n 1 wc -l
 $ echo x > f; echo y > g; ls | xargs grep -l x

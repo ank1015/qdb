@@ -562,6 +562,9 @@ struct Xargs {
     trace: bool,
     max_chars: usize,
     exit_if_long: bool,
+    /// -L (and -l) imply -x, as GNU xargs does; a later -n takes that back
+    /// again, leaving only an -x given outright.
+    lines_imply_x: bool,
     command: Vec<Vec<u8>>,
     warnings: Vec<String>,
 }
@@ -686,6 +689,7 @@ pub fn xargs(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         trace: false,
         max_chars: LINE_MAX,
         exit_if_long: false,
+        lines_imply_x: false,
         command: Vec::new(),
         warnings: Vec::new(),
     };
@@ -840,6 +844,7 @@ pub fn xargs(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                     if x.replace.take().is_some() {
                         x.warnings.push(exclusive("--replace", "--max-args/-n"));
                     }
+                    x.lines_imply_x = false;
                     x.max_args = Some(n);
                 }
                 Err(m) => return stop(m, true),
@@ -853,6 +858,7 @@ pub fn xargs(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                         x.warnings.push(exclusive("--replace", "-L"));
                     }
                     x.max_lines = Some(n);
+                    x.lines_imply_x = true;
                 }
                 Err(m) => return stop(m, true),
             },
@@ -995,7 +1001,7 @@ fn xargs_run(x: &Xargs, db: &mut crate::engine::Access, io: &mut crate::engine::
                     io.err_line("xargs: argument line too long");
                     return fatal(status);
                 }
-                if x.exit_if_long && (x.max_args.is_some() || x.max_lines.is_some()) {
+                if (x.exit_if_long || x.lines_imply_x) && (x.max_args.is_some() || x.max_lines.is_some()) {
                     io.err_line("xargs: argument list too long");
                     return fatal(status);
                 }

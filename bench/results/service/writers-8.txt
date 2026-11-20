@@ -1,0 +1,2 @@
+writers on one filesystem: 8 clients, 182834 units in 15.00 s: 12187 units a second; latency median 0.602 ms, 99th percentile 1.485 ms, most 26.285 ms; 53692 syncs
+    lines written: 182834

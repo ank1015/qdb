@@ -1,0 +1,9 @@
+=== 2026-11-19 22:05:33 UTC (unix time 1795125933), pid 17061: ./target/release/qdb-harness --store disk --failures target/results/service/disk/failures-71.txt
+tests/cases/p5_sys.case:118: printf '%s\n' a 'b"' | xargs cat 2>&1 | sort
+    stdout, real:
+      "a: No such file or directory\n"
+      "cat: xargs: unmatched double quote; by default quotes are special to xargs unless you use the -0 option\n"
+    stdout, engine:
+      "cat: a: No such file or directory\n"
+      "xargs: unmatched double quote; by default quotes are special to xargs unless you use the -0 option\n"
+

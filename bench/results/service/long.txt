@@ -1,0 +1,6 @@
+long run: 2108 s from 8 connections; 9256345 units (92450 stopped at a deadline, 92775 streamed, 185895 in sessions); 57411 filesystems made and 54413 deleted, 2998 left; memory most 184 MB in the first 420 s and 186 MB after, 155 MB at the end; open files most 2614 then 2235, 2193 at the end; every filesystem left took a write at once (slowest 52.6 ms)
+total 12012
+drwxr-xr-x 2 root root    4096 Nov 19 22:24 .
+drwxr-xr-x 5 root root    4096 Nov 19 22:24 ..
+-rw-r--r-- 1 root root 8670777 Nov 19 22:24 registry.log
+-rw-r--r-- 1 root root 3613275 Nov 19 22:24 usage.log

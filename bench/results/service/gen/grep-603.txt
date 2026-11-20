@@ -1,0 +1,10 @@
+FAIL  generated grep seed 603:4991: grep -v -n -o -x -2 -m 3 -e 'z333' -r src/lib
+    stdout, real:
+      "src/lib/b.txt-5-z333\n"
+      "--\n"
+      "--\n"
+    stdout, engine:
+      "--\n"
+      "--\n"
+
+generated grep: 10000 cases, seed 603, in memory, pieces of 65536 bytes, index on: 9995 passed, 4 known differences, 1 failed

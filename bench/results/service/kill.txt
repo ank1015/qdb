@@ -1,0 +1,1 @@
+kill test: 200 kills with SIGKILL under load from 16 connections on 8 filesystems, seed 7: 753563 units run, 566219 answered writes; after every kill each filesystem opened, passed its check and held every answered unit, whole and in order (71 s)

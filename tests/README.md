@@ -214,12 +214,19 @@ for a hand-written case.
 
 A line of the result reads `N passed, K known differences, F failed`. A
 known difference is one where the real tool's output is a defect that
-the engine does not copy; there is one kind, in `known_difference` in
-`src/bin/harness.rs`: GNU grep 3.11 with `-o`, `-w` and `-x` together
-takes the line's newline as part of the match for some patterns and
-prints an empty line after it (and prints an empty match for `^$`). The
-engine prints the match alone. It showed in 9 of 30,000 generated grep
-lines.
+the engine does not copy; there are two kinds, in `known_difference` in
+`src/bin/harness.rs`:
+
+- GNU grep 3.11 with `-o`, `-w` and `-x` together takes the line's
+  newline as part of the match for some patterns and prints an empty
+  line after it (and prints an empty match for `^$`). The engine prints
+  the match alone. It showed in 9 of 30,000 generated grep lines.
+- GNU grep 3.11 with `-o`, `-v`, `-x` and `-m` (and a regular expression,
+  not `-F`) forgets `-x` in the lines of context after the last selected
+  line: `printf 'a\nz1 b\n' | grep -v -o -x -m1 -A1 z1` prints `z1`,
+  part of a line that `z1` does not match whole. The engine keeps `-x`
+  and prints nothing for that line. It showed once in 30,000 generated
+  grep lines (seed 603).
 
 The generator stays inside what the engine supports and inside what is
 deterministic on the real side: only the last command of a pipeline

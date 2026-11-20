@@ -1089,10 +1089,12 @@ fn rebuild_check(db: &Db) -> Option<String> {
 /// engine does not copy.
 ///
 /// GNU grep 3.11 with -o, -w and -x together takes the newline as part of
-/// the match for some patterns and prints an empty line after it.
+/// the match for some patterns and prints an empty line after it. With
+/// -o, -v, -x and -m it forgets -x in the context after the last selected
+/// line, and prints parts of lines the pattern does not match whole.
 fn known_difference(family: &str, command: &str) -> bool {
     let has = |f: &str| command.split(' ').any(|w| w == f);
-    family == "grep" && has("-o") && has("-w") && has("-x")
+    family == "grep" && has("-o") && has("-x") && (has("-w") || has("-v") && has("-m") && !has("-F"))
 }
 
 /// Where the clock of the generated tests starts: 2023-11-14 22:13:20 UTC.
