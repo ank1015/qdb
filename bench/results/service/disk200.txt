@@ -1,0 +1,4 @@
+      2 5754 cases (6088 steps), on disk, sync always, pieces of 65536 bytes, index on: 5753 passed, 1 failed
+     10 5754 cases (6088 steps), on disk, sync always, pieces of 65536 bytes, index on: 5754 passed, 0 failed
+      1 5755 cases (6089 steps), on disk, sync always, pieces of 65536 bytes, index on: 5754 passed, 1 failed
+    187 5755 cases (6089 steps), on disk, sync always, pieces of 65536 bytes, index on: 5755 passed, 0 failed

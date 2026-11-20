@@ -243,7 +243,7 @@ pub fn cat(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         }
         status
     });
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes: false })
 }
 
 /// A count argument for head or tail: an optional sign, digits, and an
@@ -662,7 +662,7 @@ fn head_or_tail(cmd: &'static str, mut args: Vec<Vec<u8>>) -> Result<Prepared, S
     };
     if let (Some(digit), false, true) = (old_form, cmd == "head", p.operands.len() > 1) {
         // tail takes the old form with one file at most.
-        return Ok(Prepared::from(Box::new(move |_: &mut Db, io: &mut Io| {
+        return Ok(Prepared::from(Box::new(move |_: &mut crate::engine::Access, io: &mut Io| {
             io.err_line(format!("tail: option used in invalid context -- {}", char::from(digit)));
             1
         }) as Runner));
@@ -748,7 +748,7 @@ fn head_or_tail(cmd: &'static str, mut args: Vec<Vec<u8>>) -> Result<Prepared, S
         }
         status
     });
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes: false })
 }
 
 pub fn head(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
@@ -916,5 +916,5 @@ pub fn wc(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         }
         status
     });
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes: false })
 }

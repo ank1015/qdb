@@ -321,10 +321,15 @@ $ cd src; PWD=bogus; pwd
 $ cd src⏎pwd⏎cd lib⏎pwd
 $ HOME={ROOT}/nosuch; cd; echo $?
 $ unset HOME; cd; echo $?; pwd
-! cd - ## cd -
+$ cd -; echo $?
+$ mkdir -p a/b; cd a/b; cd ..; cd -; pwd; cd - > /dev/null; pwd; echo $OLDPWD
+$ OLDPWD=; cd -; echo $?; pwd
+$ OLDPWD=nosuch; cd -; echo $?
+$ cd - src; echo $?
 ! cd -L src ## flag: cd -L
 ! cd -P src ## flag: cd -P
-! cd src; cd - ## cd -
+$ cd src; cd -; pwd
+$ cd src; cd lib; cd -; cd -; cd -
 
 # Each stage of a pipeline has its own copy of the session.
 $ X=1; X=2 | cat; echo $X

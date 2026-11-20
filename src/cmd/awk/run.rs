@@ -389,8 +389,11 @@ pub fn compile(src: &[u8]) -> Result<Regex, String> {
 #[derive(Default)]
 struct Array {
     map: HashMap<Rc<[u8]>, usize>,
-    /// In the order the keys were first set.
+    /// In the order the keys were first set. A deleted element stays as
+    /// a gap (`gone`) until there are many, so that deleting is quick.
     items: Vec<(Rc<[u8]>, Value)>,
+    gone: Vec<bool>,
+    dead: usize,
 }
 
 impl Array {
@@ -400,6 +403,7 @@ impl Array {
         }
         let k: Rc<[u8]> = Rc::from(key);
         self.items.push((k.clone(), Value::Uninit));
+        self.gone.push(false);
         self.map.insert(k, self.items.len() - 1);
         self.items.len() - 1
     }
@@ -407,6 +411,35 @@ impl Array {
     fn clear(&mut self) {
         self.map.clear();
         self.items.clear();
+        self.gone.clear();
+        self.dead = 0;
+    }
+
+    fn len(&self) -> usize {
+        self.items.len() - self.dead
+    }
+
+    fn keys(&self) -> Vec<Rc<[u8]>> {
+        self.items.iter().zip(&self.gone).filter(|(_, g)| !**g).map(|((k, _), _)| k.clone()).collect()
+    }
+
+    fn remove(&mut self, key: &[u8]) {
+        let Some(i) = self.map.remove(key) else { return };
+        self.gone[i] = true;
+        self.items[i].1 = Value::Uninit;
+        self.dead += 1;
+        if self.dead > 64 && self.dead * 2 > self.items.len() {
+            let items = std::mem::take(&mut self.items);
+            let gone = std::mem::take(&mut self.gone);
+            self.clear();
+            for ((k, v), g) in items.into_iter().zip(gone) {
+                if !g {
+                    self.map.insert(k.clone(), self.items.len());
+                    self.items.push((k, v));
+                    self.gone.push(false);
+                }
+            }
+        }
     }
 }
 
@@ -492,7 +525,7 @@ pub enum Flow {
     Next,
     Break,
     Continue,
-    /// A fatal error, or nobody reads the output any more.
+    /// A fatal error, `exit`, or nobody reads the output any more.
     Stop,
 }
 
@@ -520,6 +553,16 @@ pub struct Rt {
     pub out: Vec<u8>,
     pub fatal: Option<Vec<u8>>,
     pub stopped: bool,
+    /// `exit` has run: no more input is read, and the END rules run
+    /// unless it was in one of them.
+    pub exiting: bool,
+    /// The status `exit` gave, kept by an `exit` without one.
+    pub exit_code: i32,
+    /// For each name the program uses as an array: whether it has been
+    /// used as one yet, and whether `length` met it before that, which in
+    /// gawk makes it a scalar for good.
+    typed: Vec<bool>,
+    scalar: Vec<bool>,
     dynamic: HashMap<Vec<u8>, Rc<Regex>>,
     /// For `/re/` asked of the whole record: the search grep uses.
     searchers: Vec<Searcher>,
@@ -562,6 +605,10 @@ impl Rt {
             out: Vec::new(),
             fatal: None,
             stopped: false,
+            exiting: false,
+            exit_code: 0,
+            typed: vec![false; n],
+            scalar: vec![false; n],
             dynamic: HashMap::new(),
             searchers,
             turns: 0,
@@ -571,7 +618,7 @@ impl Rt {
     }
 
     pub fn dead(&self) -> bool {
-        self.stopped || self.fatal.is_some()
+        self.stopped || self.fatal.is_some() || self.exiting
     }
 
     pub fn fail(&mut self, msg: &str) {
@@ -605,10 +652,6 @@ impl Rt {
 
     pub fn line(&self) -> u32 {
         self.line
-    }
-
-    pub fn records(&self) -> f64 {
-        self.vars[NR].num()
     }
 
     // ---------------------------------------------------- record and fields
@@ -816,6 +859,18 @@ impl Rt {
 
     // -------------------------------------------------------- expressions
 
+    /// About to use a name as an array. False, with gawk's fatal error,
+    /// if `length` has made it a scalar.
+    fn as_array(&mut self, a: usize) -> bool {
+        if self.scalar[a] {
+            let msg = format!("attempt to use scalar `{}' as an array", self.prog.names[a]);
+            self.fail(&msg);
+            return false;
+        }
+        self.typed[a] = true;
+        true
+    }
+
     fn key(&mut self, e: &Expr) -> Rc<[u8]> {
         match e {
             Expr::Str(s) => s.clone(),
@@ -830,6 +885,9 @@ impl Rt {
             Lv::Field(e) => Place::Field(self.field_index(e)?),
             Lv::Elem(a, k) => {
                 let key = self.key(k);
+                if !self.as_array(*a) {
+                    return None;
+                }
                 Place::Elem(*a, self.arrays[*a].slot(&key))
             }
         })
@@ -1072,7 +1130,7 @@ impl Rt {
             }
             Expr::In(k, a) => {
                 let key = self.key(k);
-                self.arrays[*a].map.contains_key(&key[..])
+                self.as_array(*a) && self.arrays[*a].map.contains_key(&key[..])
             }
             _ => self.eval(e).truthy(),
         }
@@ -1117,6 +1175,9 @@ impl Rt {
             },
             Expr::Elem(a, k) => {
                 let key = self.key(k);
+                if !self.as_array(*a) {
+                    return Value::Uninit;
+                }
                 let i = self.arrays[*a].slot(&key);
                 self.arrays[*a].items[i].1.clone()
             }
@@ -1177,8 +1238,14 @@ impl Rt {
                 Value::Num(n as f64)
             }
             Expr::LengthOf(id) => {
-                if self.prog.uses[*id].1 {
-                    Value::Num(self.arrays[*id].items.len() as f64)
+                if self.prog.uses[*id].1 && !self.scalar[*id] {
+                    if !self.typed[*id] {
+                        // gawk: an untyped name given to length becomes a
+                        // scalar.
+                        self.scalar[*id] = true;
+                        return Value::Num(0.0);
+                    }
+                    Value::Num(self.arrays[*id].len() as f64)
                 } else {
                     Value::Num(self.vars[*id].text().len() as f64)
                 }
@@ -1250,6 +1317,11 @@ impl Rt {
                 };
                 let mut parts = Vec::new();
                 split_all(&text, &sep, &mut parts);
+                if self.scalar[*arr] {
+                    self.fail("split: second argument is not an array");
+                    return Value::Uninit;
+                }
+                self.typed[*arr] = true;
                 let a = &mut self.arrays[*arr];
                 a.clear();
                 let mut key = Vec::new();
@@ -1333,6 +1405,9 @@ impl Rt {
 
     fn turn(&mut self) -> bool {
         self.turns += 1;
+        if self.turns & 1023 == 0 {
+            crate::unit::poll();
+        }
         if self.turns > MAX_TURNS {
             self.fail(&format!("stopped after {} turns of its loops, the most one run of awk may take", MAX_TURNS));
         }
@@ -1462,7 +1537,10 @@ impl Rt {
                 }
             }
             Stmt::ForIn(var, arr, body) => {
-                let keys: Vec<Rc<[u8]>> = self.arrays[*arr].items.iter().map(|(k, _)| k.clone()).collect();
+                if !self.as_array(*arr) {
+                    return Flow::Stop;
+                }
+                let keys: Vec<Rc<[u8]>> = self.arrays[*arr].keys();
                 for k in keys {
                     if !self.turn() {
                         return Flow::Stop;
@@ -1478,6 +1556,45 @@ impl Rt {
                 }
             }
             Stmt::Block(body) => return self.run(body, io),
+            Stmt::Do(body, c, line) => loop {
+                if !self.turn() {
+                    return Flow::Stop;
+                }
+                match self.exec(body, io) {
+                    Flow::Break => break,
+                    Flow::Normal | Flow::Continue => {}
+                    f => return f,
+                }
+                self.line = *line;
+                if !self.truth(c) {
+                    break;
+                }
+            },
+            Stmt::Delete(arr, key, line) => {
+                self.line = *line;
+                if !self.as_array(*arr) {
+                    return Flow::Stop;
+                }
+                match key {
+                    None => self.arrays[*arr].clear(),
+                    Some(k) => {
+                        let key = self.key(k);
+                        self.arrays[*arr].remove(&key);
+                    }
+                }
+            }
+            Stmt::Exit(status, line) => {
+                self.line = *line;
+                if let Some(e) = status {
+                    let v = self.num(e);
+                    // As a process status: the low eight bits.
+                    self.exit_code = (if v.is_finite() { v.trunc() as i64 } else { 0 } & 0xff) as i32;
+                }
+                if self.fatal.is_none() {
+                    self.exiting = true;
+                }
+                return Flow::Stop;
+            }
             Stmt::Next => return Flow::Next,
             Stmt::Break => return Flow::Break,
             Stmt::Continue => return Flow::Continue,

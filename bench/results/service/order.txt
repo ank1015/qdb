@@ -1,0 +1,1 @@
+order checker: 100 runs of 10000 units from 16 connections at once on one filesystem, seeds 1000 to 1099: 1000000 units, 20038 of them stopped at a deadline; every output explained by one order of the units consistent with when each was answered (232 s)

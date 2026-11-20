@@ -1,0 +1,1 @@
+open /tmp/sm: 1000 times, median 0.035 ms, least 0.030 ms; heap once open 13.7 KB (the engine's own estimate 1.2 KB)

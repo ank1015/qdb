@@ -1,0 +1,1 @@
+deadlines: 440 units given 100 ms, each stopped by it; answered after the deadline by median 0.90 ms, 99th percentile 14.55 ms, most 39.74 ms ("sort -r d/* > /dev/null"); after each, nothing it wrote was there and the filesystem took a write

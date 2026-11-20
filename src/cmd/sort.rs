@@ -376,11 +376,25 @@ fn by_bytes(ents: &mut [Ent], buf: &[u8], whole: bool, tie: &dyn Fn(&Ent, &Ent) 
     };
     // (start, end, bytes already known to be equal within the group)
     let mut todo: Vec<(usize, usize, usize)> = vec![(0, ents.len(), 0)];
+    let mut pops = 0u32;
     while let Some((start, end, depth)) = todo.pop() {
         let part = &mut ents[start..end];
         let n = part.len();
+        // A long sort looks now and then for a request to stop: before
+        // every large group, and every so many small ones.
+        pops = pops.wrapping_add(1);
+        if n > 4096 || pops & 255 == 0 {
+            crate::unit::poll();
+        }
         if n <= 32 {
-            part.sort_unstable_by(|a, b| full(a, b, depth));
+            let mut n = 0u32;
+            part.sort_unstable_by(|a, b| {
+                n = n.wrapping_add(1);
+                if n & 0xffff == 0 {
+                    crate::unit::poll();
+                }
+                full(a, b, depth)
+            });
             continue;
         }
         let pivot = {
@@ -507,7 +521,15 @@ impl Sorter {
             };
             by_bytes(&mut self.ents, buf, false, &tie);
         } else {
-            self.ents.sort_by(|a, b| o.compare_headed(text(a), (a.prefix, a.koff, a.klen), text(b), (b.prefix, b.koff, b.klen)));
+            // A long sort looks now and then for a request to stop.
+            let mut n = 0u32;
+            self.ents.sort_by(|a, b| {
+                n = n.wrapping_add(1);
+                if n & 0xffff == 0 {
+                    crate::unit::poll();
+                }
+                o.compare_headed(text(a), (a.prefix, a.koff, a.klen), text(b), (b.prefix, b.koff, b.klen))
+            });
         }
     }
 
@@ -545,8 +567,8 @@ impl Sorter {
             self.failed = Some(e);
         }
         self.written += out.len() as u64;
-        if let Some(sc) = &self.scratch {
-            sc.used.set(sc.used.get() + self.written - start);
+        if self.scratch.is_some() {
+            crate::tree::count_scratch(self.written - start);
         }
         self.runs.push((start, self.written));
         self.buf.clear();
@@ -984,7 +1006,7 @@ pub fn sort(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                 }
             }
         });
-        return Ok(Prepared { run, input });
+        return Ok(Prepared { run, input, writes: false });
     }
     let input = if files.is_empty() {
         Input::Stream(Box::new(Sorter::new(o.clone())))
@@ -1029,5 +1051,5 @@ pub fn sort(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         }
         s.output(io)
     });
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes: false })
 }

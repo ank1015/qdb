@@ -222,15 +222,44 @@ $ awk 'BEGIN { substr("a") }'; echo $?
 $ awk 'BEGIN { printf }'; echo $?
 $ awk '}'; echo $?
 
-# Not ASCII: refused when the line is reached.
-= printf 'plain\ncaf\303\251\nafter\n' | awk '{ print NR ": " $0 }'; echo $?
-> 1: plain
-2> awk: -: line 2: input that is not ASCII; this awk reads ASCII text only
-> 2
-= printf 'plain\n' > a; printf 'x\n\303\251\n' > b; awk 'END { print NR }' a b; echo $?
-2> awk: b: line 3: input that is not ASCII; this awk reads ASCII text only
-> 2
+# Bytes that are not ASCII are characters of one byte each, as in
+# gawk in the C locale: length, substr, index and the case functions
+# count bytes, and only ASCII letters have a case.
+$ printf 'plain\ncaf\303\251\nafter\n' | awk '{ print NR ": " $0 }'; echo $?
+$ printf 'plain\n' > a; printf 'x\n\303\251\n' > b; awk 'END { print NR }' a b; echo $?
 $ printf 'plain\ncaf\303\251\n' | awk 'BEGIN { print "only BEGIN reads nothing" }'
+$ printf 'h\303\251llo w\303\266rld\n\303\204bc\n' | awk '{ print length($0), substr($0, 2, 3), index($0, "l"), toupper($0), tolower($1) }'
+$ printf 'h\303\251llo\n' | awk '{ gsub(/./, "[&]"); print }'
+$ printf 'h\303\251llo\n' | awk '{ print match($0, /\303\251/), RSTART, RLENGTH; n = split($0, c, ""); print n, c[2] c[3] }'
+$ printf '\303\204bc\n' | awk '/^[^a-z]/ { print "not a lower-case letter" } /[[:alpha:]]+$/ { print match($0, /[[:alpha:]]+/), RLENGTH }'
+$ printf 'z\n\303\251\n' | awk '{ print ($1 < "z") }'
+$ awk 'BEGIN { printf "%c|%c\n", 233, "\303\251x" }' | cat -A
+$ printf 'caf\303\251\n' > u.txt; awk '{ print toupper($0) }' u.txt > up.txt; cat up.txt
+
+# exit, delete, do ... while.
+$ printf '1\n2\n3\n' | awk 'NR == 2 { print; exit }'; echo $?
+$ printf '1\n2\n3\n' | awk '{ print } NR == 2 { exit 3 } END { print "end", NR }'; echo $?
+$ printf '1\n2\n' | awk 'BEGIN { exit 4 } { print } END { print "END still runs" }'; echo $?
+$ awk 'BEGIN { exit 4 } END { exit }'; echo $?
+$ printf 'x\n' | awk 'END { exit 300 }'; echo $?
+$ printf 'x\n' | awk 'END { exit -1 }'; echo $?
+$ printf 'x\n' | awk 'END { exit "7z" } END { print "not reached" }'; echo $?
+$ printf '5\n' | awk '{ exit $1 } END { print "x" }'; echo $?
+$ printf 'a\n' > f1; awk 'NR == 1 { exit } END { print NR, $0 }' f1 nofile; echo $?
+$ seq 1 100000 | awk 'NR == 3 { exit } { print }'; echo $?
+$ printf 'a 1\nb 2\nc 3\n' | awk '{ a[$1] = $2 } END { delete a["b"]; for (k in a) print k, a[k]; print length(a); delete a; print length(a), ("c" in a) }'
+$ printf 'a\nb\na\n' | awk '{ delete seen[$1]; seen[$1]; print length(seen) }'
+$ awk 'BEGIN { for (i = 0; i < 200; i++) a[i] = i; for (i = 0; i < 150; i++) delete a[i]; n = 0; for (k in a) n += a[k]; print n, length(a) }'
+$ awk 'BEGIN { delete x; x = 1 }'; echo $?
+$ printf 'a\n' | awk '{ print length(x); x[1] = 1 }'; echo $?
+$ printf 'a\n' | awk '{ print length(x); n = split("a b", x) }'; echo $?
+$ printf 'a\n' | awk '{ print length(x); for (k in x) print k }'; echo $?
+$ printf 'a\n' | awk '{ x[1]; print length(x) }'
+$ awk 'BEGIN { i = 0; do { print i; i++ } while (i < 3) }'
+$ awk 'BEGIN { do print "once"; while (0) }'
+$ awk 'BEGIN { i = 5; do { if (i == 7) break; print i++ } while (1) }'
+$ awk 'BEGIN { do { i++; if (i < 3) continue; print i } while (i < 5) }'
+$ awk 'BEGIN { do print 1⏎while (0) }'
 
 # Refused by name, before anything runs.
 ! awk 'function f(x) { return x } BEGIN { print f(1) }' ## awk feature: user-defined functions
@@ -247,9 +276,7 @@ $ printf 'plain\ncaf\303\251\n' | awk 'BEGIN { print "only BEGIN reads nothing" 
 ! awk '{ printf("%s\n", $1) > "out" }' ## awk feature: output redirection (>)
 ! awk '{ print | "sort" }' ## awk feature: a pipe (|)
 ! awk '{ print $1 | "sort" }' ## awk feature: a pipe (|)
-! awk 'BEGIN { exit 3 }' ## awk feature: exit
-! awk 'BEGIN { delete a[1] }' ## awk feature: delete
-! awk 'BEGIN { do x++; while (x < 3) }' ## awk feature: do ... while
+! awk 'BEGIN { delete a[1, 2] }' ## awk feature: an array with more than one subscript
 ! awk '{ nextfile }' ## awk feature: nextfile
 ! awk 'BEGIN { a[1,2] = 3 }' ## awk feature: an array with more than one subscript
 ! awk 'BEGIN { if ((1,2) in a) print }' ## awk feature: (i, j) in array

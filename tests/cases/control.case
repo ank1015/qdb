@@ -274,9 +274,7 @@ $ echo x | while read L; do false; done; echo $?
 2> qdb: unsupported command: perl
 ? 2
 + ls *.txt
-= X=-; cd $X
-2> qdb: unsupported cd -: going back to the directory before
-? 2
+$ X=-; cd $X; echo $?
 = X=-p; read $X Y
 2> qdb: unsupported flag: read -p
 ? 2
@@ -301,20 +299,29 @@ $ cd src; find . -name '*.h' | xargs grep -c define
 $ find src -maxdepth 0 -exec pwd \;
 $ ls src | while read f; do echo $f; done | xargs echo
 
-# A unit that runs too many commands is stopped; what it wrote stays.
+# A unit that runs too many commands is stopped, and nothing it changed
+# is kept: the tree is as it was before the unit began.
 = echo before > kept.txt; while true; do :; done; echo never
-2> qdb: the unit was stopped after 1000000 commands, the most one unit may run; what it changed before that stays
+2> qdb: the unit was stopped after 1000000 commands, the most one unit may run; nothing it changed was kept
 ? 3
-+ cat kept.txt
-= i=0; while true; do i=$((i+1)); echo $i > count.txt; done
-2> qdb: the unit was stopped after 1000000 commands, the most one unit may run; what it changed before that stays
++= cat kept.txt
+2> cat: kept.txt: No such file or directory
+? 1
+= echo old > count.txt
++= i=0; while true; do i=$((i+1)); echo $i > count.txt; done
+2> qdb: the unit was stopped after 1000000 commands, the most one unit may run; nothing it changed was kept
 ? 3
-+ cat count.txt
++= cat count.txt; echo $i
+> old
+>
 = for i in $(seq 100000); do :; done; echo $i
 > 100000
 = until false; do true; done | cat
-2> qdb: the unit was stopped after 1000000 commands, the most one unit may run; what it changed before that stays
+2> qdb: the unit was stopped after 1000000 commands, the most one unit may run; nothing it changed was kept
 ? 3
+# A unit that ends by itself keeps what it wrote, whatever its status.
+$ echo a > a.txt && false; cat a.txt
+$ mkdir d; touch d/x; rm d/nope; ls d
 
 # `!` before a pipeline turns its status round.
 $ ! true; echo $?

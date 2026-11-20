@@ -26,12 +26,20 @@ fn run(db: &mut Db, command: &str) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// A small database with a few files, closed.
+/// A small database with a few files, closed. Its data file gets an
+/// index file at close although it is small, which by default it would
+/// not, so that what happens to index files can be tested on it.
 fn make(dir: &Path) {
-    let (mut db, report) = Db::open_dir(dir, Config::default()).unwrap();
+    make_with(dir, 40);
+}
+
+/// The same with `n` files: with a few hundred, the saved tree is too
+/// large to be kept inside MANIFEST and has a file of its own.
+fn make_with(dir: &Path, n: usize) {
+    let (mut db, report) = Db::open_dir(dir, Config { index_file_min: 0, ..Config::default() }).unwrap();
     assert!(report.created);
     run(&mut db, "mkdir -p src/deep docs");
-    for i in 0..40 {
+    for i in 0..n {
         run(&mut db, &format!("echo 'line one of file {0} holds needle{0}' > src/f{0}.txt", i));
         run(&mut db, &format!("echo 'a second line, the same in every file' >> src/f{}.txt", i));
     }
@@ -116,14 +124,14 @@ fn a_missing_index_is_built_again() {
     for f in files(&dir.0, ".idx") {
         std::fs::remove_file(f).unwrap();
     }
-    let (mut db, report) = Db::open_dir(&dir.0, Config::default()).unwrap();
+    let (mut db, report) = Db::open_dir(&dir.0, Config { index_file_min: 0, ..Config::default() }).unwrap();
     assert_eq!(report.rebuilt.len(), 1, "{:?}", report);
     assert!(report.messages().iter().any(|m| m.contains("built the search index again")));
     assert_eq!(run(&mut db, "grep -rl needle7 ."), "./docs/copy.txt\n./src/f7.txt\n");
     db.check().unwrap();
     db.close().unwrap();
     // And it was saved: the next open has nothing to do.
-    let (_, report) = Db::open_dir(&dir.0, Config::default()).unwrap();
+    let (_, report) = Db::open_dir(&dir.0, Config { index_file_min: 0, ..Config::default() }).unwrap();
     assert!(report.messages().is_empty(), "{:?}", report);
 }
 
@@ -202,8 +210,19 @@ fn damaged_content_is_an_error_that_names_the_file() {
 
 #[test]
 fn a_damaged_tree_or_manifest_is_an_error() {
-    let dir = Dir::new("badtree");
+    // A small tree is kept inside MANIFEST.
+    let dir = Dir::new("badinline");
     make(&dir.0);
+    assert!(files(&dir.0, ".ckp").is_empty());
+    let manifest = dir.0.join("MANIFEST");
+    flip(&manifest, 60);
+    let err = Db::open_dir(&dir.0, Config::default()).err().unwrap();
+    assert!(err.contains("MANIFEST") && err.contains("damaged"), "{}", err);
+    flip(&manifest, 60);
+    Db::open_dir(&dir.0, Config::default()).unwrap();
+    // A larger one in a file of its own.
+    let dir = Dir::new("badtree");
+    make_with(&dir.0, 300);
     let ckp = files(&dir.0, ".ckp").remove(0);
     flip(&ckp, 40);
     let err = Db::open_dir(&dir.0, Config::default()).err().unwrap();
@@ -217,17 +236,18 @@ fn a_damaged_tree_or_manifest_is_an_error() {
 
 #[test]
 fn a_newer_format_is_refused() {
-    for (version, said) in [(3u8, "newer version"), (1u8, "earlier version")] {
+    for (version, said) in [(4u8, "newer version"), (2u8, "earlier version")] {
     for ext in [".seg", ".ckp", "MANIFEST"] {
         let dir = Dir::new(&format!("version{}{}", version, ext.trim_start_matches('.')));
-        make(&dir.0);
+        make_with(&dir.0, 300);
         let file = files(&dir.0, ext).remove(0);
         // The format version is the four bytes after the magic. Give it
         // a version from the future, with a checksum that is right, by
         // asking the engine's own checksum.
         let mut bytes = std::fs::read(&file).unwrap();
         bytes[8] = version;
-        let covered = if ext == ".seg" { 28 } else { 16 };
+        // MANIFEST's checksum is its last four bytes and covers the rest.
+        let covered = if ext == ".seg" { 28 } else if ext == "MANIFEST" { bytes.len() - 4 } else { 16 };
         let sum = qdb::disk::crc(&bytes[..covered]).to_le_bytes();
         bytes[covered..covered + 4].copy_from_slice(&sum);
         std::fs::write(&file, bytes).unwrap();

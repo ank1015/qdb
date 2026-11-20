@@ -1,0 +1,2 @@
+generated grep: 3000 cases, seed 77, in memory, pieces of 65536 bytes, index on: 3000 passed, 0 known differences, 0 failed
+generated rg: 3000 cases, seed 77, in memory, pieces of 65536 bytes, index on: 3000 passed, 0 known differences, 0 failed

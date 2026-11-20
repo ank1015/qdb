@@ -14,13 +14,22 @@
 //!   can produce the directory as a power cut could leave it: that is the
 //!   crash test.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
-pub trait VFile {
+/// A lock that a panic while it was held does not spoil: what it guards
+/// here is always left whole.
+pub fn lock<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A shared handle on a directory of files, as the database and its
+/// scratch files hold it.
+pub type VfsRef = Arc<dyn Vfs>;
+
+pub trait VFile: Send + Sync {
     fn len(&self) -> u64;
     /// Write at an offset, growing the file if the write ends past its
     /// end. A gap is filled with zeros.
@@ -28,12 +37,28 @@ pub trait VFile {
     fn truncate(&mut self, len: u64) -> io::Result<()>;
     /// Returns once everything written so far is on the disk.
     fn sync(&mut self) -> io::Result<()>;
+    /// A handle that syncs this file from another thread, while the
+    /// file goes on being written: for syncs shared by several units
+    /// (`group::GroupLog`).
+    fn syncer(&self) -> io::Result<Arc<dyn Syncer>>;
     /// The start of a read-only view of the file. Bytes below `len()` can
     /// be read through it until the next call that changes the file.
     fn base(&self) -> *const u8;
 }
 
-pub trait Vfs {
+/// Syncs one file; see `VFile::syncer`. Returns once everything written
+/// to the file before the call is on the disk.
+pub trait Syncer: Send + Sync {
+    fn sync(&self) -> io::Result<()>;
+}
+
+impl Syncer for std::fs::File {
+    fn sync(&self) -> io::Result<()> {
+        self.sync_data()
+    }
+}
+
+pub trait Vfs: Send + Sync {
     /// A new, empty file, replacing any file of that name. At most
     /// `reserve` bytes will ever be written to it through this object.
     fn create(&self, name: &str, reserve: u64) -> io::Result<Box<dyn VFile>>;
@@ -60,12 +85,12 @@ pub trait Vfs {
 
 pub struct RealFs {
     dir: PathBuf,
-    lock: RefCell<Option<std::fs::File>>,
+    lock: Mutex<Option<std::fs::File>>,
 }
 
 impl RealFs {
     pub fn new(dir: &Path) -> RealFs {
-        RealFs { dir: dir.to_path_buf(), lock: RefCell::new(None) }
+        RealFs { dir: dir.to_path_buf(), lock: Mutex::new(None) }
     }
 }
 
@@ -75,6 +100,11 @@ struct RealFile {
     reserve: usize,
     len: u64,
 }
+
+// SAFETY: the mapping is read-only and lives as long as the struct; a
+// file is changed only through `&mut self`.
+unsafe impl Send for RealFile {}
+unsafe impl Sync for RealFile {}
 
 impl RealFile {
     fn new(file: std::fs::File, reserve: u64) -> io::Result<RealFile> {
@@ -134,6 +164,10 @@ impl VFile for RealFile {
         self.file.sync_data()
     }
 
+    fn syncer(&self) -> io::Result<Arc<dyn Syncer>> {
+        Ok(Arc::new(self.file.try_clone()?))
+    }
+
     fn base(&self) -> *const u8 {
         self.base as *const u8
     }
@@ -179,7 +213,7 @@ impl Vfs for RealFs {
             let e = io::Error::last_os_error();
             return if e.kind() == io::ErrorKind::WouldBlock { Ok(false) } else { Err(e) };
         }
-        *self.lock.borrow_mut() = Some(file);
+        *lock(&self.lock) = Some(file);
         Ok(true)
     }
 
@@ -221,59 +255,67 @@ impl IoCounts {
     }
 }
 
-type Hook = Box<dyn FnMut(&MemFs, u64)>;
+type Hook = Box<dyn FnMut(&MemFs, u64) + Send>;
 
 #[derive(Default)]
 struct MemState {
-    names: BTreeMap<String, Rc<RefCell<MemData>>>,
+    names: BTreeMap<String, Arc<Mutex<MemData>>>,
     /// The directory as of the last `sync_dir`.
-    durable_names: BTreeMap<String, Rc<RefCell<MemData>>>,
+    durable_names: BTreeMap<String, Arc<Mutex<MemData>>>,
     counts: IoCounts,
     /// Called after every operation that changes anything, with the
     /// number of operations so far.
     hook: Option<Hook>,
     /// The operation with this number fails, and every one after it.
     fail_from: Option<u64>,
+    /// How long a sync takes, as on a real disk.
+    sync_delay: std::time::Duration,
 }
 
 #[derive(Clone)]
 pub struct MemFs {
-    state: Rc<RefCell<MemState>>,
+    state: Arc<Mutex<MemState>>,
     tracked: bool,
 }
 
 impl MemFs {
     /// Files that live and die with the process.
     pub fn volatile() -> MemFs {
-        MemFs { state: Rc::default(), tracked: false }
+        MemFs { state: Arc::default(), tracked: false }
     }
 
     /// Files in memory that behave like a disk: what has not been synced
     /// can be lost. See `crash`.
     pub fn tracked() -> MemFs {
-        MemFs { state: Rc::default(), tracked: true }
+        MemFs { state: Arc::default(), tracked: true }
     }
 
     pub fn counts(&self) -> IoCounts {
-        self.state.borrow().counts
+        lock(&self.state).counts
     }
 
     /// Have `hook` called after every operation that changes a file or
     /// the directory. It gets this file system and the number of such
     /// operations so far, and may call `crash` on it.
     pub fn set_hook(&self, hook: Option<Hook>) {
-        self.state.borrow_mut().hook = hook;
+        lock(&self.state).hook = hook;
+    }
+
+    /// Make every sync take this long, as on a real disk, so that units
+    /// running at once can be seen to share syncs.
+    pub fn set_sync_delay(&self, d: std::time::Duration) {
+        lock(&self.state).sync_delay = d;
     }
 
     /// Make the operation numbered `n` (counting from 1) fail, and all
     /// after it: the disk has gone away.
     pub fn fail_from(&self, n: Option<u64>) {
-        self.state.borrow_mut().fail_from = n;
+        lock(&self.state).fail_from = n;
     }
 
     /// Total bytes in the files, as a disk would count them.
     pub fn disk_bytes(&self) -> u64 {
-        self.state.borrow().names.values().map(|f| f.borrow().data.len() as u64).sum()
+        lock(&self.state).names.values().map(|f| lock(&f).data.len() as u64).sum()
     }
 
     /// The directory as a power cut at this moment could leave it.
@@ -291,9 +333,9 @@ impl MemFs {
             rng ^= rng << 17;
             rng
         };
-        let state = self.state.borrow();
+        let state = lock(&self.state);
         // Which names exist.
-        let mut names: BTreeMap<String, Rc<RefCell<MemData>>> = BTreeMap::new();
+        let mut names: BTreeMap<String, Arc<Mutex<MemData>>> = BTreeMap::new();
         match next() % 3 {
             0 => names = state.durable_names.clone(),
             1 => names = state.names.clone(),
@@ -322,7 +364,7 @@ impl MemFs {
         let mode = next() % 4;
         let mut out = MemState::default();
         for (name, file) in names {
-            let f = file.borrow();
+            let f = lock(&file);
             let mut data = f.durable.clone();
             if next() % 2 == 0 {
                 // A change of length that reached the disk.
@@ -349,15 +391,15 @@ impl MemFs {
                 }
             }
             let durable = data.clone();
-            out.names.insert(name, Rc::new(RefCell::new(MemData { data, durable, dirty: Vec::new() })));
+            out.names.insert(name, Arc::new(Mutex::new(MemData { data, durable, dirty: Vec::new() })));
         }
         out.durable_names = out.names.clone();
-        MemFs { state: Rc::new(RefCell::new(out)), tracked: true }
+        MemFs { state: Arc::new(Mutex::new(out)), tracked: true }
     }
 
     /// Count an operation; fail it if the disk has been taken away.
     fn begin(&self, count: impl FnOnce(&mut IoCounts)) -> io::Result<()> {
-        let mut state = self.state.borrow_mut();
+        let mut state = lock(&self.state);
         if state.fail_from.is_some_and(|n| state.counts.ops() + 1 >= n) {
             return Err(io::Error::new(io::ErrorKind::Other, "injected failure"));
         }
@@ -366,30 +408,63 @@ impl MemFs {
     }
 
     fn done(&self) {
-        let hook = self.state.borrow_mut().hook.take();
+        let hook = lock(&self.state).hook.take();
         if let Some(mut hook) = hook {
-            let ops = self.state.borrow().counts.ops();
+            let ops = lock(&self.state).counts.ops();
             hook(self, ops);
-            let mut state = self.state.borrow_mut();
+            let mut state = lock(&self.state);
             if state.hook.is_none() {
                 state.hook = Some(hook);
             }
         }
     }
 
-    fn handle(&self, data: Rc<RefCell<MemData>>) -> Box<dyn VFile> {
+    fn handle(&self, data: Arc<Mutex<MemData>>) -> Box<dyn VFile> {
         Box::new(MemFile { data, fs: self.clone() })
     }
 }
 
+fn mem_sync(fs: &MemFs, data: &Arc<Mutex<MemData>>) -> io::Result<()> {
+    if !fs.tracked {
+        return Ok(());
+    }
+    let delay = lock(&fs.state).sync_delay;
+    if !delay.is_zero() {
+        // What is written meanwhile may or may not be covered, as on a
+        // disk; this sync covers at least what was written before it.
+        std::thread::sleep(delay);
+    }
+    fs.begin(|c| c.syncs += 1)?;
+    {
+        let mut d = lock(data);
+        let d = &mut *d;
+        d.durable.resize(d.data.len(), 0);
+        for &(off, len) in &d.dirty {
+            let end = ((off + len) as usize).min(d.data.len());
+            if (off as usize) < end {
+                d.durable[off as usize..end].copy_from_slice(&d.data[off as usize..end]);
+            }
+        }
+        d.dirty.clear();
+    }
+    fs.done();
+    Ok(())
+}
+
+impl Syncer for MemFile {
+    fn sync(&self) -> io::Result<()> {
+        mem_sync(&self.fs, &self.data)
+    }
+}
+
 struct MemFile {
-    data: Rc<RefCell<MemData>>,
+    data: Arc<Mutex<MemData>>,
     fs: MemFs,
 }
 
 impl VFile for MemFile {
     fn len(&self) -> u64 {
-        self.data.borrow().data.len() as u64
+        lock(&self.data).data.len() as u64
     }
 
     fn write_at(&mut self, off: u64, bytes: &[u8]) -> io::Result<()> {
@@ -398,7 +473,7 @@ impl VFile for MemFile {
             c.bytes_written += bytes.len() as u64;
         })?;
         {
-            let mut d = self.data.borrow_mut();
+            let mut d = lock(&self.data);
             let end = off as usize + bytes.len();
             if end > d.data.capacity() {
                 // Grow in modest steps: for a block this size the
@@ -421,50 +496,37 @@ impl VFile for MemFile {
     fn truncate(&mut self, len: u64) -> io::Result<()> {
         self.fs.begin(|c| c.other += 1)?;
         {
-            self.data.borrow_mut().data.resize(len as usize, 0);
+            lock(&self.data).data.resize(len as usize, 0);
         }
         self.fs.done();
         Ok(())
     }
 
     fn sync(&mut self) -> io::Result<()> {
-        if !self.fs.tracked {
-            return Ok(());
-        }
-        self.fs.begin(|c| c.syncs += 1)?;
-        {
-            let mut d = self.data.borrow_mut();
-            let d = &mut *d;
-            d.durable.resize(d.data.len(), 0);
-            for &(off, len) in &d.dirty {
-                let end = ((off + len) as usize).min(d.data.len());
-                if (off as usize) < end {
-                    d.durable[off as usize..end].copy_from_slice(&d.data[off as usize..end]);
-                }
-            }
-            d.dirty.clear();
-        }
-        self.fs.done();
-        Ok(())
+        mem_sync(&self.fs, &self.data)
+    }
+
+    fn syncer(&self) -> io::Result<Arc<dyn Syncer>> {
+        Ok(Arc::new(MemFile { data: self.data.clone(), fs: self.fs.clone() }))
     }
 
     fn base(&self) -> *const u8 {
-        self.data.borrow().data.as_ptr()
+        lock(&self.data).data.as_ptr()
     }
 }
 
 impl Vfs for MemFs {
     fn create(&self, name: &str, _reserve: u64) -> io::Result<Box<dyn VFile>> {
         self.begin(|c| c.other += 1)?;
-        let data = Rc::new(RefCell::new(MemData::default()));
-        self.state.borrow_mut().names.insert(name.to_string(), data.clone());
+        let data = Arc::new(Mutex::new(MemData::default()));
+        lock(&self.state).names.insert(name.to_string(), data.clone());
         let handle = self.handle(data);
         self.done();
         Ok(handle)
     }
 
     fn open(&self, name: &str, _reserve: u64) -> io::Result<Box<dyn VFile>> {
-        let data = self.state.borrow().names.get(name).cloned();
+        let data = lock(&self.state).names.get(name).cloned();
         match data {
             Some(d) => Ok(self.handle(d)),
             None => Err(io::Error::new(io::ErrorKind::NotFound, "no such file")),
@@ -472,12 +534,12 @@ impl Vfs for MemFs {
     }
 
     fn list(&self) -> io::Result<Vec<String>> {
-        Ok(self.state.borrow().names.keys().cloned().collect())
+        Ok(lock(&self.state).names.keys().cloned().collect())
     }
 
     fn remove(&self, name: &str) -> io::Result<()> {
         self.begin(|c| c.other += 1)?;
-        self.state.borrow_mut().names.remove(name);
+        lock(&self.state).names.remove(name);
         self.done();
         Ok(())
     }
@@ -485,7 +547,7 @@ impl Vfs for MemFs {
     fn rename(&self, from: &str, to: &str) -> io::Result<()> {
         self.begin(|c| c.other += 1)?;
         {
-            let mut state = self.state.borrow_mut();
+            let mut state = lock(&self.state);
             match state.names.remove(from) {
                 Some(f) => state.names.insert(to.to_string(), f),
                 None => return Err(io::Error::new(io::ErrorKind::NotFound, "no such file")),
@@ -501,7 +563,7 @@ impl Vfs for MemFs {
         }
         self.begin(|c| c.dir_syncs += 1)?;
         {
-            let mut state = self.state.borrow_mut();
+            let mut state = lock(&self.state);
             state.durable_names = state.names.clone();
         }
         self.done();

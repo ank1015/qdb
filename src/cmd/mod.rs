@@ -32,7 +32,7 @@ pub fn prepare(name: &[u8], args: &[Vec<u8>]) -> Result<Prepared, String> {
         b"tail" => return read::tail(args),
         b"wc" => return read::wc(args),
         b"ls" => ls::ls(args),
-        b"find" => find::find(args),
+        b"find" => return find::find(args),
         b"grep" => return grep::grep(args),
         b"sed" => return sed::sed(args),
         b"rg" => return rg::rg(args),

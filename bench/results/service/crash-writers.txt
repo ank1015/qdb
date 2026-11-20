@@ -1,0 +1,2 @@
+crash test, 8 writers at once sharing syncs, seed 2: 1000 power cuts, each recovered to the units in the order they were applied up to some point, with every answered unit and a passing check; 10978 units applied, 3043 syncs covering 10328 units (3.4 a sync)
+crash test, 2 writers at once sharing syncs, seed 3: 1000 power cuts, each recovered to the units in the order they were applied up to some point, with every answered unit and a passing check; 10684 units applied, 7532 syncs covering 10215 units (1.4 a sync)

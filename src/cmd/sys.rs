@@ -562,6 +562,9 @@ struct Xargs {
     trace: bool,
     max_chars: usize,
     exit_if_long: bool,
+    /// -L (and -l) imply -x, as GNU xargs does; a later -n takes that back
+    /// again, leaving only an -x given outright.
+    lines_imply_x: bool,
     command: Vec<Vec<u8>>,
     warnings: Vec<String>,
 }
@@ -686,6 +689,7 @@ pub fn xargs(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         trace: false,
         max_chars: LINE_MAX,
         exit_if_long: false,
+        lines_imply_x: false,
         command: Vec::new(),
         warnings: Vec::new(),
     };
@@ -840,6 +844,7 @@ pub fn xargs(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                     if x.replace.take().is_some() {
                         x.warnings.push(exclusive("--replace", "--max-args/-n"));
                     }
+                    x.lines_imply_x = false;
                     x.max_args = Some(n);
                 }
                 Err(m) => return stop(m, true),
@@ -853,6 +858,7 @@ pub fn xargs(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
                         x.warnings.push(exclusive("--replace", "-L"));
                     }
                     x.max_lines = Some(n);
+                    x.lines_imply_x = true;
                 }
                 Err(m) => return stop(m, true),
             },
@@ -889,19 +895,24 @@ pub fn xargs(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     if !super::known(&x.command[0]) || x.command[0] == b":" {
         return Err(format!("command: {} (xargs)", String::from_utf8_lossy(&x.command[0])));
     }
+    let writes = !crate::engine::is_pure(&x.command[0]);
     let run: Runner = Box::new(move |db, io| xargs_run(&x, db, io));
-    Ok(Prepared { run, input: Input::Whole })
+    Ok(Prepared { run, input: Input::Whole, writes })
 }
 
-fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
+fn xargs_run(x: &Xargs, db: &mut crate::engine::Access, io: &mut crate::engine::Io) -> i32 {
     for w in &x.warnings {
         io.err_line(w);
     }
     let input = io.take_stdin();
     io.close_stdin();
     let mut status = 0;
+    // GNU xargs leaves through `exit`, and a handler it registered waits
+    // for the commands and, if one of them failed, makes that the status:
+    // its own error then ends with 123, not 1.
+    let fatal = |status: i32| if status != 0 { status } else { 1 };
     // Run one command. False when xargs must stop.
-    let exec = |argv: &[Vec<u8>], db: &mut Db, io: &mut crate::engine::Io, status: &mut i32| -> bool {
+    let exec = |argv: &[Vec<u8>], db: &mut crate::engine::Access, io: &mut crate::engine::Io, status: &mut i32| -> bool {
         if x.trace {
             let shown: Vec<String> = argv
                 .iter()
@@ -970,7 +981,7 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
             let argv: Vec<Vec<u8>> = x.command.iter().map(|w| replace_all(w, pattern, item)).collect();
             if size(&argv) > x.max_chars {
                 io.err_line("xargs: argument list too long");
-                return 1;
+                return fatal(status);
             }
             if !exec(&argv, db, io, &mut status) {
                 return status;
@@ -988,11 +999,11 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
             if used + word.len() + 1 > x.max_chars {
                 if argv.len() == x.command.len() {
                     io.err_line("xargs: argument line too long");
-                    return 1;
+                    return fatal(status);
                 }
-                if x.exit_if_long && (x.max_args.is_some() || x.max_lines.is_some()) {
+                if (x.exit_if_long || x.lines_imply_x) && (x.max_args.is_some() || x.max_lines.is_some()) {
                     io.err_line("xargs: argument list too long");
-                    return 1;
+                    return fatal(status);
                 }
                 ran = true;
                 if !exec(&argv, db, io, &mut status) {
@@ -1003,7 +1014,7 @@ fn xargs_run(x: &Xargs, db: &mut Db, io: &mut crate::engine::Io) -> i32 {
                 lines_in = 0;
                 if used + word.len() + 1 > x.max_chars {
                     io.err_line("xargs: argument line too long");
-                    return 1;
+                    return fatal(status);
                 }
             }
             used += word.len() + 1;

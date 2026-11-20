@@ -1,0 +1,1 @@
+open /home/user/svc-linux/fs/5a/5a8a34f86105c89c8123138709b68a0d: 9 times, median 30.371 ms, least 28.454 ms; heap once open 21859.6 KB (the engine's own estimate 22088.1 KB)

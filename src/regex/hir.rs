@@ -22,6 +22,7 @@ pub struct RgSyntax {
 /// A compiled rg pattern. `ascii` is exact for a line of ASCII bytes;
 /// `exact`, there when the pattern asks about Unicode word boundaries,
 /// is for the lines that hold other bytes.
+#[derive(Clone)]
 pub struct RgPattern {
     pub ascii: Regex,
     pub exact: Option<Regex>,

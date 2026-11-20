@@ -30,7 +30,10 @@ With no case files, runs every tests/cases/*.case.
   --store MODE      where the engine keeps its data: memory (default), disk
                     (a database directory, checked with --check's checks
                     when each case ends), or reopen (the same, closed and
-                    opened again after every step, and checked each time)
+                    opened again after every step, and checked each time),
+                    or api (each case on a filesystem of its own on a
+                    server in this process, every step a request over
+                    HTTP, checked when the case ends)
   --sync MODE       with disk or reopen: always (default) or batch
   --piece BYTES     cut file content into pieces of at most this many bytes
                     (default 65536); a small value makes small test files
@@ -47,6 +50,21 @@ With no case files, runs every tests/cases/*.case.
                     a simulated disk that loses what was not synced, and
                     require that every one recovers to the result of a
                     whole number of command lines
+  --threads N       let every recursive grep and rg use N threads from its
+                    first file, as a server lends idle workers; output
+                    and counts must not change
+  --stops N         instead of the cases: N generated units on a host's
+                    filesystem, each run whole or stopped at a random
+                    moment: by its deadline, by its caller going away, or
+                    by a panic planted inside the engine. After each the
+                    filesystem must equal a reference that ran only the
+                    units that finished, and pass its check
+  --crash-writers N instead of the cases: the crash test with several
+                    writers (--writers, default 8) on one database at
+                    once, sharing syncs as the server has them do. Cut
+                    the power at N points; every one must recover to the
+                    units in the order they were applied, up to some
+                    point, and hold every unit that had been answered
   --kill N          instead of the cases: the kill test. Feed a real qdb
                     process generated command lines and kill it with
                     SIGKILL, N times, each time opening and checking what
@@ -59,6 +77,9 @@ With no case files, runs every tests/cases/*.case.
                     and none may be above tests/baseline/counters.tsv
   --update-baseline write tests/baseline/counters.tsv anew from this build.
                     Say why in the commit that changes it
+  --failures FILE   write every failure in full to FILE, after a line
+                    with the time and the command line of the run
+                    (default target/harness-failures.txt; runs add to it)
   -v                print every case as it runs";
 
 #[global_allocator]
@@ -76,6 +97,30 @@ enum Kind {
     Expect { stdout: Vec<u8>, stderr: Vec<u8>, code: i32 },
     /// Engine only, no checks: a setup step of an engine-only case.
     Setup,
+}
+
+/// Where every failure is written in full, with what ran it, so that a
+/// failure seen once can be looked at afterwards: `--failures FILE`, by
+/// default `target/harness-failures.txt`. Each run adds to the file.
+static FAILURES: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn log_failure(text: &str) {
+    use std::io::Write;
+    let path = FAILURES.lock().unwrap().clone().unwrap_or_else(|| "target/harness-failures.txt".to_string());
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let args: Vec<String> = std::env::args().collect();
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = write!(f, "=== {} (unix time {}), pid {}: {}\n{}\n\n", String::from_utf8_lossy(&qdb::when::format(now as i64 * 1_000_000_000, b"%Y-%m-%d %H:%M:%S UTC").unwrap_or_default()), now, std::process::id(), args.join(" "), text.trim_end());
+    }
+}
+
+/// Print a one-line failure and log it.
+macro_rules! fail_line {
+    ($($t:tt)*) => {{
+        let text = format!($($t)*);
+        log_failure(&text);
+        println!("{}", text);
+    }};
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +299,56 @@ enum Mode {
     Memory,
     Disk,
     Reopen,
+    /// Through the API: every case on a filesystem of its own on a server
+    /// in this process, each step one request over HTTP.
+    Api,
+}
+
+/// The server of --store api, started once.
+struct Api {
+    svc: std::sync::Arc<qdb::service::Service>,
+    client: std::sync::Mutex<qdb::net::http::Client>,
+    key: String,
+    dir: PathBuf,
+}
+
+static API: std::sync::OnceLock<Api> = std::sync::OnceLock::new();
+
+const API_ADMIN: &str = "harness-admin-key-0123456789";
+
+fn api(cfg: &Config) -> &'static Api {
+    API.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("qdb-harness-api-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut sc = qdb::service::ServiceConfig::new(&dir, API_ADMIN);
+        sc.host.db = cfg.clone();
+        // Cases make big outputs now and then; the cap is not under test.
+        sc.output_cap = 1 << 30;
+        sc.max_request = 1 << 30;
+        let svc = qdb::service::Service::open(sc).expect("the server opens");
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port");
+        let addr = l.local_addr().unwrap().to_string();
+        let s2 = svc.clone();
+        std::thread::spawn(move || qdb::service::serve(s2, l));
+        let mut client = qdb::net::http::Client::new(&addr);
+        let body = r#"{"quotas":{"filesystems":1000000}}"#;
+        let r = client.request("POST", "/v1/accounts", Some(API_ADMIN), body.as_bytes()).expect("an account");
+        let j = qdb::net::json::Json::parse(&r.body).expect("JSON");
+        let key = j.get("key").and_then(|k| k.as_str()).expect("a key").to_string();
+        Api { svc, client: std::sync::Mutex::new(client), key, dir }
+    })
+}
+
+impl Api {
+    fn call(&self, method: &str, path: &str, body: &[u8]) -> Result<qdb::net::json::Json, String> {
+        let mut c = self.client.lock().unwrap_or_else(|e| e.into_inner());
+        let r = c.request(method, path, Some(&self.key), body).map_err(|e| format!("{} {}: {}", method, path, e))?;
+        let j = qdb::net::json::Json::parse(&r.body).map_err(|e| format!("{} {}: {}", method, path, e))?;
+        if r.status / 100 != 2 {
+            return Err(format!("{} {}: HTTP {}: {}", method, path, r.status, j.to_string()));
+        }
+        Ok(j)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +363,7 @@ impl Setup {
             Mode::Memory => "in memory".to_string(),
             Mode::Disk => format!("on disk, sync {}", if self.cfg.sync == SyncMode::Always { "always" } else { "batch" }),
             Mode::Reopen => format!("on disk, closed and reopened after every step, sync {}", if self.cfg.sync == SyncMode::Always { "always" } else { "batch" }),
+            Mode::Api => format!("through the API, sync {}", if self.cfg.sync == SyncMode::Always { "always" } else { "batch" }),
         };
         format!(
             "{}, pieces of {} bytes, index {}{}{}",
@@ -284,6 +380,8 @@ impl Setup {
 struct Engine {
     db: Option<Db>,
     dir: Option<PathBuf>,
+    /// The filesystem, through the API.
+    fs: Option<String>,
     setup: Setup,
     reopens: usize,
 }
@@ -291,6 +389,13 @@ struct Engine {
 impl Engine {
     /// A database holding a copy of `start`.
     fn new(start: &Db, setup: &Setup, scratch: &mut Scratch) -> Result<Engine, String> {
+        if setup.mode == Mode::Api {
+            let a = api(&setup.cfg);
+            let j = a.call("POST", "/v1/filesystems", b"")?;
+            let fs = j.get("filesystem").and_then(|f| f.as_str()).ok_or("no filesystem ID")?.to_string();
+            a.svc.host().with_db_mut(&fs, |db| store::copy_into(start, db)).map_err(|e| e.to_string())??;
+            return Ok(Engine { db: None, dir: None, fs: Some(fs), setup: setup.clone(), reopens: 0 });
+        }
         let (mut db, dir) = match setup.mode {
             Mode::Memory => (Db::in_memory(setup.cfg.clone()), None),
             _ => {
@@ -300,14 +405,41 @@ impl Engine {
             }
         };
         store::copy_into(start, &mut db)?;
-        Ok(Engine { db: Some(db), dir, setup: setup.clone(), reopens: 0 })
+        Ok(Engine { db: Some(db), dir, fs: None, setup: setup.clone(), reopens: 0 })
     }
 
     fn db(&self) -> &Db {
         self.db.as_ref().unwrap()
     }
 
+    /// Look at the database, wherever it is.
+    fn with<R>(&self, f: impl FnOnce(&Db) -> R) -> R {
+        match &self.fs {
+            Some(fs) => api(&self.setup.cfg).svc.host().with_db(fs, f).expect("the case's filesystem"),
+            None => f(self.db()),
+        }
+    }
+
+    fn snapshot(&self) -> Vec<(Vec<u8>, Option<Vec<u8>>)> {
+        self.with(|db| db.snapshot())
+    }
+
     fn execute(&mut self, command: &[u8]) -> Result<Outcome, String> {
+        if let Some(fs) = &self.fs {
+            use qdb::net::json::Json;
+            let a = api(&self.setup.cfg);
+            let text = std::str::from_utf8(command).map_err(|_| "a command that is not UTF-8 cannot go through the API".to_string())?;
+            let j = a.call("POST", &format!("/v1/filesystems/{}/run", fs), Json::obj().with("command", text).to_string().as_bytes())?;
+            let bytes = |name: &str| -> Result<Vec<u8>, String> {
+                if let Some(s) = j.get(name).and_then(Json::as_str) {
+                    return Ok(s.as_bytes().to_vec());
+                }
+                let b = j.get(&format!("{}_base64", name)).and_then(Json::as_str).ok_or(format!("no {} in the answer", name))?;
+                qdb::net::codec::unbase64(b).ok_or(format!("bad base64 in {}", name))
+            };
+            let code = j.get("exit_status").and_then(Json::as_i64).ok_or("no exit status")? as i32;
+            return Ok(Outcome { stdout: bytes("stdout")?, stderr: bytes("stderr")?, code, cost: Default::default() });
+        }
         let out = execute(self.db.as_mut().unwrap(), command);
         if self.setup.mode == Mode::Reopen {
             self.reopen()?;
@@ -337,6 +469,9 @@ impl Engine {
     /// The checks of `qdb --check`, and for a database on disk a last
     /// close and reopen.
     fn finish(mut self) -> Result<(), String> {
+        if self.fs.is_some() {
+            return self.with(|db| db.check()).map(|_| ()).map_err(|e| format!("check: {}", e));
+        }
         self.db().check().map_err(|e| format!("check: {}", e))?;
         if self.dir.is_some() {
             self.reopen()?;
@@ -347,6 +482,9 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        if let Some(fs) = &self.fs {
+            let _ = api(&self.setup.cfg).call("DELETE", &format!("/v1/filesystems/{}", fs), b"");
+        }
         self.db = None;
         if let Some(dir) = &self.dir {
             let _ = std::fs::remove_dir_all(dir);
@@ -387,7 +525,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> 
     let result = (|| {
         for step in &case.steps {
             let fail = |what: String| Err(format!("{}:{}: {}\n{}", case.file, step.line, step.command, what));
-            let before = db.db().snapshot();
+            let before = db.snapshot();
             match &step.kind {
                 Kind::Setup => {
                     db.execute(step.command.as_bytes())?;
@@ -404,7 +542,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> 
                             show(&got.stderr)
                         ));
                     }
-                    if db.db().snapshot() != before {
+                    if db.snapshot() != before {
                         return fail("    a rejected command changed the tree\n".into());
                     }
                 }
@@ -429,7 +567,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> 
                     let engine_command = step.command.replace("{ROOT}", "");
                     check_safe(&real_command, root)?;
                     // Both sides start the step with the same file times.
-                    sync_times(db.db(), root);
+                    db.with(|d| sync_times(d, root));
                     let real = run_real(root, &real_command);
                     let got = db.execute(engine_command.as_bytes())?;
                     // Once a case has stored unordered output, later steps
@@ -460,7 +598,7 @@ fn run_case(case: &Case, fixture: &Db, scratch: &mut Scratch, setup: &Setup) -> 
                     let real_tree: Vec<(Vec<u8>, Option<Vec<u8>>)> =
                         store::snapshot_dir(root).map_err(|e| e.to_string())?.into_iter().map(|(p, c)| (p, c.map(|c| qdb::testing::bash_prefix(&c)))).collect();
                     let real_tree = normalise(real_tree);
-                    if let Some(d) = tree_diff(&real_tree, &normalise(db.db().snapshot())) {
+                    if let Some(d) = tree_diff(&real_tree, &normalise(db.snapshot())) {
                         what.push_str(&format!("    tree after the command:\n{}", d));
                     }
                     if !what.is_empty() {
@@ -861,7 +999,7 @@ fn diff_run(steps: usize, seed: u64, setup: &Setup, scratch: &mut Scratch) -> Re
             // a line where upkeep moved nothing can be held to this.
             let upkeep = on.db().io_stats().moved_bytes != moved;
             if kind == "same" && matches!(nth, 1..=4 | 6) && !upkeep && (on.db().index_work(), on.db().io_stats().content_bytes) != before {
-                println!("FAIL  seed {} step {}: a write that changes nothing reached the index or wrote content: {}", seed, step + 1, command);
+                fail_line!("FAIL  seed {} step {}: a write that changes nothing reached the index or wrote content: {}", seed, step + 1, command);
                 println!("    index work and content bytes before: {:?}", before);
                 println!("    and after: {:?}", (on.db().index_work(), on.db().io_stats().content_bytes));
                 println!("    all lines of the step: {:?}; the line printed: {}", all, show(&a.stderr));
@@ -887,7 +1025,7 @@ fn diff_run(steps: usize, seed: u64, setup: &Setup, scratch: &mut Scratch) -> Re
             }
             let b = execute(&mut off, command.as_bytes());
             if a != b {
-                println!("FAIL  seed {} step {}: {}", seed, step + 1, command);
+                fail_line!("FAIL  seed {} step {}: {}", seed, step + 1, command);
                 println!("    exit status: index on {}, index off {}", a.code, b.code);
                 println!("    stdout, index on:\n{}    stdout, index off:\n{}", show(&a.stdout), show(&b.stdout));
                 println!("    stderr, index on:\n{}    stderr, index off:\n{}", show(&a.stderr), show(&b.stderr));
@@ -904,14 +1042,14 @@ fn diff_run(steps: usize, seed: u64, setup: &Setup, scratch: &mut Scratch) -> Re
             }
         }
         if ((step + 1) % 50 == 0 || step + 1 == steps) && on.db().snapshot() != off.snapshot() {
-            println!("FAIL  seed {} step {}: the trees differ after {:?}", seed, step + 1, all);
+            fail_line!("FAIL  seed {} step {}: the trees differ after {:?}", seed, step + 1, all);
             return Ok(false);
         }
         let every: usize = std::env::var("QDB_DIFF_CHECK_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(1000);
         if (step + 1) % every == 0 || step + 1 == steps {
             if let Some(what) = rebuild_check(on.db()) {
                 println!("    the step: {:?}", all);
-                println!("FAIL  seed {} step {}: {}", seed, step + 1, what);
+                fail_line!("FAIL  seed {} step {}: {}", seed, step + 1, what);
                 return Ok(false);
             }
         }
@@ -951,10 +1089,12 @@ fn rebuild_check(db: &Db) -> Option<String> {
 /// engine does not copy.
 ///
 /// GNU grep 3.11 with -o, -w and -x together takes the newline as part of
-/// the match for some patterns and prints an empty line after it.
+/// the match for some patterns and prints an empty line after it. With
+/// -o, -v, -x and -m it forgets -x in the context after the last selected
+/// line, and prints parts of lines the pattern does not match whole.
 fn known_difference(family: &str, command: &str) -> bool {
     let has = |f: &str| command.split(' ').any(|w| w == f);
-    family == "grep" && has("-o") && has("-w") && has("-x")
+    family == "grep" && has("-o") && has("-x") && (has("-w") || has("-v") && has("-m") && !has("-F"))
 }
 
 /// Where the clock of the generated tests starts: 2023-11-14 22:13:20 UTC.
@@ -982,7 +1122,7 @@ fn digest_of(db: &Db, times: bool) -> u64 {
         h.write(&path);
         // Modification times are part of what must survive.
         if times {
-            h.write_i64(db.mtime(db.resolve(&path).expect("a path of the snapshot")));
+            h.write_i64(db.mtime(db.resolve(&[b"/", &path[..]].concat()).expect("a path of the snapshot")));
         }
         match content {
             None => h.write_u8(0),
@@ -1091,16 +1231,16 @@ fn crash_point(image: MemFs, cfg: &Config, history: &History, rng: &mut Rng, cou
             let at = 1 + rng.below(ops as usize) as u64;
             let seed = rng.next();
             let again = image.crash(0);
-            let second: std::rc::Rc<std::cell::RefCell<Option<MemFs>>> = Default::default();
+            let second: std::sync::Arc<std::sync::Mutex<Option<MemFs>>> = Default::default();
             let slot = second.clone();
             again.set_hook(Some(Box::new(move |fs, n| {
                 if n == at {
-                    *slot.borrow_mut() = Some(fs.crash(seed));
+                    *slot.lock().unwrap() = Some(fs.crash(seed));
                 }
             })));
             drop(Db::open(Box::new(again.clone()), cfg.clone()));
             again.set_hook(None);
-            let left = second.borrow_mut().take();
+            let left = second.lock().unwrap().take();
             if let Some(left) = left {
                 counts.during_recovery += 1;
                 counts.points += 1;
@@ -1138,15 +1278,234 @@ fn crash_point(image: MemFs, cfg: &Config, history: &History, rng: &mut Rng, cou
 /// and thresholds make merges, new data files and tree saves frequent.
 /// Every few hundred command lines the run itself goes on from a crash
 /// image, or from a disk that failed.
+/// The crash test with several writers sharing syncs (`qdb::group`),
+/// the way the host runs them: a writer applies its unit holding the
+/// database, lets it go, and waits for a sync that covers its unit before
+/// it counts as answered.
+/// Units stopped at random moments leave nothing: see `--stops`.
+fn stops_run(n: usize, seed: u64) -> Result<bool, String> {
+    use qdb::host::{Host, HostConfig, Limits, Quotas, Request};
+    use qdb::unit::{Reason, Stop};
+    qdb::unit::quiet_panics();
+    let dir = std::env::temp_dir().join(format!("qdb-stops-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let host = Host::open(&dir, HostConfig::default())?;
+    let fs = host.create().map_err(|e| e.to_string())?;
+    let mut shadow = Db::without_index();
+    let mut gen = Gen::new(seed);
+    let mut rng = Rng(seed.wrapping_mul(0xD1B54A32D192ED03) | 1);
+    let mut counts = [0usize; 4];
+    let mut stopped = [0usize; 4];
+    let mut step = 0usize;
+    let mut result = Ok(true);
+    'outer: while step < n {
+        let tree = shadow.snapshot();
+        let (_, commands) = gen.step(&tree, (60, 160 << 10));
+        for command in commands {
+            if step >= n {
+                break;
+            }
+            step += 1;
+            // A longer unit now and then, for a stop to land inside.
+            let line = match rng.below(4) {
+                0 => format!("for i in $(seq 1 40); do {}; done", command),
+                1 => format!("{c}; {c}; {c}", c = command),
+                _ => command.clone(),
+            };
+            let now = CLOCK_BASE + step as i64 * 1_000_000_000;
+            shadow.set_clock(Some(now));
+            host.with_db_mut(&fs, |db| db.set_clock(Some(now))).map_err(|e| e.to_string())?;
+            let how = rng.below(4);
+            counts[how] += 1;
+            let stop = Stop::new();
+            let delay = std::time::Duration::from_micros(rng.below(600) as u64);
+            let limits = match how {
+                1 => Limits { time: delay, ..Limits::default() },
+                _ => Limits::default(),
+            };
+            let req = Request { line: line.as_bytes(), stdin: None, quotas: Quotas::default(), limits, stop: stop.clone() };
+            let mut sess = qdb::Session::new();
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let end = std::thread::scope(|s| {
+                if how >= 2 {
+                    let stop = stop.clone();
+                    s.spawn(move || {
+                        std::thread::sleep(delay);
+                        stop.request(if how == 2 { Reason::Gone } else { Reason::Fault });
+                    });
+                }
+                host.run(&fs, &req, &mut sess, &mut out, &mut err)
+            });
+            let end = match end {
+                Ok(e) => e,
+                // Stopped while it waited for its turn: it never began.
+                Err(qdb::host::HostError::Stopped(_)) => {
+                    stopped[how] += 1;
+                    continue;
+                }
+                Err(e) => return Err(format!("step {}: {}", step, e)),
+            };
+            let finished = matches!(end.ending, qdb::engine::Ending::Ran | qdb::engine::Ending::Quota(_)) || end.ending == qdb::engine::Ending::Limit;
+            if finished && end.ending == qdb::engine::Ending::Ran {
+                let _ = execute(&mut shadow, line.as_bytes());
+            } else {
+                stopped[how] += 1;
+            }
+            let (got, check) = host.with_db(&fs, |db| (db.snapshot(), db.check())).map_err(|e| e.to_string())?;
+            if let Err(e) = check {
+                fail_line!("FAIL  seed {} step {}: {:?} ({:?}): check: {}", seed, step, line, end.ending, e);
+                result = Ok(false);
+                break 'outer;
+            }
+            if let Some(d) = tree_diff(&shadow.snapshot(), &got) {
+                fail_line!("FAIL  seed {} step {}: {:?} ended {:?}, and the filesystem is not what the units that finished make:\n{}", seed, step, line, end.ending, d);
+                result = Ok(false);
+                break 'outer;
+            }
+        }
+    }
+    host.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+    if result == Ok(true) {
+        println!(
+            "stopping units, seed {}: {} units on a host's filesystem: {} run whole, {} given a deadline ({} stopped by it), {} whose caller went away ({} stopped), {} with a panic planted ({} stopped); after each the filesystem equalled the reference and passed its check",
+            seed, n, counts[0], counts[1], stopped[1], counts[2], stopped[2], counts[3], stopped[3]
+        );
+    }
+    result
+}
+
+fn crash_writers_run(points: usize, seed: u64, writers: usize) -> Result<bool, String> {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
+    use std::sync::{Arc, Mutex};
+    let cfg = Config { piece: 512, segment: 96 << 10, sync: SyncMode::Always, checkpoint: 12 << 10, spool: 300, ..Config::default() };
+    let fs = MemFs::tracked();
+    let mut db = Db::open(Box::new(fs.clone()), cfg.clone())?.0;
+    let group = db.group_log();
+    // Syncs take as long as on a fast disk, so that writers queue.
+    fs.set_sync_delay(std::time::Duration::from_micros(300));
+    let db = Mutex::new(db);
+    // Units in the order they were applied: (seq, command).
+    let applied: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
+    let answered = Arc::new(AtomicU64::new(0));
+    let images: Arc<Mutex<Vec<(MemFs, u64)>>> = Default::default();
+    let done = Arc::new(AtomicBool::new(false));
+    {
+        let (images, done, answered) = (images.clone(), done.clone(), answered.clone());
+        let mut rng = Rng(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
+        fs.set_hook(Some(Box::new(move |fs, _| {
+            if done.load(SeqCst) || rng.below(60) != 0 {
+                return;
+            }
+            // What had been answered is read first: all of it was on disk
+            // before the cut.
+            let upto = answered.load(SeqCst);
+            let image = fs.crash(rng.next());
+            let mut im = images.lock().unwrap();
+            if im.len() < points {
+                im.push((image, upto));
+            } else {
+                done.store(true, SeqCst);
+            }
+        })));
+    }
+    let start = std::time::Instant::now();
+    std::thread::scope(|s| {
+        for w in 0..writers {
+            let (db, applied, answered, group, done) = (&db, &applied, &*answered, &group, &done);
+            s.spawn(move || {
+                let mut rng = Rng((seed + 1).wrapping_mul(0xD1B54A32D192ED03).wrapping_add(w as u64) | 1);
+                let mut i = 0u64;
+                while !done.load(SeqCst) && start.elapsed() < std::time::Duration::from_secs(600) {
+                    i += 1;
+                    let line = match rng.below(10) {
+                        0 => format!("mkdir -p w{w}; seq 1 {} > w{w}/big{}.txt", 50 + rng.below(300), i % 4),
+                        1 => format!("rm -f w{w}/big{}.txt", i % 4),
+                        2 => format!("mkdir -p w{w}; sed -i 's/^1/one/' w{w}/log.txt 2>/dev/null; echo {w}-{i} >> w{w}/log.txt"),
+                        _ => format!("mkdir -p w{w}; echo {w}-{i} >> w{w}/log.txt"),
+                    };
+                    let seq = {
+                        let mut d = db.lock().unwrap();
+                        let before = d.commit_seq();
+                        let _ = execute(&mut d, line.as_bytes());
+                        let seq = d.commit_seq();
+                        if seq != before {
+                            applied.lock().unwrap().push((seq, line));
+                        }
+                        seq
+                    };
+                    if group.wait(seq).is_err() {
+                        done.store(true, SeqCst);
+                        return;
+                    }
+                    answered.fetch_max(seq, SeqCst);
+                }
+            });
+        }
+    });
+    fs.set_hook(None);
+    done.store(true, SeqCst);
+    let applied = applied.into_inner().unwrap();
+    let images = std::mem::take(&mut *images.lock().unwrap());
+    let (syncs, covered) = group.counts();
+    // Each cut: recovered, checked, and equal to the units applied up to
+    // the last one it holds.
+    let mut lost_total = 0u64;
+    for (n, (image, upto)) in images.into_iter().enumerate() {
+        let (got, _) = match Db::open(Box::new(image), cfg.clone()) {
+            Ok(r) => r,
+            Err(e) => {
+                fail_line!("FAIL  seed {} power cut {}: does not open: {}", seed, n + 1, e);
+                return Ok(false);
+            }
+        };
+        if let Err(e) = got.check() {
+            fail_line!("FAIL  seed {} power cut {}: check: {}", seed, n + 1, e);
+            return Ok(false);
+        }
+        let seq = got.commit_seq();
+        if seq < upto {
+            fail_line!("FAIL  seed {} power cut {}: recovered up to unit {}, but unit {} had been answered", seed, n + 1, seq, upto);
+            return Ok(false);
+        }
+        let mut want = Db::without_index();
+        let mut k = 0;
+        while k < applied.len() && applied[k].0 <= seq {
+            let _ = execute(&mut want, applied[k].1.as_bytes());
+            k += 1;
+        }
+        if k == 0 && seq > 0 || (k > 0 && applied[k - 1].0 != seq) {
+            fail_line!("FAIL  seed {} power cut {}: recovered up to unit {}, which is not one that was applied", seed, n + 1, seq);
+            return Ok(false);
+        }
+        if let Some(d) = tree_diff(&want.snapshot(), &got.snapshot()) {
+            fail_line!("FAIL  seed {} power cut {}: recovered up to unit {}, but the tree is not the one those units make:\n{}", seed, n + 1, seq, d);
+            return Ok(false);
+        }
+        lost_total += applied.iter().filter(|a| a.0 > seq && a.0 <= upto.max(seq)).count() as u64;
+    }
+    println!(
+        "crash test, {} writers at once sharing syncs, seed {}: {} power cuts, each recovered to the units in the order they were applied up to some point, with every answered unit and a passing check; {} units applied, {} syncs covering {} units ({:.1} a sync)",
+        writers,
+        seed,
+        points,
+        applied.len(),
+        syncs,
+        covered,
+        covered as f64 / syncs.max(1) as f64
+    );
+    let _ = lost_total;
+    Ok(true)
+}
+
 fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bool, index_later: bool) -> Result<bool, String> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
     let cfg = Config { piece: 512, segment: 96 << 10, sync, batch_lines: 8, batch_bytes: 24 << 10, index, checkpoint: 12 << 10, spool: 300, upkeep: true, compress, index_later, ..Config::default() };
     let mut gen = Gen::new(seed);
     let mut rng = Rng(seed.wrapping_mul(0xD1B54A32D192ED03) | 1);
-    let counts: Rc<RefCell<CrashCounts>> = Default::default();
-    let failure: Rc<RefCell<Option<String>>> = Default::default();
-    let history = Rc::new(RefCell::new(History { states: Vec::new(), returned: 0, running: false, upkeep: false }));
+    let counts: Arc<Mutex<CrashCounts>> = Default::default();
+    let failure: Arc<Mutex<Option<String>>> = Default::default();
+    let history = Arc::new(Mutex::new(History { states: Vec::new(), returned: 0, running: false, upkeep: false }));
     let mut fs = MemFs::tracked();
     let mut db = Db::open(Box::new(fs.clone()), cfg.clone())?.0;
     let mut shadow = Db::without_index();
@@ -1159,7 +1518,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
         let (counts, failure, history, cfg) = (counts.clone(), failure.clone(), history.clone(), cfg.clone());
         let mut rng = Rng(hook_seed | 1);
         fs.set_hook(Some(Box::new(move |fs, _| {
-            if failure.borrow().is_some() || counts.borrow().points >= points {
+            if failure.lock().unwrap().is_some() || counts.lock().unwrap().points >= points {
                 return;
             }
             let names = fs.list().unwrap_or_default();
@@ -1168,23 +1527,23 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             if !(merge || tree_save) && rng.below(spread) != 0 {
                 return;
             }
-            let history = history.borrow();
+            let history = history.lock().unwrap();
             {
-                let mut c = counts.borrow_mut();
+                let mut c = counts.lock().unwrap();
                 c.during_merge += merge as usize;
                 c.during_tree_save += tree_save as usize;
                 c.in_a_command += history.running as usize;
             }
             let image = fs.crash(rng.next());
-            let mut c = counts.borrow_mut();
+            let mut c = counts.lock().unwrap();
             if let Err(e) = crash_point(image, &cfg, &history, &mut rng, &mut c) {
-                *failure.borrow_mut() = Some(e);
+                *failure.lock().unwrap() = Some(e);
             }
         })));
     };
-    history.borrow_mut().states.push((digest(&shadow), db.commit_seq()));
+    history.lock().unwrap().states.push((digest(&shadow), db.commit_seq()));
     hook_for(&fs, rng.next());
-    while counts.borrow().points < points {
+    while counts.lock().unwrap().points < points {
         let tree = shadow.snapshot();
         let (_, commands) = gen.step(&tree, (60, 160 << 10));
         for command in &commands {
@@ -1195,7 +1554,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             db.set_clock(Some(now));
             let want = execute(&mut shadow, command.as_bytes());
             {
-                let mut h = history.borrow_mut();
+                let mut h = history.lock().unwrap();
                 let before = h.states[h.returned];
                 let after = digest(&shadow);
                 h.states.push((after, before.1 + (after != before.0) as u64));
@@ -1204,16 +1563,16 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             let got = execute(&mut db, command.as_bytes());
             last_line = command.clone();
             lines += 1;
-            if let Some(e) = failure.borrow().as_ref() {
-                println!("FAIL  seed {} sync {:?}: at a power cut during command line {} ({}): {}", seed, sync, lines, command, e);
+            if let Some(e) = failure.lock().unwrap().as_ref() {
+                fail_line!("FAIL  seed {} sync {:?}: at a power cut during command line {} ({}): {}", seed, sync, lines, command, e);
                 return Ok(false);
             }
-            let mut h = history.borrow_mut();
+            let mut h = history.lock().unwrap();
             h.running = false;
             h.returned += 1;
             let known = h.states[h.returned];
             if got != want || db.commit_seq() != known.1 {
-                println!("FAIL  seed {} sync {:?}: command line {} ({}): the database on the tracked disk and the reference differ (logged line number {}, expected {})", seed, sync, lines, command, db.commit_seq(), known.1);
+                fail_line!("FAIL  seed {} sync {:?}: command line {} ({}): the database on the tracked disk and the reference differ (logged line number {}, expected {})", seed, sync, lines, command, db.commit_seq(), known.1);
                 return Ok(false);
             }
         }
@@ -1224,32 +1583,32 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
         if (3..7).contains(&roll) {
             let before = (digest(&db), db.commit_seq());
             if roll < 5 {
-                counts.borrow_mut().closes += 1;
+                counts.lock().unwrap().closes += 1;
                 let closing = std::mem::replace(&mut db, Db::new());
                 closing.close().map_err(|e| format!("seed {}: close after command line {}: {}", seed, lines, e))?;
                 let (again, report) = Db::open(Box::new(fs.clone()), cfg.clone()).map_err(|e| format!("seed {}: open after a clean close, after command line {}: {}", seed, lines, e))?;
                 if !report.messages().is_empty() || report.replayed != 0 {
-                    println!("FAIL  seed {} sync {:?}: opening after a clean close (after command line {}) had work to do: {:?}", seed, sync, lines, report);
+                    fail_line!("FAIL  seed {} sync {:?}: opening after a clean close (after command line {}) had work to do: {:?}", seed, sync, lines, report);
                     return Ok(false);
                 }
                 db = again;
             } else {
-                counts.borrow_mut().compactions += 1;
-                history.borrow_mut().upkeep = true;
+                counts.lock().unwrap().compactions += 1;
+                history.lock().unwrap().upkeep = true;
                 db.compact().map_err(|e| format!("seed {}: compact after command line {}: {}", seed, lines, e))?;
                 // The records the compaction logged are behind us: count
                 // from here.
-                let mut h = history.borrow_mut();
+                let mut h = history.lock().unwrap();
                 h.upkeep = false;
                 h.states = vec![(before.0, db.commit_seq())];
                 h.returned = 0;
             }
-            if let Some(e) = failure.borrow().as_ref() {
-                println!("FAIL  seed {} sync {:?}: at a power cut during a {} after command line {} ({}): {}", seed, sync, if roll < 5 { "close or the open after it" } else { "compaction" }, lines, last_line, e);
+            if let Some(e) = failure.lock().unwrap().as_ref() {
+                fail_line!("FAIL  seed {} sync {:?}: at a power cut during a {} after command line {} ({}): {}", seed, sync, if roll < 5 { "close or the open after it" } else { "compaction" }, lines, last_line, e);
                 return Ok(false);
             }
             if digest(&db) != before.0 || (roll < 5 && db.commit_seq() != before.1) || db.check().is_err() {
-                println!("FAIL  seed {} sync {:?}: a {} after command line {} changed the tree, or left something a check finds: {:?}", seed, sync, if roll < 5 { "close and open" } else { "compaction" }, lines, db.check().err());
+                fail_line!("FAIL  seed {} sync {:?}: a {} after command line {} changed the tree, or left something a check finds: {:?}", seed, sync, if roll < 5 { "close and open" } else { "compaction" }, lines, db.check().err());
                 return Ok(false);
             }
         }
@@ -1259,7 +1618,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             let image = if roll == 0 {
                 // The disk goes away part of the way through the next
                 // few operations: everything fails from there on.
-                counts.borrow_mut().disk_failures += 1;
+                counts.lock().unwrap().disk_failures += 1;
                 let at = fs.counts().ops() + 1 + rng.below(12) as u64;
                 fs.fail_from(Some(at));
                 let mut failed = false;
@@ -1267,14 +1626,14 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                     let line = format!("echo 'the disk is going {}' >> going_{}.txt", rng.below(1000), i % 3);
                     if failed {
                         if execute(&mut db, line.as_bytes()).code != 2 {
-                            println!("FAIL  seed {} sync {:?}: a command ran on a database whose disk had failed: {}", seed, sync, line);
+                            fail_line!("FAIL  seed {} sync {:?}: a command ran on a database whose disk had failed: {}", seed, sync, line);
                             return Ok(false);
                         }
                         continue;
                     }
                     execute(&mut shadow, line.as_bytes());
                     {
-                        let mut h = history.borrow_mut();
+                        let mut h = history.lock().unwrap();
                         let before = h.states[h.returned];
                         let after = digest(&shadow);
                         h.states.push((after, before.1 + (after != before.0) as u64));
@@ -1285,13 +1644,13 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                     if execute(&mut db, line.as_bytes()).code == 2 {
                         failed = true;
                     } else {
-                        let mut h = history.borrow_mut();
+                        let mut h = history.lock().unwrap();
                         h.running = false;
                         h.returned += 1;
                     }
                 }
                 if !failed {
-                    println!("FAIL  seed {} sync {:?}: the disk failed and no command noticed", seed, sync);
+                    fail_line!("FAIL  seed {} sync {:?}: the disk failed and no command noticed", seed, sync);
                     return Ok(false);
                 }
                 fs.crash(rng.next())
@@ -1299,14 +1658,14 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
                 fs.crash(rng.next())
             };
             let recovered = {
-                let mut c = counts.borrow_mut();
+                let mut c = counts.lock().unwrap();
                 c.points += 1;
-                recover(&image, &cfg, &history.borrow(), &mut c)
+                recover(&image, &cfg, &history.lock().unwrap(), &mut c)
             };
             db = match recovered {
                 Ok(db) => db,
                 Err(e) => {
-                    println!("FAIL  seed {} sync {:?}: going on from a crash after command line {} ({}): {}", seed, sync, lines, last_line, e);
+                    fail_line!("FAIL  seed {} sync {:?}: going on from a crash after command line {} ({}): {}", seed, sync, lines, last_line, e);
                     return Ok(false);
                 }
             };
@@ -1314,7 +1673,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
             // The reference becomes what was recovered.
             shadow = db.clone();
             shadow.set_index(false);
-            let mut h = history.borrow_mut();
+            let mut h = history.lock().unwrap();
             h.states = vec![(digest(&shadow), db.commit_seq())];
             h.returned = 0;
             h.running = false;
@@ -1323,7 +1682,7 @@ fn crash_run(points: usize, seed: u64, sync: SyncMode, index: bool, compress: bo
         }
     }
     fs.set_hook(None);
-    let c = counts.borrow();
+    let c = counts.lock().unwrap();
     println!(
         "seed {} sync {}{}: {} power cuts over {} command lines, every one recovered to the tree after a whole number of command lines and passed every check",
         seed,
@@ -1442,7 +1801,7 @@ fn kill_run(kills: usize, seed: u64, sync: SyncMode, scratch: &mut Scratch) -> R
             // one must be a moment of this test.
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0);
             for (path, _) in db.snapshot() {
-                let t = db.mtime(db.resolve(&path).expect("a path of the snapshot"));
+                let t = db.mtime(db.resolve(&[b"/", &path[..]].concat()).expect("a path of the snapshot"));
                 if t < started || t > now {
                     return Err(format!("after recovery, {} has a modification time outside the test ({} ns)", String::from_utf8_lossy(&path), t));
                 }
@@ -1452,7 +1811,7 @@ fn kill_run(kills: usize, seed: u64, sync: SyncMode, scratch: &mut Scratch) -> R
         let (db, report) = match opened {
             Ok(x) => x,
             Err(e) => {
-                println!("FAIL  seed {} sync {:?}: kill {} at command line {}: {}", seed, sync, kill + 1, lines, e);
+                fail_line!("FAIL  seed {} sync {:?}: kill {} at command line {}: {}", seed, sync, kill + 1, lines, e);
                 // Keep the directory for a look.
                 let keep = std::env::temp_dir().join(format!("qdb-kill-failure-{}", std::process::id()));
                 let _ = std::fs::rename(&dir, &keep);
@@ -1579,6 +1938,16 @@ fn counter_run(units: &[String]) -> Result<Vec<[u64; 11]>, String> {
     Ok(out)
 }
 
+/// Set by --threads above 1.
+static THREADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// With searches on several threads, a search whose reader stops early
+/// (`| head`, `grep -q`, `-m`) may have read some files ahead, so its
+/// counts may differ; see docs/HANDBACK-6.md, Deviations.
+fn reads_ahead(unit: &str) -> bool {
+    THREADED.load(std::sync::atomic::Ordering::Relaxed) && (unit.contains("| head") || unit.contains(" -q") || unit.contains(" -m") || unit.contains("-l ") || unit.contains(" -L"))
+}
+
 fn counters(update: bool) -> Result<bool, String> {
     let units = counter_units()?;
     let names: Vec<&str> = qdb::Cost::default().fields().iter().take(11).map(|f| f.0).collect();
@@ -1587,12 +1956,18 @@ fn counters(update: bool) -> Result<bool, String> {
     let mut ok = true;
     let mut differing = 0;
     for (i, unit) in units.iter().enumerate() {
-        if first[i] != second[i] {
+        if first[i] != second[i] && reads_ahead(unit) {
+            continue;
+        }
+        // With several threads, memory is what the unit's own thread held,
+        // which depends on how the work fell between threads.
+        let cols = if THREADED.load(std::sync::atomic::Ordering::Relaxed) { 10 } else { 11 };
+        if first[i][..cols] != second[i][..cols] {
             differing += 1;
             ok = false;
-            for k in 0..11 {
+            for k in 0..cols {
                 if first[i][k] != second[i][k] {
-                    println!("FAIL  counters: {} was {} in one run and {} in the next: {}", names[k], first[i][k], second[i][k], unit);
+                    fail_line!("FAIL  counters: {} was {} in one run and {} in the next: {}", names[k], first[i][k], second[i][k], unit);
                 }
             }
         }
@@ -1616,22 +1991,25 @@ fn counters(update: bool) -> Result<bool, String> {
     let stored = std::fs::read_to_string(BASELINE).map_err(|e| format!("{}: {}", BASELINE, e))?;
     let rows: Vec<&str> = stored.lines().filter(|l| !l.starts_with('#')).skip(1).collect();
     if rows.len() != units.len() {
-        println!("FAIL  counters: {} has {} units and {} has {}", BASELINE, rows.len(), UNITS, units.len());
+        fail_line!("FAIL  counters: {} has {} units and {} has {}", BASELINE, rows.len(), UNITS, units.len());
         return Ok(false);
     }
     let (mut above, mut below) = (0, 0);
     for (i, unit) in units.iter().enumerate() {
         let cols: Vec<&str> = rows[i].splitn(12, '\t').collect();
         if cols.len() != 12 || cols[11] != unit {
-            println!("FAIL  counters: line {} of {} is not for the unit: {}", i + 1, BASELINE, unit);
+            fail_line!("FAIL  counters: line {} of {} is not for the unit: {}", i + 1, BASELINE, unit);
             return Ok(false);
         }
         let mut lower = false;
         for k in 0..ENFORCED {
             let base: u64 = cols[k].parse().map_err(|_| format!("{}: not a number: {}", BASELINE, cols[k]))?;
+            if first[i][k] > base && reads_ahead(unit) {
+                continue;
+            }
             if first[i][k] > base {
                 above += 1;
-                println!("FAIL  counters: {} is {}, above its baseline of {}: {}", names[k], first[i][k], base, unit);
+                fail_line!("FAIL  counters: {} is {}, above its baseline of {}: {}", names[k], first[i][k], base, unit);
             }
             lower |= first[i][k] < base;
         }
@@ -1639,10 +2017,11 @@ fn counters(update: bool) -> Result<bool, String> {
     }
     ok &= above == 0;
     println!(
-        "counters: {} units run twice on the same database, {} with different counts; {} counts above the baseline{}",
+        "counters: {} units run twice on the same database, {} with different counts; {} counts above the baseline{}{}",
         units.len(),
         differing,
         above,
+        if THREADED.load(std::sync::atomic::Ordering::Relaxed) { format!(" (with several threads: {} units whose search is stopped early by its reader not compared)", units.iter().filter(|u| reads_ahead(u)).count()) } else { String::new() },
         if below > 0 { format!("; {} units now use less than their baseline, which can be lowered with --update-baseline", below) } else { String::new() }
     );
     Ok(ok)
@@ -1664,6 +2043,9 @@ fn run() -> Result<bool, String> {
     let mut diff = 0usize;
     let mut crash = 0usize;
     let mut kill = 0usize;
+    let mut crash_writers = 0usize;
+    let mut stops = 0usize;
+    let mut writers = 8usize;
     let mut setup = Setup { mode: Mode::Memory, cfg: Config::default() };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -1685,6 +2067,7 @@ fn run() -> Result<bool, String> {
                     "memory" => Mode::Memory,
                     "disk" => Mode::Disk,
                     "reopen" => Mode::Reopen,
+                    "api" => Mode::Api,
                     other => return Err(format!("--store: {} is not memory, disk or reopen", other)),
                 }
             }
@@ -1709,7 +2092,19 @@ fn run() -> Result<bool, String> {
             "--diff" => diff = value("--diff")?.parse().map_err(|_| "--diff needs a number")?,
             "--crash" => crash = value("--crash")?.parse().map_err(|_| "--crash needs a number")?,
             "--kill" => kill = value("--kill")?.parse().map_err(|_| "--kill needs a number")?,
+            "--threads" => {
+                let n: usize = value("--threads")?.parse().map_err(|_| "--threads needs a number")?;
+                qdb::par::set_default_lender(Some(std::sync::Arc::new(qdb::par::Fixed(n.saturating_sub(1)))));
+                qdb::par::set_max_threads(n);
+                THREADED.store(n > 1, std::sync::atomic::Ordering::Relaxed);
+                // Every recursive search shares from its first file.
+                qdb::par::set_threshold(0);
+            }
+            "--stops" => stops = value("--stops")?.parse().map_err(|_| "--stops needs a number")?,
+            "--crash-writers" => crash_writers = value("--crash-writers")?.parse().map_err(|_| "--crash-writers needs a number")?,
+            "--writers" => writers = value("--writers")?.parse().map_err(|_| "--writers needs a number")?,
             "-v" => verbose = true,
+            "--failures" => *FAILURES.lock().unwrap() = Some(value("--failures")?),
             "-h" | "--help" => {
                 println!("{}", USAGE);
                 return Ok(true);
@@ -1721,6 +2116,12 @@ fn run() -> Result<bool, String> {
     setup.cfg.index = index;
     if crash > 0 {
         return crash_run(crash, seed, setup.cfg.sync, index, setup.cfg.compress, setup.cfg.index_later);
+    }
+    if stops > 0 {
+        return stops_run(stops, seed);
+    }
+    if crash_writers > 0 {
+        return crash_writers_run(crash_writers, seed, writers);
     }
     if kill > 0 {
         let mut scratch = Scratch::new();
@@ -1764,8 +2165,10 @@ fn run() -> Result<bool, String> {
                     Err(what) => {
                         failed += 1;
                         if brief {
+                            log_failure(&what);
                             println!("FAIL  {}", what.lines().next().unwrap_or(""));
                         } else {
+                            log_failure(&what);
                             println!("FAIL  {}", what);
                         }
                     }
@@ -1819,8 +2222,10 @@ fn run() -> Result<bool, String> {
             Err(what) => {
                 failed += 1;
                 if brief {
-                    println!("FAIL  {}", what.lines().next().unwrap_or(""));
+                    log_failure(&what);
+                            println!("FAIL  {}", what.lines().next().unwrap_or(""));
                 } else {
+                    log_failure(&what);
                     println!("FAIL  {}", what);
                 }
             }
@@ -1861,7 +2266,7 @@ fn run() -> Result<bool, String> {
         let table = std::fs::read_to_string("tests/coverage.txt").map_err(|e| format!("tests/coverage.txt: {}", e))?;
         covered = coverage(&table, &every_command)?;
         if !covered {
-            println!("FAIL  coverage: a command or flag has no case");
+            fail_line!("FAIL  coverage: a command or flag has no case");
         }
     }
     println!("{} cases ({} steps), {}: {} passed, {} failed", passed + failed, steps, setup.describe(), passed, failed);
@@ -1872,7 +2277,12 @@ fn run() -> Result<bool, String> {
 
 fn main() -> std::process::ExitCode {
     let worker = std::thread::Builder::new().stack_size(64 << 20).spawn(run).expect("spawn");
-    match worker.join().expect("harness panicked") {
+    let result = worker.join().expect("harness panicked");
+    if let Some(a) = API.get() {
+        a.svc.shutdown();
+        let _ = std::fs::remove_dir_all(&a.dir);
+    }
+    match result {
         Ok(true) => std::process::ExitCode::SUCCESS,
         Ok(false) => std::process::ExitCode::from(1),
         Err(msg) => {

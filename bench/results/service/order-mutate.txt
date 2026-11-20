@@ -1,0 +1,13 @@
+FAIL  order checker, run 1 (seed 9): no order of the units explains every output; units on a cycle (or after one):
+    unit 0 "echo '== 2'; cat f2.txt 2>/dev/null || true; echo '== 4'; cat f4.txt 2>/dev/null || true; echo '== 0'; cat f0.txt 2>/dev/null || true; " -> "== 2\n== 4\n== 0\n"
+    unit 3 "echo u3 >> f3.txt; " -> ""
+    unit 4 "echo u4 >> f4.txt; " -> ""
+    unit 5 "echo '== 3'; cat f3.txt 2>/dev/null || true; echo '== 1'; cat f1.txt 2>/dev/null || true; echo '== 2'; cat f2.txt 2>/dev/null || true; " -> "== 3\nu3\n== 1\nu12\n== 2\nu7\n"
+    unit 7 "echo u7 >> f2.txt; " -> ""
+    unit 9 "echo '== 5'; cat f5.txt 2>/dev/null || true; echo '== 2'; cat f2.txt 2>/dev/null || true; echo '== 1'; cat f1.txt 2>/dev/null || true; " -> "== 5\n== 2\nu7\n== 1\n"
+    unit 10 "echo '== 3'; cat f3.txt 2>/dev/null || true; echo '== 5'; cat f5.txt 2>/dev/null || true; echo '== 2'; cat f2.txt 2>/dev/null || true; " -> "== 3\n== 5\n== 2\nu7\n"
+    unit 11 "echo '== 3'; cat f3.txt 2>/dev/null || true; echo '== 1'; cat f1.txt 2>/dev/null || true; echo u11 >> f0.txt; " -> "== 3\nu3\n== 1\nu12\n"
+    unit 12 "echo u12 >> f1.txt; echo u12 >> f4.txt; " -> ""
+    unit 13 "echo '== 3'; cat f3.txt 2>/dev/null || true; echo '== 2'; cat f2.txt 2>/dev/null || true; " -> "== 3\nu3\n== 2\nu7\n"
+    unit 14 "echo '== 1'; cat f1.txt 2>/dev/null || true; echo '== 2'; cat f2.txt 2>/dev/null || true; " -> "== 1\nu12\n== 2\nu7\n"
+    unit 15 "echo '== 0'; cat f0.txt 2>/dev/null || true; echo '== 3'; cat f3.txt 2>/dev/null || true; " -> "== 0\n== 3\nu3\n"

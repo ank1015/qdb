@@ -21,6 +21,15 @@ $ rg --sort path needle notes docs
 $ rg --sort path -l needle src/deep notes src
 $ rg needle nope
 $ rg needle nope README.md
+# One thread (--sort path, -j 1): real rg words a missing path otherwise.
+$ rg --sort path needle nope
+$ rg --sort path needle zz nope README.md
+$ rg --sort=path -l needle nope README.md/x .
+$ rg -j 1 needle nope
+$ rg -j 1 --sort none needle nope
+$ rg --sort path --sort none needle nope
+$ rg -j 2 needle nope
+$ rg --sort path --files nope README.md
 $ rg needle README.md/x
 $ rg nothinghere
 $ rg nothinghere README.md
@@ -70,7 +79,8 @@ $ rg --files README.md
 $ rg --files nope
 $ rg --files README.md nope
 $ rg --files emptydir
-$ rg --files -0 src/deep | cat -A
+$ rg --sort path --files -0 src/deep | cat -A
+$ rg --files -0 src/deep
 $ rg --files -tmd --sort path
 $ rg --files -g '*.txt' --sort path
 $ rg --files -g '!*.txt' --sort path
@@ -267,12 +277,12 @@ $ rg -N -n needle lib.c
 $ rg -n -N needle lib.c
 $ rg --no-line-number needle lib.c
 $ rg -n -c needle lib.c
-$ rg -0 needle src/deep | cat -A
+$ rg --sort path -0 needle src/deep | cat -A
 $ rg --null needle lib.c | cat -A
-$ rg -l -0 needle src/deep | cat -A
-$ rg -c -0 needle src/deep | cat -A
-$ rg -n -0 needle src/deep | cat -A
-$ rg -0 needle lib.c lib.h | cat -A
+$ rg --sort path -l -0 needle src/deep | cat -A
+$ rg --sort path -c -0 needle src/deep | cat -A
+$ rg --sort path -n -0 needle src/deep | cat -A
+$ rg --sort path -0 needle lib.c lib.h | cat -A
 
 # context
 $ rg -A1 needle notes/public.txt
@@ -310,7 +320,7 @@ $ rg -A
 $ rg -B
 $ rg -C x needle
 $ rg -0 -A1 another notes/public.txt | cat -A
-$ rg -0 -n -A1 another notes | cat -A
+$ rg --sort path -0 -n -A1 another notes | cat -A
 $ cat notes/public.txt | rg -C1 another
 $ cat notes/public.txt | rg -n -C1 another
 

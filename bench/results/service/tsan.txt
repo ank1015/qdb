@@ -1,0 +1,16 @@
+== cargo tests
+== harness, 4 threads per search, in memory
+counters: 224 units run twice on the same database, 19 with different counts; 6 counts above the baseline
+== harness stops
+stopping units, seed 11: 300 units on a host's filesystem: 79 run whole, 74 given a deadline (44 stopped by it), 71 whose caller went away (41 stopped), 76 with a panic planted (47 stopped); after each the filesystem equalled the reference and passed its check
+== harness crash writers
+crash test, 8 writers at once sharing syncs, seed 1: 200 power cuts, each recovered to the units in the order they were applied up to some point, with every answered unit and a passing check; 2313 units applied, 1013 syncs covering 2166 units (2.1 a sync)
+== server: order, isolation, mixed, writers, kill
+order checker: 3 runs of 2000 units from 8 connections at once on one filesystem, seeds 500 to 502: 6000 units, 116 of them stopped at a deadline; every output explained by one order of the units consistent with when each was answered (4 s)
+isolation: 20000 requests from 8 connections with two accounts' keys, against their own and each other's filesystems, guessed IDs and odd paths, seed 5: no answer held the other account's markers or IDs, and every request for the other's filesystem was answered as for one that does not exist (1 s)
+mixed, 16 filesystems, one client each: 16 clients, 117559 units in 20.01 s: 5874 units a second; latency median 1.890 ms, 99th percentile 15.482 ms, most 68.988 ms; 5869 syncs
+writers on one filesystem: 8 clients, 49126 units in 20.01 s: 2455 units a second; latency median 2.950 ms, 99th percentile 8.759 ms, most 48.365 ms; 22656 syncs
+    lines written: 49126
+FAIL  long run: 121 s from 8 connections; 138855 units (1431 stopped at a deadline, 1442 streamed, 2770 in sessions); 999 filesystems made and 600 deleted, 399 left; memory most 94 MB in the first 24 s and 119 MB after, 107 MB at the end; open files most 737 then 1237, 1235 at the end; every filesystem left took a write at once (slowest 16.3 ms)
+== reports
+0

@@ -20,10 +20,19 @@ flags people use on the first fifteen commands; `rg` with its ignore
 rules; and eighteen more commands, from `sort` and `xargs` to `date`.
 Files and folders now carry a modification time, and a copy shares its
 content with the original until one of them changes.
-There is no concurrency yet: one process, one thread.
+Stage 5 added the shell constructs people reach for, `diff` and `awk`,
+and a report of what each command line costs. Stage 6 made it a
+service: `qdb-server` hosts many filesystems, each owned by one account,
+and runs command lines on them from many callers at once over an HTTP
+and JSON API. Units that only read run together; a unit that may write
+runs alone on its filesystem; every unit is all or nothing, and one the
+server stops (its time limit, its caller going away, a fault) leaves
+nothing behind. A recursive `grep` or `rg` uses idle workers as extra
+threads, and writers on one filesystem share syncs.
 
 Nothing is borrowed from an existing database, storage engine, search
-library or regex library. The crate depends on `memchr` (finding a byte
+library or regex library. The server's HTTP, JSON, SHA-256 and base64
+are written here too. The crate depends on `memchr` (finding a byte
 or a substring), `libc` (mmap, flock, limits), `crc32fast` (checksums),
 `lz4_flex` (the one compression codec, used with `--compress`) and
 `regex-syntax` (parsing `rg` patterns only; the matching is the
@@ -114,6 +123,28 @@ let code = qdb::execute_to(&mut db, b"grep -rn hello .", &mut out, &mut err);
 `Db::open_dir(path, Config::default())` opens a database directory and
 returns the database with a report of what opening found and did.
 
+## The service
+
+```
+export QDB_ADMIN_KEY=$(head -c 24 /dev/urandom | base64)
+./target/release/qdb-server --data /tmp/qdb-data &        # prints 127.0.0.1:7878
+
+K=$(curl -s -X POST -H "Authorization: Bearer $QDB_ADMIN_KEY" localhost:7878/v1/accounts | jq -r .key)
+F=$(curl -s -X POST -H "Authorization: Bearer $K" localhost:7878/v1/filesystems | jq -r .filesystem)
+curl -s -X POST -H "Authorization: Bearer $K" localhost:7878/v1/filesystems/$F/run \
+     -d '{"command":"mkdir notes; echo hello > notes/a.txt; grep -rn hello ."}'
+# {"exit_status":0,"stdout":"./notes/a.txt:1:hello\n","stderr":"", ...}
+```
+
+`docs/API.md` has every request and answer; `docs/OPERATIONS.md` how to
+run, configure, back up and recover the server. `qdb-load` (bench/README.md)
+puts load on a server and runs the service's tests: the units-at-once
+order checker, the kill test, the isolation test and the long run.
+
+The command line takes `--threads N` to let a recursive `grep` or `rg`
+use N threads, as the server does with idle workers; `rg -j N` limits
+one search to N.
+
 ## What a command costs
 
 Every unit (one `-c`, or one line of a session) is counted as it runs:
@@ -190,9 +221,9 @@ the long forms listed are accepted too.
 | `tail` | `-n N`, `-n +N`, `-c N`, `-c +N`, `-NUM`, `-q -v`, size suffixes |
 | `wc` | `-l -w -c -m` |
 | `grep` | `-r -R -i -n -l -L -v -c -o -q -s -w -x -h -H -I -a`, `-E -F -G`, `-e PATTERN` (several), `-A -B -C N`, `-NUM`, `-m N`, `--include --exclude --exclude-dir` |
-| `rg` | `-i -S -s -F -w -x -v -c -l -n -N -0`, `-A -B -C N`, `-m N`, `-g GLOB`, `-t TYPE`, `-T TYPE`, `-u -uu -uuu`, `--hidden --no-ignore --files --no-heading --sort path`, `-j N` (accepted; there is one thread) |
+| `rg` | `-i -S -s -F -w -x -v -c -l -n -N -0`, `-A -B -C N`, `-m N`, `-g GLOB`, `-t TYPE`, `-T TYPE`, `-u -uu -uuu`, `--hidden --no-ignore --files --no-heading --sort path`, `-j N` (the most threads the search may use) |
 | `sed` | `-n -E -r -i -i.SUFFIX -s -e`; addresses `N`, `$`, `/re/`, `\%re%`, `N,M`, `N,+M`, `first~step`, `0,/re/`, `!`; commands `s p d q Q = a i c y` and `{ }` blocks; `s` flags `g p N i I`; `&` and `\1`..`\9` |
-| `awk` | `-F SEP`, `-v VAR=VAL`; `BEGIN`, `END`, patterns, actions and ranges; `$N`, `$0`, `NF`, `NR`, `FNR`, `FILENAME`, `FS`, `OFS`, `ORS`, `RSTART`, `RLENGTH`; `print`, `printf`, `if`/`else`, `while`, `for (;;)`, `for (k in a)`, `next`, `break`, `continue`, every assignment; arrays of one subscript and `in`; `length substr index split sub gsub match tolower toupper sprintf` |
+| `awk` | `-F SEP`, `-v VAR=VAL`; `BEGIN`, `END`, patterns, actions and ranges; `$N`, `$0`, `NF`, `NR`, `FNR`, `FILENAME`, `FS`, `OFS`, `ORS`, `RSTART`, `RLENGTH`; `print`, `printf`, `if`/`else`, `while`, `do ... while`, `for (;;)`, `for (k in a)`, `next`, `break`, `continue`, `exit`, `delete`, every assignment; arrays of one subscript and `in`; `length substr index split sub gsub match tolower toupper sprintf` |
 | `diff` | `-u`, `-U N`, `--unified[=N]`, `-r`, `-N`, `-x PAT`, `-q`, `-s`, `-i -w -b -B`, `-a`, `--label NAME`; the default and the unified format; `-` for standard input |
 | `sort` | `-u -n -r -h -f -b -s -c -C`, `-t SEP`, `-k` with character positions and modifiers, `--parallel=N` (accepted) |
 | `uniq` | `-c -d -u -i`, `-f N`, `-s N`, `-w N` |
@@ -233,7 +264,7 @@ Shell syntax, as bash 5.2 reads it:
 | Arithmetic | `$((...))` with bash's operators on 64-bit integers, assignments and `++`/`--` included, and constants in base 8, 16 and `base#digits` |
 | Tilde | `~` and `~/path`, where a word or an assigned value begins |
 | Field splitting | unquoted `$NAME`, `$(...)` and `$((...))` are split at `IFS` and then matched as globs, as bash does |
-| Current directory | `cd`, `pwd`, `PWD` and `OLDPWD`; relative paths start there (`cd -` is refused: use `cd "$OLDPWD"`) |
+| Current directory | `cd`, `cd -`, `pwd`, `PWD` and `OLDPWD`; relative paths start there |
 | Loops and tests | `for NAME in WORDS; do ...; done`, `while`, `until`, `if`/`elif`/`else`/`fi`, `break [N]`, `continue [N]`, nested, in a pipeline, and with redirections on the whole construct |
 
 What the data model has no fact for prints a fixed value: `ls -l` shows
@@ -278,10 +309,11 @@ as bash's subshells do, so `echo a | read X` leaves `X` unset.
 **The command limit.** A unit may run 1,000,000 commands (`--command-limit N`;
 loop turns count too). The unit that reaches the limit is stopped with
 status 3 and the message `qdb: the unit was stopped after N commands,
-the most one unit may run; what it changed before that stays`. As the
-message says, its writes up to there are kept, as they are when a
-command fails half way through a unit, and the database goes on as
-before.
+the most one unit may run; nothing it changed was kept`. A stopped unit
+leaves nothing: the tree, and the session's variables and current
+folder, are as they were before it began. (Until stage 6 its writes up
+to the limit were kept.) A unit that ends by itself keeps what it wrote,
+whatever its status, as in bash.
 
 `find -exec` and `xargs` run the engine's commands, but not the ones
 that only make sense inside a session: `cd`, `export`, `unset`, `read`,
@@ -309,14 +341,17 @@ puts in arrays.
 
 - **Refused by name, before anything runs:** user-defined functions,
   `getline`, `system`, output redirection and pipes (`>`, `>>`, `|`),
-  `delete`, `exit`, `do`, `nextfile`, `switch`, arrays of more than one
+  `nextfile`, `switch`, arrays of more than one
   subscript, the other built-in functions (`int`, `sqrt`, `gensub`, ...)
   and the other special variables (`RS`, `OFMT`, `ENVIRON`, ...),
   `-f` and every option but `-F` and `-v`, and `NAME=value` among the
   file names.
-- **Input must be ASCII.** A line with any other byte stops the run with
-  status 2 and a message that names the file and the line; the lines
-  before it have been processed.
+- **Bytes, as in the C locale.** Any byte is a character of its own:
+  `length`, `substr`, `index`, `match` and `split` count bytes, and
+  `toupper` and `tolower` change only the ASCII letters. A program's
+  output may then hold bytes that are not UTF-8 (`printf "%c", 233`);
+  stored in a file, such output is refused as any write that is not
+  valid text is.
 - **`for (k in a)`** goes through the keys in the order they were first
   set. awk leaves the order open and gawk's is different, so sort the
   output of such a loop.
@@ -357,10 +392,23 @@ the construct's output so far.
 | `src/bin/bench.rs` | The benchmark. See `bench/README.md`. |
 | `src/bin/replay.rs` | Runs a file of units against a database and reports what they cost, by command and by kind of work. |
 | `src/bin/stress.rs` | One very large file, a long run of writes, the cost of a sync, and the comparison of the switches. See `bench/README.md`. |
+| `src/host.rs` | Many filesystems in one process: made, opened when needed, closed when idle or when too many are open, deleted; units run on them from any number of threads, with deadlines watched. |
+| `src/gate.rs` | Readers together, a writer alone, on one filesystem, let in in the order they came. |
+| `src/unit.rs` | Stopping a unit: the request to stop, the points where the engine looks, the limits on its memory and scratch over all its threads. |
+| `src/group.rs` | Group commit: one sync for every writer logged by then. |
+| `src/par.rs` | One search on several threads: files handed to borrowed threads, results written in order. |
+| `src/service.rs` | Accounts, keys, quotas, sessions, usage, and the HTTP requests. |
+| `src/net/` | HTTP/1.1, JSON, SHA-256 and base64. |
+| `src/bin/server.rs` | `qdb-server`. See `docs/OPERATIONS.md`. |
+| `src/bin/load.rs` | `qdb-load`: load and the service's tests. See `bench/README.md`. |
 
 ## Where to read next
 
 - `docs/briefs/`: the briefs this was built from.
+- `docs/HANDBACK-6.md`: stage 6. The service: every target with its
+  measured value, a capacity sheet, the concurrency tests and what they
+  found, security notes, and questions.
+- `docs/API.md` and `docs/OPERATIONS.md`: using and running the server.
 - `docs/HANDBACK-5.md`: stage 5. The shell constructs, diff and awk,
   every target with its measured value, the cost report (what uses the
   CPU, what waits for the disk, what runs short first), what is still

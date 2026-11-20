@@ -1,0 +1,1 @@
+mixed, 64 filesystems, one client each: 64 clients, 653795 units in 15.02 s: 43530 units a second; latency median 1.227 ms, 99th percentile 4.931 ms, most 39.945 ms; 32660 syncs

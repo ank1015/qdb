@@ -11,7 +11,7 @@ use crate::regex::{Flavor, MatchError, Regex, Syntax};
 use crate::scan::Searcher;
 use crate::tree::{Candidate, Candidates, Db, NodeId, Shortlist};
 use crate::util::lossy;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy)]
 struct Opts {
@@ -107,7 +107,7 @@ struct Plan {
     bad_number: Option<String>,
     /// -H or -h, whichever came last.
     filename: Option<bool>,
-    select: Rc<Select>,
+    select: Arc<Select>,
 }
 
 /// The compiled search: the lines that match, and for -o the patterns
@@ -432,7 +432,7 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         lines,
         bad_number,
         filename,
-        select: Rc::new(select),
+        select: Arc::new(select),
     };
 
     let input = if files.is_empty() && !opts.recursive {
@@ -483,6 +483,12 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             list_probe: None,
             list_only: None,
             pieces: None,
+            ahead: None,
+            alone_bytes: 0,
+            shared_pieces: None,
+            batch: Job { files: Vec::new(), pieces: None },
+            batch_bytes: 0,
+            spare: Arc::default(),
         };
         // Several files named: storage may know which of them can match.
         // (Or one large file: storage may know which pieces of it can.)
@@ -550,7 +556,7 @@ pub fn grep(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             1
         }
     });
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes: false })
 }
 
 struct Run {
@@ -558,7 +564,7 @@ struct Run {
     searcher: Searcher,
     /// For -o: the patterns, to find where in a line they match.
     finders: Vec<Regex>,
-    select: Rc<Select>,
+    select: Arc<Select>,
     with_filename: bool,
     selected: bool,
     error: bool,
@@ -585,6 +591,36 @@ struct Run {
     /// During a walk, once storage has been asked: the pieces that can
     /// have a match.
     pieces: Option<Shortlist>,
+    /// During a walk: files handed to helper threads (`par`).
+    ahead: Option<crate::par::Ahead<Job, Found>>,
+    /// Bytes of files searched on this thread in this walk, before any
+    /// helper was asked for.
+    alone_bytes: u64,
+    /// `pieces`, for helpers.
+    shared_pieces: Option<Arc<Shortlist>>,
+    /// Files gathered for the next job, and their bytes.
+    batch: Job,
+    batch_bytes: u64,
+    /// Output buffers written out, for helpers to use again.
+    spare: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+/// Files a helper searches, one after another, and what it found.
+struct Job {
+    files: Vec<(Vec<u8>, NodeId)>,
+    pieces: Option<Arc<Shortlist>>,
+}
+
+/// A job is handed on once it holds this many bytes of files, or this
+/// many files: enough that handing it on costs little beside the search.
+const JOB_BYTES: u64 = 2 << 20;
+const JOB_FILES: usize = 64;
+
+struct Found {
+    out: Vec<u8>,
+    err: Vec<u8>,
+    selected: bool,
+    error: bool,
 }
 
 enum Only {
@@ -609,6 +645,8 @@ impl Run {
         self.probe = if self.opts.invert { None } else { db.candidates_cost(self.searcher.query()) };
         self.top = (dir, path.len());
         self.pieces = None;
+        self.shared_pieces = None;
+        self.alone_bytes = 0;
         self.walk(db, io, dir, path);
         self.probe = None;
         self.only = None;
@@ -617,16 +655,151 @@ impl Run {
             let base = path.len();
             for file in &files[from..] {
                 if io.stopped() || self.done {
-                    return;
+                    break;
                 }
                 path.extend_from_slice(&file.path);
                 let pieces = self.pieces.take();
-                self.search_file(db, io, path, file.id, pieces.as_ref());
+                self.visit(db, io, path, file.id, pieces.as_ref());
                 self.pieces = pieces;
                 path.truncate(base);
             }
         }
+        if self.ahead.is_some() && !io.stopped() {
+            self.hand_on(io);
+        }
+        if let Some(mut a) = self.ahead.take() {
+            if !io.stopped() {
+                let spare = self.spare.clone();
+                a.finish(&mut |f| Run::take_found(&spare, &mut self.selected, &mut self.error, io, f));
+            }
+        }
+        self.batch.files.clear();
+        self.batch_bytes = 0;
         self.pieces = None;
+        self.shared_pieces = None;
+    }
+
+    /// Hand the files gathered so far to the helpers.
+    fn hand_on(&mut self, io: &mut Io) {
+        if self.batch.files.is_empty() {
+            return;
+        }
+        let job = std::mem::replace(&mut self.batch, Job { files: Vec::new(), pieces: None });
+        self.batch_bytes = 0;
+        let (selected, error, spare) = (&mut self.selected, &mut self.error, &self.spare);
+        if let Some(a) = &mut self.ahead {
+            a.submit(job, &mut |f| Run::take_found(spare, selected, error, io, f));
+        }
+    }
+
+    /// Search a file the walk has reached: here, or on a helper thread
+    /// once the walk has read enough on its own to be worth sharing.
+    fn visit(&mut self, db: &Db, io: &mut Io, label: &[u8], id: NodeId, filter: Option<&Shortlist>) {
+        let o = self.opts;
+        if self.ahead.is_none() && self.alone_bytes >= crate::par::threshold() as u64 && self.alone_bytes != u64::MAX {
+            // Only searches whose files' results stand alone: no context
+            // (a `--` between groups), no -q, -c or -L (which print for
+            // files that are not read), no errors merged into the output
+            // (whose place in it would move), no output into the tree.
+            let alone = !o.context() && !o.quiet && !o.count && !o.without && !io.is_merged() && io.out_file.is_none();
+            self.ahead = if alone { self.helpers(db) } else { None };
+            if self.ahead.is_none() {
+                // Asked once a walk.
+                self.alone_bytes = u64::MAX;
+            }
+        }
+        match &mut self.ahead {
+            None => {
+                self.alone_bytes = self.alone_bytes.saturating_add(db.size(id));
+                self.search_file(db, io, label, id, filter);
+            }
+            Some(_) => {
+                let pieces = filter.map(|f| self.shared_pieces.get_or_insert_with(|| Arc::new(f.clone())).clone());
+                // One job searches with one set of pieces.
+                if self.batch.pieces.is_some() != pieces.is_some() {
+                    self.hand_on(io);
+                }
+                self.batch.pieces = pieces;
+                self.batch.files.push((label.to_vec(), id));
+                self.batch_bytes += db.size(id) + 256;
+                if self.batch_bytes >= JOB_BYTES || self.batch.files.len() >= JOB_FILES {
+                    self.hand_on(io);
+                }
+            }
+        }
+    }
+
+    fn take_found(spare: &Mutex<Vec<Vec<u8>>>, selected: &mut bool, error: &mut bool, io: &mut Io, mut f: Found) {
+        io.put(&f.out);
+        f.out.clear();
+        let mut s = spare.lock().unwrap_or_else(|e| e.into_inner());
+        if s.len() < 64 {
+            s.push(std::mem::take(&mut f.out));
+        }
+        drop(s);
+        io.err.extend_from_slice(&f.err);
+        *selected |= f.selected;
+        *error |= f.error;
+        if f.selected {
+            io.flush();
+        }
+    }
+
+    /// Helper threads, if any can be had: each searches with a copy of
+    /// this search.
+    fn helpers(&self, db: &Db) -> Option<crate::par::Ahead<Job, Found>> {
+        let template = Mutex::new((self.opts, self.searcher.clone(), self.finders.clone(), self.select.clone(), self.with_filename));
+        let spare = self.spare.clone();
+        let scratch = crate::tree::Scratch::none();
+        crate::par::Ahead::start(move || {
+            let (opts, searcher, finders, select, with_filename) = {
+                let t = template.lock().unwrap_or_else(|e| e.into_inner());
+                (t.0, t.1.clone(), t.2.clone(), t.3.clone(), t.4)
+            };
+            let mut w = Run {
+                opts,
+                searcher,
+                finders,
+                select,
+                with_filename,
+                selected: false,
+                error: false,
+                done: false,
+                printed: false,
+                line: Vec::new(),
+                only: None,
+                probe: None,
+                top: (db.root(), 0),
+                rest: None,
+                list_probe: None,
+                list_only: None,
+                pieces: None,
+                ahead: None,
+                alone_bytes: 0,
+                shared_pieces: None,
+                batch: Job { files: Vec::new(), pieces: None },
+                batch_bytes: 0,
+                spare: Arc::default(),
+            };
+            let scratch = scratch.clone();
+            let spare = spare.clone();
+            Box::new(move |job: Job| {
+                let mut out = spare.lock().unwrap_or_else(|e| e.into_inner()).pop().unwrap_or_default();
+                // Room for what a job of text usually gives, so that the
+                // buffer is not copied as it grows.
+                out.reserve(JOB_BYTES as usize);
+                let (mut nowhere, mut err) = (Vec::new(), Vec::new());
+                w.selected = false;
+                w.error = false;
+                {
+                    let mut io = Io::gathering(&mut nowhere, &mut out, &mut err, scratch.clone());
+                    for (label, id) in &job.files {
+                        w.search_file(db, &mut io, label, *id, job.pieces.as_deref());
+                    }
+                }
+                Found { out, err, selected: w.selected, error: w.error }
+            })
+        })
     }
 
     /// Search a file that was named on the command line. As in a walk,
@@ -746,7 +919,7 @@ impl Run {
                 };
                 if candidate {
                     let pieces = self.pieces.take();
-                    self.search_file(db, io, path, *child, pieces.as_ref());
+                    self.visit(db, io, path, *child, pieces.as_ref());
                     self.pieces = pieces;
                 } else if o.count && !o.list || o.without {
                     // No line of it matches, and it still gets its count.

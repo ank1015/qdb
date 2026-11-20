@@ -2,7 +2,7 @@
 //! operators, with the actions -print, -print0, -prune and -exec. Results
 //! come out depth first with each folder's children in byte order.
 
-use crate::engine::{self, Io, Runner};
+use crate::engine::{self, Access, Io, Prepared, Runner};
 use crate::glob::{self, Tok};
 use crate::tree::{Db, NodeId};
 use crate::util::{basename, join, lossy, quote};
@@ -300,7 +300,7 @@ fn compare(arg: &[u8]) -> (Cmp, &[u8]) {
     }
 }
 
-pub fn find(args: Vec<Vec<u8>>) -> Result<Runner, String> {
+pub fn find(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     let split = args
         .iter()
         .position(|a| a.starts_with(b"-") && a.len() > 1 || matches!(a.as_slice(), b"(" | b")" | b"!" | b","))
@@ -347,8 +347,10 @@ pub fn find(args: Vec<Vec<u8>>) -> Result<Runner, String> {
     };
     let usage = p.usage.take();
     let has_exec = !p.execs.is_empty();
+    // Only what -exec runs can change the tree.
+    let writes = p.execs.iter().any(|e| e.first().is_none_or(|name| !engine::is_pure(name) || name.windows(2).any(|w| w == b"{}")));
     let find = Find { expr, maxdepth: p.maxdepth, mindepth: p.mindepth, execs: p.execs, has_exec };
-    Ok(Box::new(move |db, io| {
+    let run: Runner = Box::new(move |db, io| {
         if let Some(e) = usage {
             io.err_line(e);
             return 1;
@@ -385,7 +387,8 @@ pub fn find(args: Vec<Vec<u8>>) -> Result<Runner, String> {
             run.flush(db, i, io);
         }
         run.status
-    }))
+    });
+    Ok(Prepared { run, input: crate::engine::Input::Unused, writes })
 }
 
 const KNOWN: &[&[u8]] = &[
@@ -421,13 +424,13 @@ struct Run<'a> {
 }
 
 /// What evaluating the expression can do besides answer.
-enum Act<'a> {
+enum Act<'a, 'd> {
     /// Nothing that changes data: the tree is only read.
     Read(&'a Db),
-    Write(&'a mut Db),
+    Write(&'a mut Access<'d>),
 }
 
-impl Act<'_> {
+impl Act<'_, '_> {
     fn db(&self) -> &Db {
         match self {
             Act::Read(db) => db,
@@ -455,7 +458,7 @@ impl Run<'_> {
 
     /// The walk when commands run: they may change the tree, so each
     /// folder's entries are noted before any of them is visited.
-    fn visit_rw(&mut self, db: &mut Db, path: &[u8], id: NodeId, depth: usize, io: &mut Io) {
+    fn visit_rw(&mut self, db: &mut Access, path: &[u8], id: NodeId, depth: usize, io: &mut Io) {
         let mut prune = false;
         let was_dir = db.is_dir(id);
         if depth >= self.find.mindepth {
@@ -575,7 +578,7 @@ impl Run<'_> {
     }
 
     /// Run an `-exec ... +` on the paths gathered for it.
-    fn flush(&mut self, db: &mut Db, i: usize, io: &mut Io) {
+    fn flush(&mut self, db: &mut Access, i: usize, io: &mut Io) {
         let paths = std::mem::take(&mut self.batches[i]);
         if paths.is_empty() {
             return;

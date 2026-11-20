@@ -1,0 +1,13 @@
+== qdb-harness 
+5760 cases (6094 steps), in memory, pieces of 65536 bytes, index on: 5760 passed, 0 failed
+counters: 224 units run twice on the same database, 0 with different counts; 0 counts above the baseline
+== qdb-harness --store reopen
+5760 cases (6094 steps), on disk, closed and reopened after every step, sync always, pieces of 65536 bytes, index on: 5760 passed, 0 failed
+== qdb-harness --threads 4
+5760 cases (6094 steps), in memory, pieces of 65536 bytes, index on: 5760 passed, 0 failed
+counters: 224 units run twice on the same database, 0 with different counts; 0 counts above the baseline (with several threads: 29 units whose search is stopped early by its reader not compared)
+== qdb-harness --store api
+5760 cases (6094 steps), through the API, sync always, pieces of 65536 bytes, index on: 5760 passed, 0 failed
+== qdb-harness --no-index
+5760 cases (6094 steps), in memory, pieces of 65536 bytes, index off: 5760 passed, 0 failed
+counters: 224 units run twice on the same database, 0 with different counts; 0 counts above the baseline

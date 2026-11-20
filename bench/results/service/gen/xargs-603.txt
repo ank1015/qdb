@@ -1,0 +1,54 @@
+FAIL  generated xargs seed 603:3428: echo data/x.log docs/old/x.log docs/old/Makefile | xargs -l -t -P 1 -s 47 wc -l
+    exit status: real 1, engine 0
+    stdout, real:
+      (empty)
+    stdout, engine:
+      "  4 data/x.log\n"
+      "  8 docs/old/x.log\n"
+      " 12 total\n"
+      "2 docs/old/Makefile\n"
+    stderr, real:
+      "xargs: argument list too long\n"
+    stderr, engine:
+      "wc -l data/x.log docs/old/x.log\n"
+      "wc -l docs/old/Makefile\n"
+
+FAIL  generated xargs seed 603:3849: find . -name '*.txt' -type f | sort | xargs -L 3 -s 42 cat
+    exit status: real 1, engine 123
+    stdout, real:
+      (empty)
+    stdout, engine:
+      "z333 日本  needle\n"
+      "\n"
+      "naïve:naïve café\tz333\n"
+      "the 日本\n"
+      "the y22:delta\n"
+      "baz\n"
+      "Ünï\n"
+      "a = baz:BETA\n"
+      "foo:end  café needle\n"
+      "naïve.z333.needle.the\n"
+      "\n"
+      "\n"
+      "the to,to = beta\n"
+      "foo = Needle = alpha  x1,café2022\n"
+      "the  beta Alpha.hay\n"
+      "x1\n"
+      "hay\n"
+      "end  delta\tbar\n"
+      "stack706 = Needle café\n"
+      "alpha:bar2856\n"
+      "alpha:foo a.gamma\n"
+    stderr, real:
+      "xargs: argument list too long\n"
+    stderr, engine:
+      "cat: ./data/long: No such file or directory\n"
+      "cat: name.txt: No such file or directory\n"
+      "cat: ./docs/long: No such file or directory\n"
+      "cat: name.txt: No such file or directory\n"
+      "cat: ./long: No such file or directory\n"
+      "cat: name.txt: No such file or directory\n"
+      "cat: ./src/long: No such file or directory\n"
+      "cat: name.txt: No such file or directory\n"
+
+generated xargs: 10000 cases, seed 603, in memory, pieces of 65536 bytes, index on: 9998 passed, 0 known differences, 2 failed

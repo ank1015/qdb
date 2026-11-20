@@ -1,10 +1,15 @@
 # The on-disk format
 
-This is the exact layout of a qdb database directory, format version 2.
-Version 2 differs from version 1 in three things: nodes have a
-modification time (in checkpoints, and as change 6 in the log), a piece
-may be used by several files, and a write that changes no content may
-still log a time.
+This is the exact layout of a qdb database directory, format version 3.
+Version 3 differs from version 2 in three things, all to make a small
+database small (stage 6 hosts many of them): a checkpoint of at most
+3,072 bytes is kept inside `MANIFEST` instead of in a file of its own; an
+index file says how many bucket bits it uses instead of always 16; and
+the data file being written gets an index file at close only once it
+holds 256 KB. Version 2 differed from version 1 in three things: nodes
+have a modification time (in checkpoints, and as change 6 in the log), a
+piece may be used by several files, and a write that changes no content
+may still log a time.
 The code that reads and writes it is `src/disk.rs` (the files) and
 `src/tree.rs` (what is put in them, and recovery). Everything goes through
 the I/O layer in `src/vfs.rs`.
@@ -20,8 +25,8 @@ A *checksum* is CRC-32 (the IEEE polynomial, as computed by the
 | File | What it is | Written |
 |---|---|---|
 | `LOCK` | Empty. An exclusive `flock` on it is held while the database is open, so a second process is refused. | never |
-| `MANIFEST` | Which checkpoint is current. 20 bytes. | replaced whole |
-| `tree-NNNNNNNN.ckp` | A checkpoint: the folder tree, and the position in the log from which the log has to be applied to it. | written once |
+| `MANIFEST` | Which checkpoint is current, and the checkpoint itself when it is small. 24 bytes plus the checkpoint kept in it. | replaced whole |
+| `tree-NNNNNNNN.ckp` | A checkpoint: the folder tree, and the position in the log from which the log has to be applied to it. Only when it is larger than 3,072 bytes; a smaller one is kept in `MANIFEST`. | written once |
 | `NNNNNNNN.seg` | A data file: file content and the log. `NNNNNNNN` is its number in decimal, from 1. | at its end only |
 | `NNNNNNNN.idx` | The search index for the pieces in data file `NNNNNNNN`. | written once, replaced whole |
 | `*.tmp` | A file being written that has not yet been given its name, or (`spool-N.tmp`) output of a command on its way into a file. Removed at open. | |
@@ -91,7 +96,7 @@ keeps its time. An import keeps the times the files had.
 
 ```
 offset 0   8 bytes   magic "QDBSEG1\n"
-       8   u32       format version (2)
+       8   u32       format version (3)
       12   u32       this file's number
       16   u32       folding rule of the index built over this file (1)
       20   8 bytes   zero
@@ -184,7 +189,7 @@ A data file is at most 128 MB unless a single record needs more.
 
 ```
 offset 0   8 bytes   magic "QDBTREE\n"
-       8   u32       format version (2)
+       8   u32       format version (3)
       12   u32       this checkpoint's number
       16   u32       checksum of bytes 0..16
       20   blocks, one after another
@@ -224,10 +229,20 @@ restarts, and the id of a removed node is not given out again.
 
 ```
 offset 0   8 bytes   magic "QDBMANI\n"
-       8   u32       format version (2)
+       8   u32       format version (3)
       12   u32       number of the current checkpoint
-      16   u32       checksum of bytes 0..16
+      16   u32       n: length of the checkpoint kept here, 0 if it is in
+                     its own file
+      20   n bytes   the checkpoint, byte for byte as it would be in
+                     tree-NNNNNNNN.ckp
+  20 + n   u32       checksum of bytes 0 .. 20 + n
 ```
+
+The version is checked before the checksum, so that a MANIFEST of another
+version is refused as that, not as damage. A checkpoint is written to
+memory first; only when it grows past 3,072 bytes is its file made and
+what was written so far put in it. A database of a few files is
+therefore three small files: `LOCK`, `MANIFEST` and one data file.
 
 ## Index files (`NNNNNNNN.idx`)
 
@@ -237,7 +252,7 @@ the list of pieces it occurs in.
 
 ```
 header   offset 0   8 bytes  magic "QDBIDX1\n"
-                8   u32      format version (2)
+                8   u32      format version (3)
                12   u32      number of the data file
 lists    offset 16: every posting list, end to end, in ascending order of
          trigram
@@ -245,8 +260,11 @@ table    one u64 per trigram, ascending: trigram << 40 | offset of its
          list, counted from the start of `lists`. Then one more entry,
          0xFFFFFF << 40 | length of `lists`, so that every list's end is
          the next entry's offset.
-buckets  65,537 u32: for each value of a trigram's first two bytes, the
-         position in `table` of the first trigram at or above it.
+buckets  2^b + 1 u32, where b is the bucket bits in the footer: for each
+         value of a trigram's top b bits, the position in `table` of the
+         first trigram at or above it. b is the least number, at most 16,
+         that leaves no more than about 8 trigrams to a bucket, so that a
+         file of few trigrams has few buckets.
 sums     one u32 per 4,096 bytes of everything above: its checksum.
 footer   72 bytes:
                0   8 bytes  "QDBIDXE\n"
@@ -259,7 +277,7 @@ footer   72 bytes:
               48   u64      offset of sums
               56   u32      folding rule (1)
               60   u32      checksum of sums
-              64   u32      zero
+              64   u32      bucket bits b (0 to 16)
               68   u32      checksum of footer bytes 0..68
 ```
 
@@ -283,7 +301,9 @@ written: that happens a step at a time over the command lines after the
 data file is finished, and until then (and after a crash in between) the
 file is missing or covers only the first `ndocs` pieces. The data file
 still being written may likewise have an index file that covers only its
-first `ndocs` pieces. The rest are indexed in memory as they are written
+first `ndocs` pieces; it is given one at close only once it holds 256 KB
+of records, and below that its content is indexed again at open, which
+is quicker than reading a file. The rest are indexed in memory as they are written
 (or later in bulk, with `--index later`), and after a crash from their
 content.
 
@@ -292,7 +312,8 @@ content.
 1. Take the lock. Read `MANIFEST`; if there is none and the directory
    holds nothing else, make a new database. If there is none and there are
    other files, refuse.
-2. Read the checkpoint it names, checking every block.
+2. Read the checkpoint it names (kept in `MANIFEST`, or in its own
+   file), checking every block.
 3. Read the log from the position the checkpoint gives: record after
    record, following next-file records from one data file to the next.
    Only record headers and command line records are read, not content.
@@ -317,7 +338,8 @@ content.
 7. Open the index file of each data file, checking its header, footer,
    table, buckets and sums. One that is missing, damaged, built with
    another folding rule, or that does not cover a finished data file is
-   built again from the content, and the open says so.
+   built again from the content, and the open says so (except, quietly,
+   for a small data file being written, which has none by design).
 
 Opening reads no file content unless an index has to be built or step 4
 has records to check. Its cost follows the number of nodes and pieces (the

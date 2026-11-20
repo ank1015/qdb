@@ -1,0 +1,47 @@
+4
+== true-1: ./target/release/qdb-load --spawn /tmp/tg true --clients 1 --seconds 10
+true: 1 clients, 152913 units in 10.00 s: 15289 units a second; latency median 0.054 ms, 99th percentile 0.109 ms, most 15.037 ms; 0 syncs
+== true-8: ./target/release/qdb-load --spawn /tmp/tg true --clients 8 --seconds 10
+true: 8 clients, 936016 units in 10.01 s: 93543 units a second; latency median 0.072 ms, 99th percentile 0.221 ms, most 17.328 ms; 0 syncs
+== writers-1: ./target/release/qdb-load --spawn /tmp/tg writers --clients 1 --seconds 15
+writers on one filesystem: 1 clients, 54890 units in 15.00 s: 3659 units a second; latency median 0.244 ms, 99th percentile 0.590 ms, most 8.483 ms; 54901 syncs
+    lines written: 54890
+== writers-8: ./target/release/qdb-load --spawn /tmp/tg writers --clients 8 --seconds 15
+writers on one filesystem: 8 clients, 182834 units in 15.00 s: 12187 units a second; latency median 0.602 ms, 99th percentile 1.485 ms, most 26.285 ms; 53692 syncs
+    lines written: 182834
+== writers-8-nogroup: ./target/release/qdb-load --spawn /tmp/tg writers --clients 8 --seconds 15
+writers on one filesystem: 8 clients, 46387 units in 15.00 s: 3092 units a second; latency median 2.481 ms, 99th percentile 4.416 ms, most 25.337 ms; 46396 syncs
+    lines written: 46387
+== mixed-1: ./target/release/qdb-load --spawn /tmp/tg mixed --filesystems 1 --seconds 15
+mixed, 1 filesystems, one client each: 1 clients, 146816 units in 15.00 s: 9787 units a second; latency median 0.070 ms, 99th percentile 0.521 ms, most 26.157 ms; 7340 syncs
+== mixed-64: ./target/release/qdb-load --spawn /tmp/tg mixed --filesystems 64 --seconds 15
+mixed, 64 filesystems, one client each: 64 clients, 653795 units in 15.02 s: 43530 units a second; latency median 1.227 ms, 99th percentile 4.931 ms, most 39.945 ms; 32660 syncs
+== deadline: ./target/release/qdb-load --spawn /tmp/tg deadline --count 400
+deadlines: 400 units given 100 ms, each stopped by it; answered after the deadline by median 0.77 ms, 99th percentile 239.64 ms, most 253.42 ms ("while true; do cat d/* | sort | uniq -c > /dev/null; done"); after each, nothing it wrote was there and the filesystem took a write
+== open-small: ./target/release/qdb-load open /tmp/sm --count 1000
+open /tmp/sm: 1000 times, median 0.035 ms, least 0.030 ms; heap once open 13.7 KB (the engine's own estimate 1.2 KB)
+== open-linux: ./target/release/qdb-load open /home/user/svc-linux/fs/5a/5a8a34f86105c89c8123138709b68a0d --count 9
+open /home/user/svc-linux/fs/5a/5a8a34f86105c89c8123138709b68a0d: 9 times, median 30.371 ms, least 28.454 ms; heap once open 21859.6 KB (the engine's own estimate 22088.1 KB)
+server before the first unit: VmRSS:	    4908 kB
+first unit on the Linux filesystem (opens it): 0.053760 s
+second unit: 0.000491 s
+server with it open: VmRSS:	   57472 kB
+grep -rn define . | wc -l, default workers: 5372557 lines, 370.278 ms
+grep -rn define . | wc -l, default workers: 5372557 lines, 314.093 ms
+grep -rn define . | wc -l, default workers: 5372557 lines, 324.303 ms
+== reads95-1: ./target/release/qdb-load --server 127.0.0.1:7899 units /tmp/claude-0/-home-user/604975ab-3860-5551-bf97-2a80e4d8c054/scratchpad/reads95.txt --key qdbk_e7692edf2764b6cebf05ace7f2cd5af972a804d50407a204cd561399652ea3b6 --fs 5a8a34f86105c89c8123138709b68a0d --clients 1 --count 20000
+units of /tmp/claude-0/-home-user/604975ab-3860-5551-bf97-2a80e4d8c054/scratchpad/reads95.txt: 1 clients, 20000 units in 19.37 s: 1032 units a second; latency median 0.164 ms, 99th percentile 18.758 ms, most 79.122 ms; 1004 syncs
+== reads95-4: ./target/release/qdb-load --server 127.0.0.1:7899 units /tmp/claude-0/-home-user/604975ab-3860-5551-bf97-2a80e4d8c054/scratchpad/reads95.txt --key qdbk_e7692edf2764b6cebf05ace7f2cd5af972a804d50407a204cd561399652ea3b6 --fs 5a8a34f86105c89c8123138709b68a0d --clients 4 --count 20000
+units of /tmp/claude-0/-home-user/604975ab-3860-5551-bf97-2a80e4d8c054/scratchpad/reads95.txt: 4 clients, 20000 units in 13.12 s: 1525 units a second; latency median 0.250 ms, 99th percentile 36.034 ms, most 264.463 ms; 1001 syncs
+== interfere: ./target/release/qdb-load --server 127.0.0.1:7899 interfere --key qdbk_e7692edf2764b6cebf05ace7f2cd5af972a804d50407a204cd561399652ea3b6 --fs 5a8a34f86105c89c8123138709b68a0d --seconds 20
+small reads alone: 1 clients, 273425 units in 20.00 s: 13670 units a second; latency median 0.061 ms, 99th percentile 0.120 ms, most 6.337 ms; 0 syncs
+small reads while another filesystem runs "grep -rn define ." (1536 runs): 1 clients, 362600 units in 20.00 s: 18127 units a second; latency median 0.037 ms, 99th percentile 0.150 ms, most 30.156 ms; 0 syncs
+grep -rn define . | wc -l, one worker: 5373129 lines, 787.294 ms
+grep -rn define . | wc -l, one worker: 5373129 lines, 589.645 ms
+grep -rn define . | wc -l, one worker: 5373129 lines, 613.725 ms
+== small-100k: ./target/release/qdb-load --spawn /tmp/tg small --count 100000 --clients 8
+small filesystems: 100000 made, each with one small file, from 8 connections in 77.7 s; making one took median 3.987 ms, 99th percentile 10.715 ms
+    on disk, of 1000 of them: 298 bytes of files a filesystem, 12.0 KB in blocks with its directory
+    the server with all of them idle: 98.3 MB resident (4.6 MB before any were made), 10 open files (10 before)
+    cat a.txt on a closed filesystem: median 0.268 ms; on the same one open: median 0.133 ms; so opening costs about 0.135 ms (of 2000 tries, each on a filesystem not used for a while)
+done

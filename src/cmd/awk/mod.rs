@@ -1,14 +1,16 @@
 //! awk, as GNU awk 5.2.1 runs the part of the language listed in the
 //! README: patterns and actions, fields, the ten string functions,
 //! printf, and arrays of one subscript. No user functions, no getline,
-//! no output to anything but standard output. Input must be ASCII.
+//! no output to anything but standard output. Input is bytes, as in the C
+//! locale: `length`, `substr`, `index`, `toupper` and `tolower` count and
+//! change bytes, and only ASCII letters have a case.
 
 mod parse;
 mod run;
 
 use std::rc::Rc;
 
-use crate::bytes::{memchr, memrchr};
+use crate::bytes::memchr;
 use crate::engine::{Filter, Input, Io, Prepared, Runner};
 use crate::regex::Regex;
 use crate::util::lossy;
@@ -145,21 +147,7 @@ impl Machine {
         if self.rt.dead() {
             return false;
         }
-        if data.is_ascii() {
-            return self.lines(data, io);
-        }
-        // Everything before the line with the first other byte still runs.
-        let bad = data.iter().position(|b| *b >= 0x80).unwrap();
-        let start = memrchr(b'\n', &data[..bad]).map_or(0, |i| i + 1);
-        if !self.lines(&data[..start], io) {
-            return false;
-        }
-        let mut m = b"awk: ".to_vec();
-        let name = self.rt.eval(&parse::Expr::Var(parse::FILENAME)).text();
-        m.extend_from_slice(if name.is_empty() { b"-" } else { &name });
-        m.extend_from_slice(format!(": line {}: input that is not ASCII; this awk reads ASCII text only", self.rt.records() + 1.0).as_bytes());
-        self.rt.fatal = Some(m);
-        false
+        self.lines(data, io)
     }
 
     /// The end of a file ends its last line.
@@ -174,8 +162,13 @@ impl Machine {
     }
 
     fn end(&mut self, io: &mut Io) -> i32 {
-        self.file_end(io);
-        if !self.rt.dead() {
+        if !self.rt.exiting {
+            self.file_end(io);
+        }
+        // After `exit` in BEGIN or in a rule the END rules still run; an
+        // `exit` in one of them ends the program there.
+        if !self.rt.stopped && self.rt.fatal.is_none() {
+            self.rt.exiting = false;
             let setup = Rc::clone(&self.setup);
             for body in &setup.prog.end {
                 if self.rt.run(body, io) == run::Flow::Stop {
@@ -189,7 +182,7 @@ impl Machine {
                 io.err_line(m);
                 2
             }
-            None => 0,
+            None => self.rt.exit_code,
         }
     }
 }
@@ -313,7 +306,7 @@ pub fn awk(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
             m.push(stdin, io);
             m.finish(io)
         });
-        return Ok(Prepared { run, input: Input::Stream(Box::new(Machine::new(setup))) });
+        return Ok(Prepared { run, input: Input::Stream(Box::new(Machine::new(setup))), writes: false });
     }
     let input = if files.iter().any(|f| f == b"-") { Input::Whole } else { Input::Unused };
     let run: Runner = Box::new(move |db, io: &mut Io| {
@@ -358,5 +351,5 @@ pub fn awk(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         }
         m.end(io)
     });
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes: false })
 }

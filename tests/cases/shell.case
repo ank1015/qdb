@@ -228,7 +228,7 @@ $ ls⏎ls
 $ rm README.md && ls
 $ rm README.md; ls
 $ mkdir z; cd z
-! cd - ## cd -
+$ cd -; echo $?
 ! mkdir z; cd -P z ## flag: cd -P
 $ cat < README.md
 $ wc -l < README.md

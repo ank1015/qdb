@@ -1,0 +1,65 @@
+FAIL  generated xargs seed 602:1329: printf '%s\n' docs/old/main.rs nosuch7 docs/old/util.rs | xargs -L 3 -r -t -s 44 wc -l
+    exit status: real 1, engine 123
+    stdout, real:
+      (empty)
+    stdout, engine:
+      "0 docs/old/main.rs\n"
+      "0 total\n"
+      "0 docs/old/util.rs\n"
+    stderr, real:
+      "xargs: argument list too long\n"
+    stderr, engine:
+      "wc -l docs/old/main.rs nosuch7\n"
+      "wc: nosuch7: No such file or directory\n"
+      "wc -l docs/old/util.rs\n"
+
+FAIL  generated xargs seed 602:5315: echo src/x.log src/lib/x.log src/b.txt docs/old/Makefile | xargs -L 1 -s 43 sort -u
+    exit status: real 1, engine 0
+    stdout, real:
+      (empty)
+    stdout, engine:
+      "\n"
+      "Alpha\n"
+      "Needle.a z333:gamma\n"
+      "bar  hay.baz\n"
+      "end Alpha2169\n"
+      "end:naïve café,baz\tfoo\n"
+      "foo\tgamma\tÜnï\tstack  naïve\n"
+      "hay\t日本,end309\n"
+      "naïve\tneedle\n"
+      "naïve = delta.end\n"
+      "the  Ünï\n"
+      "to,needle alpha656\n"
+      "to.y22.日本 stack1296,a\n"
+      "x1 = stack Ünï\n"
+      "y22 Alpha,x1\tAlpha\n"
+      "y22:y22  y22821,z333 delta\n"
+      "\n"
+      "café Alpha\tÜnï881  café = BETA\n"
+      "delta,Needle.delta.foo\n"
+      "delta.of:naïve  beta,beta\n"
+      "end.café\n"
+      "to baz = z333\n"
+      "x1\n"
+      "x1 πr\n"
+    stderr, real:
+      "xargs: argument list too long\n"
+    stderr, engine:
+      (empty)
+
+FAIL  generated xargs seed 602:8184: find . -name '*.txt' -type f | sort | xargs -d '\n' -L 3 -s 42 echo
+    exit status: real 1, engine 0
+    stdout, real:
+      (empty)
+    stdout, engine:
+      "./docs/long name.txt\n"
+      "./docs/old/b.txt ./one.txt\n"
+      "./src/a.txt ./src/b.txt\n"
+      "./src/lib/long name.txt\n"
+      "./src/long name.txt ./two.txt\n"
+    stderr, real:
+      "xargs: argument list too long\n"
+    stderr, engine:
+      (empty)
+
+generated xargs: 10000 cases, seed 602, in memory, pieces of 65536 bytes, index on: 9997 passed, 0 known differences, 3 failed

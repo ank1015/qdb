@@ -157,3 +157,76 @@ under sync always: three workloads of 20,000 units made by
 `qdb-stress units --reads N` (95, 50 and 5 in a hundred only read) and
 the benchmark command list. Every column but the times is counted and
 repeats exactly. `docs/HANDBACK-5.md` reads them.
+
+## The service: `qdb-load` and `results/service/`
+
+`qdb-load` puts load on a `qdb-server` and runs the service's tests.
+It either talks to a running server (`--server ADDR`) or starts the
+`qdb-server` beside it on a data directory (`--spawn DATA`), passing it
+any flags in `QDB_SERVER_ARGS`, and stops it at the end. The admin key
+comes from `--admin-key` or `QDB_ADMIN_KEY`. Every workload prints one
+line of results, or a line starting `FAIL`. `qdb-load --help` has every
+option.
+
+Load, for the targets and the capacity sheet:
+
+- `true --clients N --seconds S`: the shortest unit, for the cost of a
+  request.
+- `writers --clients N --seconds S`: N writers on one filesystem, each
+  appending to a file of its own; group commit shows in the syncs.
+- `units FILE --key K --fs ID --clients N --count C`: the lines of a
+  file of units (as `qdb-stress units` writes them) on one filesystem.
+- `mixed --filesystems N --seconds S`: N small filesystems with one
+  client each, 95 reads to 5 writes.
+- `interfere --key K --fs ID --seconds S`: small reads on a filesystem of
+  their own, alone and then while another connection runs `--search`
+  (default `grep -rn define .`) over and over on `ID`.
+- `small --count N --clients C`: N small filesystems made, the time to
+  make one, what they take on disk, the server's memory once all are
+  closed (start it with `--idle-close-secs 1`), and the cost of opening
+  one, as a unit on a closed filesystem against one on an open one.
+- `deadline --count N`: units that cannot finish, each given 100 ms: how
+  long after the deadline each is answered, and that nothing is left.
+- `open DIR --count N`: open a database directory N times in process:
+  the median time and the heap once open.
+- `import --data DATA --tree DIR`: load a directory into a new
+  filesystem of a new account in DATA, with the server stopped. This is
+  how the Linux tree was made a filesystem.
+
+The service's tests:
+
+- `order --clients 16 --count 10000 --runs 100 --seed 1000`: the
+  units-at-once checker. Each run sends generated reads and appends from
+  many connections to one new filesystem; then it looks for an order of
+  the units, one at a time and consistent with when each was answered,
+  that explains every output, and fails naming the units involved when
+  there is none. Some units are given a deadline they cannot meet, and
+  must leave nothing. `QDB_ORDER_MUTATE=1` breaks one answer on purpose,
+  to show that the checker catches it.
+- `kill --spawn DATA --count 200 --clients 16 --filesystems 8`: kills
+  the server with SIGKILL at random moments under load, starts it
+  again, and checks that every filesystem opens, passes `--check` and
+  holds every unit that was answered, whole and in order.
+- `isolation --count 1000000 --clients 8`: two accounts with marker text;
+  requests with each key against its own and the other's IDs, guessed
+  IDs, near misses, `..` and odd paths, and command lines that reach for
+  what lies outside a filesystem. No answer may hold the other account's
+  markers or IDs, and a request for the other's filesystem must be
+  answered exactly as one for a filesystem that does not exist.
+  `QDB_ISOLATION_MUTATE=1` sends one request in a hundred with the other
+  key, to show that the test catches a leak.
+- `long --spawn DATA --seconds 2100 --clients 8 --filesystems 3000`: the
+  long run. Filesystems are made, used (most units on a few, so that the
+  rest go idle and are closed), and deleted; some units are stopped at a
+  deadline, some streamed, some in sessions. The server's memory and
+  open files are sampled every 10 s into `DATA/long-samples.tsv`; at the
+  end every filesystem left must take a write at once.
+
+The harness also runs against a server (`qdb-harness --store api`), and
+has `--stops N` (units stopped at random moments by a deadline, a caller
+going away or a planted panic, each leaving the filesystem as it was),
+`--crash-writers N` (power cuts with several writers sharing syncs) and
+`--threads N` (every recursive search on N threads, output unchanged).
+
+`results/service/` holds the output of each run reported in
+docs/HANDBACK-6.md.

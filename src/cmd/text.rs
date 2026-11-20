@@ -3,7 +3,7 @@
 
 use super::{options_long, LineBuf};
 use crate::engine::{store_output, Filter, Input, Io, Prepared, Runner, Spool};
-use crate::tree::{Db, NodeId};
+use crate::tree::NodeId;
 use crate::util::{quote, quote_if_needed, LongOpt, Parsed};
 
 /// A command that fails before it reads anything, with the tool's own
@@ -34,7 +34,7 @@ pub(super) fn over_files(cmd: &'static str, files: Vec<Vec<u8>>, make: impl Fn()
             f.push(stdin, io);
             f.finish(io)
         });
-        return Prepared { run, input };
+        return Prepared { run, input, writes: false };
     }
     let input = if files.iter().any(|f| f == b"-") { Input::Whole } else { Input::Unused };
     let run: Runner = Box::new(move |db, io| {
@@ -78,7 +78,7 @@ pub(super) fn over_files(cmd: &'static str, files: Vec<Vec<u8>>, make: impl Fn()
         }
         f.finish(io).max(status)
     });
-    Prepared { run, input }
+    Prepared { run, input, writes: false }
 }
 
 fn parsed(cmd: &'static str, args: &[Vec<u8>], bools: &[u8], with_arg: &[u8], longs: &[LongOpt]) -> Result<Result<Parsed, Prepared>, String> {
@@ -709,9 +709,9 @@ pub fn tr(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     });
     if warn {
         // The warning comes before any output: take the input whole.
-        return Ok(Prepared { run, input: Input::Whole });
+        return Ok(Prepared { run, input: Input::Whole, writes: false });
     }
-    Ok(Prepared { run, input })
+    Ok(Prepared { run, input, writes: false })
 }
 
 // -------------------------------------------------------------------- uniq
@@ -1062,7 +1062,7 @@ struct Tee {
 }
 
 impl Tee {
-    fn store(mut self, db: &mut Db, io: &mut Io) -> i32 {
+    fn store(mut self, db: &mut crate::engine::Access, io: &mut Io) -> i32 {
         let mut spool = self.spool.take().unwrap_or_else(|| Spool::new(io.scratch()));
         let valid = spool.end();
         let mut status = 0;
@@ -1122,7 +1122,7 @@ impl Filter for Tee {
         0
     }
 
-    fn finish_db(self: Box<Self>, db: &mut Db, io: &mut Io) -> i32 {
+    fn finish_db(self: Box<Self>, db: &mut crate::engine::Access, io: &mut Io) -> i32 {
         self.store(db, io)
     }
 }
@@ -1135,6 +1135,7 @@ pub fn tee(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
     };
     let append = p.has(b'a');
     let files = p.operands;
+    let writes = !files.is_empty();
     let stream = Tee { files: files.clone(), append, spool: None };
     let run: Runner = Box::new(move |db, io| {
         let mut t = Tee { files, append, spool: None };
@@ -1142,5 +1143,5 @@ pub fn tee(args: Vec<Vec<u8>>) -> Result<Prepared, String> {
         t.push(stdin, io);
         t.store(db, io)
     });
-    Ok(Prepared { run, input: Input::Stream(Box::new(stream)) })
+    Ok(Prepared { run, input: Input::Stream(Box::new(stream)), writes })
 }
